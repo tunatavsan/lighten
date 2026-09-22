@@ -26,7 +26,7 @@ final class SpaceStore {
   var index: SpaceIndex?
   var currentID: UUID?
   var selectedID: UUID?
-  var showingOther = false
+  private(set) var showingOther = false
   var metric: SpaceMetric = .logical
   var layout: TreemapLayout?
   private var scanTask: Task<Void, Never>?
@@ -39,6 +39,7 @@ final class SpaceStore {
     let run: UUID
     let node: UUID
     let metric: SpaceMetric
+    let showingOther: Bool
     let width: Int
     let height: Int
   }
@@ -169,11 +170,25 @@ final class SpaceStore {
     showingOther = false
     layout = nil
     layoutKey = nil
+    layoutTask?.cancel()
+  }
+
+  func showOther() {
+    guard group?.other.isEmpty == false else { return }
+    showingOther = true
+    selectedID = nil
+    layout = nil
+    layoutKey = nil
+    layoutTask?.cancel()
   }
 
   func back() {
     if showingOther {
       showingOther = false
+      selectedID = nil
+      layout = nil
+      layoutKey = nil
+      layoutTask?.cancel()
       return
     }
     guard let parent = current?.parentID else { return }
@@ -183,15 +198,17 @@ final class SpaceStore {
   func updateLayout(width: Double, height: Double) {
     guard let index, let currentID else { return }
     let key = LayoutKey(
-      run: index.runID, node: currentID, metric: metric,
+      run: index.runID, node: currentID, metric: metric, showingOther: showingOther,
       width: Int(width.rounded()), height: Int(height.rounded()))
     guard key != layoutKey else { return }
     layoutKey = key
     layout = nil
     layoutTask?.cancel()
     let group = index.group(at: currentID, metric: metric)
-    var values = group.items.map { ($0.id, $0.bytes(metric).knownLowerBound) }
-    if !group.other.isEmpty {
+    var values = (showingOther ? group.other : group.items).map {
+      ($0.id, $0.bytes(metric).knownLowerBound)
+    }
+    if !showingOther, !group.other.isEmpty {
       values.append((SpaceView.otherID, group.otherBytes.knownLowerBound))
     }
     let layoutValues = values

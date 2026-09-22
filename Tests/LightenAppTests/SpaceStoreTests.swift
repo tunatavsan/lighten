@@ -101,4 +101,69 @@ struct SpaceStoreTests {
     #expect(store.progressCount == 0)
     store.cancel()
   }
+
+  @MainActor @Test("Other maps only remaining items and back rejects its stale layout")
+  func otherLayoutAndBack() async throws {
+    guard let resolved = realpath(NSTemporaryDirectory(), nil) else {
+      Issue.record("temporary fixture root unavailable")
+      return
+    }
+    defer { free(resolved) }
+    let root = String(cString: resolved) + "/lighten-other-" + UUID().uuidString
+    try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    for number in 1...31 {
+      try Data(repeating: UInt8(number), count: number).write(
+        to: URL(fileURLWithPath: root + "/item-\(number).bin"))
+    }
+
+    let snapshot = try await ScanService().scan(rootPath: root)
+    let index = try SpaceIndex(snapshot: snapshot)
+    let group = index.group(at: index.rootID, metric: .logical)
+    #expect(group.items.count == 24)
+    #expect(group.other.count == 7)
+    let store = SpaceStore()
+    store.selectedRoot = URL(fileURLWithPath: root)
+    store.snapshot = snapshot
+    store.index = index
+    store.currentID = index.rootID
+    store.updateLayout(width: 400, height: 300)
+    let top = try await waitForLayout(store)
+    #expect(Set(top.tiles.map(\.id)) == Set(group.items.map(\.id) + [SpaceView.otherID]))
+
+    store.selectedID = group.items.first?.id
+    store.showOther()
+    #expect(store.selectedID == nil)
+    #expect(store.layout == nil)
+    store.updateLayout(width: 400, height: 300)
+    let other = try await waitForLayout(store)
+    #expect(Set(other.tiles.map(\.id)) == Set(group.other.map(\.id)))
+    let first = try #require(group.other.first)
+    let last = try #require(group.other.last)
+    let firstArea = try #require(other.tiles.first(where: { $0.id == first.id })?.area)
+    let lastArea = try #require(other.tiles.first(where: { $0.id == last.id })?.area)
+    #expect(
+      abs(firstArea / lastArea - Double(first.logical.knownLowerBound) / Double(last.logical.knownLowerBound))
+        < 0.000001)
+
+    store.back()
+    #expect(!store.showingOther)
+    #expect(store.layout == nil)
+    store.showOther()
+    store.updateLayout(width: 400, height: 300)
+    store.back()
+    store.updateLayout(width: 400, height: 300)
+    let returned = try await waitForLayout(store)
+    #expect(Set(returned.tiles.map(\.id)) == Set(top.tiles.map(\.id)))
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(Set(store.layout?.tiles.map(\.id) ?? []) == Set(top.tiles.map(\.id)))
+  }
+
+  @MainActor private func waitForLayout(_ store: SpaceStore) async throws -> TreemapLayout {
+    for _ in 0..<100 {
+      if let layout = store.layout { return layout }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    return try #require(store.layout)
+  }
 }

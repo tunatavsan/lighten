@@ -265,7 +265,7 @@ struct SpaceView: View {
         .animation(navigationAnimation, value: store.layout?.tiles.map(\.id))
         .task(
           id:
-            "\(store.index?.runID.uuidString ?? ""):\(store.currentID?.uuidString ?? ""):\(store.metric.rawValue):\(Int(geometry.size.width)):\(Int(geometry.size.height))"
+            "\(store.index?.runID.uuidString ?? ""):\(store.currentID?.uuidString ?? ""):\(store.metric.rawValue):\(store.showingOther):\(Int(geometry.size.width)):\(Int(geometry.size.height))"
         ) {
           store.updateLayout(width: geometry.size.width, height: geometry.size.height)
         }
@@ -300,7 +300,9 @@ struct SpaceView: View {
     let size = isOther ? store.group?.otherBytes : item?.bytes(store.metric)
     return Button {
       if isOther {
-        withAnimation(navigationAnimation) { store.showingOther = true }
+        withAnimation(navigationAnimation) { store.showOther() }
+      } else if let item, item.canInspect, isSecondMouseClick {
+        enter(item.id)
       } else {
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { store.selectedID = tile.id }
       }
@@ -339,13 +341,15 @@ struct SpaceView: View {
     }
     .accessibilityLabel("\(name), \(sizeLabel(size))")
     .accessibilityIdentifier(isOther ? "space-other" : "space-tile-\(tile.id)")
-    .onTapGesture(count: 2) {
-      if isOther {
-        withAnimation(navigationAnimation) { store.showingOther = true }
-      } else if let item, item.canInspect {
-        enter(item.id)
-      }
-    }
+  }
+
+  /// Button fires on each mouse-up. Read the second click inside that action so
+  /// the first click never waits for a competing double-tap recognizer.
+  private var isSecondMouseClick: Bool {
+    guard let event = NSApp.currentEvent,
+      event.type == .leftMouseUp || event.type == .leftMouseDown
+    else { return false }
+    return event.clickCount >= 2
   }
 
   private func color(for item: SpaceItem?) -> Color {
@@ -435,7 +439,7 @@ struct SpaceView: View {
         }
         if !store.showingOther, let other = store.group?.other, !other.isEmpty {
           Button {
-            withAnimation(navigationAnimation) { store.showingOther = true }
+            withAnimation(navigationAnimation) { store.showOther() }
           } label: {
             HStack {
               Text("\(String(localized: "Other")) (\(other.count))")
