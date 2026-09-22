@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public struct CatalogRow: Codable, Sendable, Equatable, Identifiable {
@@ -27,13 +28,44 @@ private struct CatalogDocument: Codable {
 }
 
 enum CatalogResourceLocator {
+  enum MetadataState {
+    case regular, absent, unsafe
+  }
+
+  static func metadataState(at path: String) -> MetadataState {
+    do {
+      let identity = try DescriptorFileSystem.identity(at: path)
+      return identity.kind == .regular && identity.flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0
+        ? .regular : .unsafe
+    } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT {
+      return .absent
+    } catch {
+      return .unsafe
+    }
+  }
+
   static func url(
-    mainBundleURL: URL, mainResourceURL: URL?, moduleURL: URL?
+    mainBundleURL: URL, mainResourceURL: URL?, moduleURL: URL?,
+    probe: (String) -> MetadataState = metadataState(at:)
   ) -> URL? {
     if mainBundleURL.pathExtension == "app" {
-      return mainResourceURL?
-        .appendingPathComponent("Lighten_LightenKit.bundle", isDirectory: true)
-        .appendingPathComponent("catalog.json")
+      guard let mainResourceURL,
+        mainResourceURL.path
+          == mainBundleURL
+          .appendingPathComponent("Contents/Resources", isDirectory: true).path
+      else { return nil }
+      let bundle = mainResourceURL.appendingPathComponent("Lighten_LightenKit.bundle", isDirectory: true)
+      let info = bundle.appendingPathComponent("Contents/Info.plist")
+      let catalog: URL
+      switch probe(info.path) {
+      case .regular:
+        catalog = bundle.appendingPathComponent("Contents/Resources/catalog.json")
+      case .absent:
+        catalog = bundle.appendingPathComponent("catalog.json")
+      case .unsafe:
+        return nil
+      }
+      return probe(catalog.path) == .regular ? catalog : nil
     }
     return moduleURL
   }

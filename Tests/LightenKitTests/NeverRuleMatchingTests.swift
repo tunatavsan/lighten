@@ -125,4 +125,22 @@ struct NeverRuleMatchingTests {
       NeverRule.protects("/Users/fixture/Documents/../.ssh", homeDirectory: home)?.id == "ssh"
     )
   }
+
+  @Test("Literal components preserve Unicode, glob, home and case-alias matching")
+  func literalComponentEquivalence() {
+    let cases: [(pattern: String, path: String, expected: Bool)] = [
+      ("/Applications/Cafe\u{301}.app/Contents/MacOS/*", "/Applications/Café.app/Contents/MacOS/Café", true),
+      ("/Applications/Cafe\u{301}.app/Contents/MacOS/*", "/Applications/Cafe.app/Contents/MacOS/Cafe", false),
+      ("/Applications/*.app/Contents/MacOS/**", "/Applications/A.app/Contents/MacOS/A", true),
+      ("/Applications/*.app/Contents/MacOS/**", "/Applications/A.app/Contents/Resources/A", false),
+      ("~/Library/Mail/**", "/Users/fixture/Library/Mail/V10/envelope", true),
+      ("~/Library/Mail/**", "/Users/other/Library/Mail/V10/envelope", false),
+      ("/Users/fixture/.ssh/**", "/Users/fixture/Documents/../.ssh/id", true),
+      ("/Users/fixture/.ssh/**", "/Users/fixture/.ssh-old/id", false),
+    ]
+    for (pattern, path, expected) in cases {
+      #expect(PathPattern(pattern, homeDirectory: home).matches(path) == expected)
+    }
+    #expect(ProtectionPolicy.rule(for: "/users/FIXTURE/Library/mAIL/V10", homeDirectory: home)?.id == "mail")
+  }
 }

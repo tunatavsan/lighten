@@ -128,6 +128,8 @@ verify_package() {
   local actual_id
   local signature_details
   local signed_id
+  local kit_bundle="$RESOURCES_DIR/Lighten_LightenKit.bundle"
+  local kit_catalog
   local entitlement_file="$DIST_DIR/signed-entitlements.plist"
 
   for language in en tr; do
@@ -135,7 +137,18 @@ verify_package() {
       fail "Missing $language localization in packaged app."
   done
   [[ -s "$RESOURCES_DIR/PrivacyInfo.xcprivacy" ]] || fail "Missing privacy manifest in packaged app."
-  [[ -s "$RESOURCES_DIR/Lighten_LightenKit.bundle/catalog.json" ]] ||
+  [[ -d "$kit_bundle" && ! -L "$kit_bundle" ]] ||
+    fail "Missing bundled LightenKit resources in packaged app."
+  if [[ -e "$kit_bundle/Contents/Info.plist" || -L "$kit_bundle/Contents/Info.plist" ]]; then
+    [[ -f "$kit_bundle/Contents/Info.plist" && ! -L "$kit_bundle/Contents/Info.plist" ]] ||
+      fail "Unsafe bundled LightenKit Info.plist in packaged app."
+    [[ -d "$kit_bundle/Contents/Resources" && ! -L "$kit_bundle/Contents/Resources" ]] ||
+      fail "Missing nested LightenKit resource directory in packaged app."
+    kit_catalog="$kit_bundle/Contents/Resources/catalog.json"
+  else
+    kit_catalog="$kit_bundle/catalog.json"
+  fi
+  [[ -f "$kit_catalog" && -s "$kit_catalog" && ! -L "$kit_catalog" ]] ||
     fail "Missing bundled Clean catalog in packaged app."
   actual_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$CONTENTS_DIR/Info.plist")" ||
     fail "Packaged Info.plist has no bundle identity."

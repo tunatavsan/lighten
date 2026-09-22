@@ -106,6 +106,15 @@ public actor ActionExecutor {
         }
       })
     else { throw ExecutionFailure.invalidPlan }
+    guard
+      plan.items.allSatisfy({ item in
+        [
+          item.catalogProof != nil, item.relatedProof != nil,
+          item.installedRelatedProof != nil, item.duplicateProof != nil,
+        ]
+        .filter { $0 }.count <= 1
+      })
+    else { throw ExecutionFailure.invalidPlan }
     try validateDuplicatePlan(plan)
     if plan.kind == .catalogDelete {
       guard confirmation == IrreversibleConfirmation(planID: plan.id, method: .catalogDelete),
@@ -119,6 +128,9 @@ public actor ActionExecutor {
     }
     for item in plan.items where item.relatedProof != nil {
       try related.validate(item, plan: plan)
+    }
+    for item in plan.items where item.installedRelatedProof != nil {
+      try related.validateInstalled(item, plan: plan)
     }
     let existing = try await journal.read()
     guard existing.issues.isEmpty else { throw ExecutionFailure.corruptHistory }
@@ -139,9 +151,14 @@ public actor ActionExecutor {
           else { throw ExecutionFailure.catalogDeleteDenied }
         }
         if let proof = item.relatedProof {
-          try related.validate(item, plan: plan)
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
           else { throw RelatedFailure.runningOrUnknown }
+          try related.validate(item, plan: plan)
+        }
+        if let proof = item.installedRelatedProof {
+          guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
+          else { throw RelatedFailure.runningOrUnknown }
+          try related.validateInstalled(item, plan: plan)
         }
         if let proof = item.duplicateProof {
           try validateDuplicate(item, proof: proof)
@@ -155,9 +172,14 @@ public actor ActionExecutor {
           else { throw ExecutionFailure.catalogDeleteDenied }
         }
         if let proof = item.relatedProof {
-          try related.validate(item, plan: plan)
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
           else { throw RelatedFailure.runningOrUnknown }
+          try related.validate(item, plan: plan)
+        }
+        if let proof = item.installedRelatedProof {
+          guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
+          else { throw RelatedFailure.runningOrUnknown }
+          try related.validateInstalled(item, plan: plan)
         }
         if let proof = item.duplicateProof {
           try validateDuplicate(item, proof: proof)
@@ -259,6 +281,7 @@ public actor ActionExecutor {
       guard plan.kind == .trash,
         plan.items.allSatisfy({
           $0.duplicateProof != nil && $0.catalogProof == nil && $0.relatedProof == nil
+            && $0.installedRelatedProof == nil
             && $0.inventory.count == 1 && $0.inventory.first?.identity?.kind == .regular
         })
       else { throw ExecutionFailure.invalidPlan }

@@ -12,12 +12,14 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   public let ancestors: [PathIdentity]
   public let catalogProof: CatalogProof?
   public let relatedProof: RelatedProof?
+  public let installedRelatedProof: InstalledRelatedProof?
   public let duplicateProof: DuplicateProof?
 
   public init(
     id: UUID, sourcePath: String, volumeID: UUID? = nil,
     inventory: [ScanEntry], ancestors: [PathIdentity], catalogProof: CatalogProof? = nil,
-    relatedProof: RelatedProof? = nil, duplicateProof: DuplicateProof? = nil
+    relatedProof: RelatedProof? = nil, installedRelatedProof: InstalledRelatedProof? = nil,
+    duplicateProof: DuplicateProof? = nil
   ) {
     self.id = id
     self.sourcePath = sourcePath
@@ -26,6 +28,7 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     self.ancestors = ancestors
     self.catalogProof = catalogProof
     self.relatedProof = relatedProof
+    self.installedRelatedProof = installedRelatedProof
     self.duplicateProof = duplicateProof
   }
 }

@@ -1891,26 +1891,66 @@
     },
     "Clear search": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Clear search" } },
-        "tr": { "stringUnit": { "state": "translated", "value": "Aramayı temizle" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear search"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aramayı temizle"
+          }
+        }
       }
     },
     "Search by name or path": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Search by name or path" } },
-        "tr": { "stringUnit": { "state": "translated", "value": "Ada veya yola göre ara" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search by name or path"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ada veya yola göre ara"
+          }
+        }
       }
     },
     "No matching candidates": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "No matching candidates" } },
-        "tr": { "stringUnit": { "state": "translated", "value": "Eşleşen aday yok" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching candidates"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eşleşen aday yok"
+          }
+        }
       }
     },
     "matches": {
       "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "matches" } },
-        "tr": { "stringUnit": { "state": "translated", "value": "eşleşen" } }
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "matches"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "eşleşen"
+          }
+        }
       }
     },
     "Undo unavailable — permanently cleaned": {
@@ -2389,6 +2429,646 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu işlemden sonra tarama güncelliğini yitirdi"
+          }
+        }
+      }
+    },
+    "Action finished. Scan again before another choice.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Action finished. Scan again before another choice."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşlem tamamlandı. Yeni bir seçimden önce tekrar tarayın."
+          }
+        }
+      }
+    },
+    "App is running. Quit it normally before reviewing its data.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App is running. Quit it normally before reviewing its data."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama çalışıyor. Verilerini incelemeden önce normal şekilde kapatın."
+          }
+        }
+      }
+    },
+    "Application inventory is incomplete. Other locations and unreadable apps remain unknown.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application inventory is incomplete. Other locations and unreadable apps remain unknown."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama envanteri eksik. Diğer konumlar ve okunamayan uygulamalar bilinmiyor."
+          }
+        }
+      }
+    },
+    "Association uncertain · report only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Association uncertain · report only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişki belirsiz · yalnızca rapor"
+          }
+        }
+      }
+    },
+    "At least": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "At least"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En az"
+          }
+        }
+      }
+    },
+    "Bundle ID": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bundle ID"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paket kimliği"
+          }
+        }
+      }
+    },
+    "Could not prepare app data. Scan again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not prepare app data. Scan again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisi hazırlanamadı. Tekrar tarayın."
+          }
+        }
+      }
+    },
+    "Data is separate from the app. Exact names show a possible link, not guaranteed ownership.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Data is separate from the app. Exact names show a possible link, not guaranteed ownership."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Veriler uygulamadan ayrıdır. Tam ad eşleşmesi olası bir ilişki gösterir; sahipliği kanıtlamaz."
+          }
+        }
+      }
+    },
+    "Deselect the blocked package to review data separately.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deselect the blocked package to review data separately."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Veriyi ayrıca incelemek için engellenen paket seçimini kaldırın."
+          }
+        }
+      }
+    },
+    "Exact standard app location · separate Trash choice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exact standard app location · separate Trash choice"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tam standart uygulama konumu · ayrı Çöp Sepeti seçimi"
+          }
+        }
+      }
+    },
+    "Identity unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identity unavailable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kimlik kullanılamıyor"
+          }
+        }
+      }
+    },
+    "Inspect applications in /Applications and your Applications folder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inspect applications in /Applications and your Applications folder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "/Applications ve kişisel Applications klasörünüzdeki uygulamaları inceleyin."
+          }
+        }
+      }
+    },
+    "Installed applications and their related data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installed applications and their related data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yüklü uygulamalar ve ilişkili verileri"
+          }
+        }
+      }
+    },
+    "Known lower bound": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Known lower bound"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bilinen alt sınır"
+          }
+        }
+      }
+    },
+    "Logical size": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logical size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mantıksal boyut"
+          }
+        }
+      }
+    },
+    "Measured size": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Measured size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ölçülen boyut"
+          }
+        }
+      }
+    },
+    "Needs complete, safe scan and a closed app": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needs complete, safe scan and a closed app"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tam ve güvenli tarama ile kapalı uygulama gerekli"
+          }
+        }
+      }
+    },
+    "No app package will be moved to Trash from this screen.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No app package will be moved to Trash from this screen."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu ekrandan hiçbir uygulama paketi Çöp Sepeti’ne taşınmaz."
+          }
+        }
+      }
+    },
+    "No matching standard data locations found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching standard data locations found"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eşleşen standart veri konumu bulunamadı"
+          }
+        }
+      }
+    },
+    "Package size excludes protected or unreadable contents. Trash size is not freed disk space.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Package size excludes protected or unreadable contents. Trash size is not freed disk space."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paket boyutuna korunan veya okunamayan içerik dahil değildir. Çöp Sepeti boyutu açılan disk alanı değildir."
+          }
+        }
+      }
+    },
+    "Partial size": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partial size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eksik boyut"
+          }
+        }
+      }
+    },
+    "Previously associated · review in Clean": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previously associated · review in Clean"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceden ilişkili · Clean bölümünde inceleyin"
+          }
+        }
+      }
+    },
+    "Protected · report only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protected · report only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Korunuyor · yalnızca rapor"
+          }
+        }
+      }
+    },
+    "Related data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Related data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişkili veriler"
+          }
+        }
+      }
+    },
+    "Review selected data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review selected data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen veriyi incele"
+          }
+        }
+      }
+    },
+    "Scan installed apps": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan installed apps"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yüklü uygulamaları tara"
+          }
+        }
+      }
+    },
+    "Select an application": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select an application"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir uygulama seçin"
+          }
+        }
+      }
+    },
+    "Select one eligible data item": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select one eligible data item"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygun bir veri öğesi seçin"
+          }
+        }
+      }
+    },
+    "Selected app data. Preferences and support files may contain personal settings or documents.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected app data. Preferences and support files may contain personal settings or documents."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen uygulama verisi. Tercihler kişisel ayarlar içerebilir."
+          }
+        }
+      }
+    },
+    "Shared Group Containers remain protected and are not included.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared Group Containers remain protected and are not included."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paylaşılan Group Containers korunur ve kapsam dışıdır."
+          }
+        }
+      }
+    },
+    "Shared · report only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared · report only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paylaşılan · yalnızca rapor"
+          }
+        }
+      }
+    },
+    "Signer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İmzalayan"
+          }
+        }
+      }
+    },
+    "This app contains a system extension or helper. Check the vendor's uninstaller.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This app contains a system extension or helper. Check the vendor's uninstaller."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamada sistem uzantısı veya yardımcı program var. Üreticinin kaldırma aracını inceleyin."
+          }
+        }
+      }
+    },
+    "Unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kullanılamıyor"
+          }
+        }
+      }
+    },
+    "Version": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sürüm"
+          }
+        }
+      }
+    },
+    "Whole application package": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whole application package"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama paketinin tamamı"
+          }
+        }
+      }
+    },
+    "Size unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Size unavailable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Boyut bilinmiyor"
+          }
+        }
+      }
+    },
+    "Package removal is unavailable while safety rules protect app contents.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Package removal is unavailable while safety rules protect app contents."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Güvenlik kuralları uygulama içeriğini korurken paket kaldırılamaz."
+          }
+        }
+      }
+    },
+    "Metadata unavailable or unsafe · report only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metadata unavailable or unsafe · report only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metadata kullanılamıyor veya güvenli değil · yalnızca rapor"
+          }
+        }
+      }
+    },
+    "Scanning applications": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanning applications"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulamalar taranıyor"
           }
         }
       }

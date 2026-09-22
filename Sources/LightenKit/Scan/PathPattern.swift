@@ -62,6 +62,7 @@ public struct PathPattern: Sendable {
   }
 
   private static func matchesComponent(_ pattern: String, _ component: String) -> Bool {
+    if !pattern.contains("*") { return pattern == component }
     let tokens = Array(pattern)
     let characters = Array(component)
     var states = Array(repeating: false, count: characters.count + 1)

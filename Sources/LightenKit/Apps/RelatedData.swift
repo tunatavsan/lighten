@@ -4,16 +4,22 @@ import Foundation
 public struct InstalledApplication: Sendable, Equatable {
   public let bundleID: String
   public let path: String
+  public let version: String?
 }
 
 public struct BundleInventory: Sendable {
   public let applications: [InstalledApplication]
+  public let unidentifiedPaths: [String]
   public let complete: Bool
   public let observedAt: Date
 
   public func contains(_ bundleID: String) -> Bool {
-    applications.contains { $0.bundleID == bundleID }
+    applications.contains { foldedAppID($0.bundleID) == foldedAppID(bundleID) }
   }
+}
+
+private func foldedAppID(_ value: String) -> String {
+  value.lowercased(with: Locale(identifier: "en_US_POSIX"))
 }
 
 public enum RelatedClassification: String, Sendable {
@@ -53,8 +59,19 @@ public struct RelatedProof: Codable, Sendable, Equatable {
   public let snapshotRunID: UUID
 }
 
+public struct InstalledRelatedProof: Codable, Sendable, Equatable {
+  public let bundleID: String
+  public let appPath: String
+  public let appIdentity: FileIdentity
+  public let infoIdentity: FileIdentity
+  public let relatedPath: String
+  public let relatedIdentity: FileIdentity
+  public let snapshotRunID: UUID
+}
+
 public enum RelatedFailure: Error, Sendable {
   case incompleteInventory, invalidReceipt, ownerPresent, changedItem, runningOrUnknown
+  case ambiguousOwner, unsupportedInstalledData
 }
 
 public protocol RunningApplicationSource: Sendable {
@@ -82,6 +99,7 @@ public struct RelatedDataService: Sendable {
 
   public func inventory() -> BundleInventory {
     var apps: [InstalledApplication] = []
+    var unidentifiedPaths: [String] = []
     var complete = true
     var visited = 0
 
@@ -121,7 +139,7 @@ public struct RelatedDataService: Sendable {
           continue
         }
         guard child.kind == .directory else { continue }
-        if name.hasSuffix(".app") {
+        if name.lowercased(with: Locale(identifier: "en_US_POSIX")).hasSuffix(".app") {
           let metadataPath = path + "/Contents/Info.plist"
           guard
             let data = try? SecureMetadataFile.read(
@@ -135,9 +153,13 @@ public struct RelatedDataService: Sendable {
             Self.validBundleID(bundleID)
           else {
             complete = false
+            unidentifiedPaths.append(path)
             continue
           }
-          apps.append(InstalledApplication(bundleID: bundleID, path: path))
+          let version =
+            (dict["CFBundleShortVersionString"] as? String)
+            ?? (dict["CFBundleVersion"] as? String)
+          apps.append(InstalledApplication(bundleID: bundleID, path: path, version: version))
         } else if !ScanService.isPackage(path) {
           visit(path, depth: depth + 1, volumeID: volumeID)
         }
@@ -161,7 +183,9 @@ public struct RelatedDataService: Sendable {
       }
       visit(root, depth: 0, volumeID: volumeID)
     }
-    return BundleInventory(applications: apps, complete: complete, observedAt: Date())
+    return BundleInventory(
+      applications: apps, unidentifiedPaths: unidentifiedPaths,
+      complete: complete, observedAt: Date())
   }
 
   public func discover() async -> [RelatedDataCandidate] {
@@ -292,6 +316,64 @@ public struct RelatedDataService: Sendable {
       ])
   }
 
+  /// Installed-app data is a separate opt-in. An exact standard-domain path
+  /// and a single observed owner are required; this does not grant package access.
+  public func planInstalled(app: InstalledApplication, candidate: RelatedDataCandidate) throws -> ActionPlan {
+    let apps = inventory()
+    guard apps.complete else { throw RelatedFailure.incompleteInventory }
+    guard apps.applications.filter({ foldedAppID($0.bundleID) == foldedAppID(app.bundleID) }).count == 1,
+      apps.applications.contains(app),
+      candidate.classification == .installed,
+      Self.standardPath(bundleID: app.bundleID, homeDirectory: homeDirectory).contains(candidate.path),
+      let snapshot = candidate.snapshot,
+      let root = snapshot.entries.first(where: { $0.path == candidate.path }),
+      let relatedIdentity = root.identity,
+      relatedIdentity.hasStableTrashProof,
+      let appIdentity = try? DescriptorFileSystem.identity(at: app.path),
+      appIdentity.kind == .directory,
+      let infoIdentity = try? DescriptorFileSystem.identity(at: app.path + "/Contents/Info.plist"),
+      infoIdentity.kind == .regular,
+      Self.bundleID(at: app.path) == app.bundleID
+    else { throw RelatedFailure.unsupportedInstalledData }
+    let base = try PlanService(homeDirectory: homeDirectory).makePlan(
+      snapshot: snapshot, selectedIDs: [root.id])
+    let item = base.items[0]
+    let proof = InstalledRelatedProof(
+      bundleID: app.bundleID, appPath: app.path, appIdentity: appIdentity,
+      infoIdentity: infoIdentity, relatedPath: candidate.path,
+      relatedIdentity: relatedIdentity, snapshotRunID: snapshot.runID)
+    return ActionPlan(
+      id: base.id, snapshotRunID: base.snapshotRunID, kind: .trash,
+      createdAt: base.createdAt,
+      items: [
+        PlanItem(
+          id: item.id, sourcePath: item.sourcePath, volumeID: item.volumeID,
+          inventory: item.inventory, ancestors: item.ancestors,
+          installedRelatedProof: proof)
+      ])
+  }
+
+  public func validateInstalled(_ item: PlanItem, plan: ActionPlan) throws {
+    guard plan.kind == .trash, let proof = item.installedRelatedProof,
+      proof.snapshotRunID == plan.snapshotRunID,
+      proof.relatedPath == item.sourcePath,
+      item.inventory.first?.identity == proof.relatedIdentity,
+      Self.standardPath(bundleID: proof.bundleID, homeDirectory: homeDirectory).contains(item.sourcePath),
+      applicationRoots.contains(where: { proof.appPath.hasPrefix($0 + "/") }),
+      (try? DescriptorFileSystem.identity(at: proof.appPath)) == proof.appIdentity,
+      (try? DescriptorFileSystem.identity(at: proof.appPath + "/Contents/Info.plist")) == proof.infoIdentity,
+      Self.bundleID(at: proof.appPath) == proof.bundleID,
+      (try? DescriptorFileSystem.identity(at: item.sourcePath)) == proof.relatedIdentity,
+      ProtectionPolicy.rule(for: item.sourcePath, homeDirectory: homeDirectory) == nil
+    else { throw RelatedFailure.unsupportedInstalledData }
+    let apps = inventory()
+    guard apps.complete else { throw RelatedFailure.incompleteInventory }
+    guard
+      apps.applications.filter({ foldedAppID($0.bundleID) == foldedAppID(proof.bundleID) })
+        .map(\.path) == [proof.appPath]
+    else { throw RelatedFailure.ambiguousOwner }
+  }
+
   private func snapshotForCandidate(
     path: String,
     identity: FileIdentity?
@@ -338,6 +420,7 @@ public struct RelatedDataService: Sendable {
     for candidate in candidates where candidate.classification == .installed {
       guard let bundleID = Self.bundleID(for: candidate.path),
         let app = apps.applications.first(where: { $0.bundleID == bundleID }),
+        apps.applications.filter({ foldedAppID($0.bundleID) == foldedAppID(bundleID) }).count == 1,
         candidate.snapshot != nil,
         let identity = try? DescriptorFileSystem.identity(at: candidate.path),
         identity.hasStableTrashProof,
@@ -387,6 +470,17 @@ public struct RelatedDataService: Sendable {
     let name = URL(fileURLWithPath: path).lastPathComponent
     let id = name.hasSuffix(".plist") ? String(name.dropLast(6)) : name
     return validBundleID(id) ? id : nil
+  }
+
+  private static func bundleID(at appPath: String) -> String? {
+    guard
+      let data = try? SecureMetadataFile.read(
+        path: appPath + "/Contents/Info.plist", limit: 1024 * 1024, ownerOnly: false),
+      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+      let dictionary = plist as? [String: Any],
+      let id = dictionary["CFBundleIdentifier"] as? String, validBundleID(id)
+    else { return nil }
+    return id
   }
 
   private static func validBundleID(_ id: String) -> Bool {

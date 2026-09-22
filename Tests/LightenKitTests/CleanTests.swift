@@ -82,23 +82,48 @@ private func cleanFixture() throws -> (home: String, root: String, candidate: St
   return (home, root, candidate)
 }
 
-@Test("Packaged catalog locator never falls back to a build resource")
-func packagedCatalogLocatorIsFailClosed() {
-  let app = URL(fileURLWithPath: "/tmp/Lighten.app")
-  let source = URL(fileURLWithPath: "/tmp/build/catalog.json")
+@Test("App catalog locator accepts flat and nested bundle layouts without external fallback")
+func packagedCatalogLocatorIsFailClosed() throws {
+  guard let resolved = realpath(NSTemporaryDirectory(), nil) else {
+    throw FileSystemFailure.invalidPath
+  }
+  defer { free(resolved) }
+  let root = String(cString: resolved) + "/lighten-catalog-layout-" + UUID().uuidString
+  let app = URL(fileURLWithPath: root + "/Lighten.app")
+  let resources = app.appendingPathComponent("Contents/Resources")
+  let bundle = resources.appendingPathComponent("Lighten_LightenKit.bundle")
+  let flat = bundle.appendingPathComponent("catalog.json")
+  let nested = bundle.appendingPathComponent("Contents/Resources/catalog.json")
+  let info = bundle.appendingPathComponent("Contents/Info.plist")
+  let external = URL(fileURLWithPath: root + "/build/catalog.json")
+  try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+  try FileManager.default.createDirectory(at: external.deletingLastPathComponent(), withIntermediateDirectories: true)
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try Data("external".utf8).write(to: external, options: .atomic)
+  #expect(CatalogResourceLocator.url(mainBundleURL: app, mainResourceURL: nil, moduleURL: external) == nil)
+  #expect(CatalogResourceLocator.url(mainBundleURL: app, mainResourceURL: resources, moduleURL: external) == nil)
+
+  try Data("flat".utf8).write(to: flat)
+  #expect(CatalogResourceLocator.url(mainBundleURL: app, mainResourceURL: resources, moduleURL: external) == flat)
+
+  try FileManager.default.createDirectory(at: nested.deletingLastPathComponent(), withIntermediateDirectories: true)
+  try Data("bundle metadata".utf8).write(to: info)
+  try Data("nested".utf8).write(to: nested)
+  #expect(CatalogResourceLocator.url(mainBundleURL: app, mainResourceURL: resources, moduleURL: external) == nested)
+
+  try FileManager.default.removeItem(at: nested)
+  #expect(CatalogResourceLocator.url(mainBundleURL: app, mainResourceURL: resources, moduleURL: external) == nil)
   #expect(
     CatalogResourceLocator.url(
-      mainBundleURL: app,
-      mainResourceURL: nil, moduleURL: source) == nil)
-  let packaged = CatalogResourceLocator.url(
-    mainBundleURL: app,
-    mainResourceURL: URL(fileURLWithPath: "/tmp/Lighten.app/Contents/Resources"),
-    moduleURL: source)
-  #expect(packaged?.path == "/tmp/Lighten.app/Contents/Resources/Lighten_LightenKit.bundle/catalog.json")
+      mainBundleURL: app, mainResourceURL: external.deletingLastPathComponent(), moduleURL: external) == nil)
   #expect(
     CatalogResourceLocator.url(
-      mainBundleURL: URL(fileURLWithPath: "/tmp/TestRunner"),
-      mainResourceURL: nil, moduleURL: source) == source)
+      mainBundleURL: app, mainResourceURL: resources, moduleURL: external,
+      probe: { $0 == info.path ? .unsafe : .regular }) == nil)
+  #expect(
+    CatalogResourceLocator.url(
+      mainBundleURL: URL(fileURLWithPath: root + "/TestRunner"),
+      mainResourceURL: nil, moduleURL: external) == external)
 }
 
 private func cleanPlan(_ fixture: (home: String, root: String, candidate: String)) async throws -> ActionPlan {
