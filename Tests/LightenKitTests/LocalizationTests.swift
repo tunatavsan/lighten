@@ -3,15 +3,6 @@ import Testing
 
 @Suite("Localization catalog")
 struct LocalizationTests {
-  private let requiredKeys = [
-    "Overview",
-    "Clean",
-    "Memory",
-    "Health",
-    "Settings",
-    "Pre-alpha build",
-  ]
-
   private let requiredLanguages = ["en", "tr"]
 
   @Test("Every required key has translated English and Turkish values")
@@ -28,7 +19,10 @@ struct LocalizationTests {
       "The string catalog must contain a strings object"
     )
 
-    for key in requiredKeys {
+    let sourceKeys = try Self.localizedKeysInSources()
+    #expect(Set(strings.keys) == sourceKeys, "Catalog keys must match localized source literals")
+
+    for key in sourceKeys {
       let entry = try #require(
         strings[key] as? [String: Any],
         "Missing required localization key: \(key)"
@@ -64,10 +58,32 @@ struct LocalizationTests {
   }
 
   private static var catalogURL: URL {
+    repositoryRoot
+      .appending(path: "Resources/Localizable.xcstrings")
+  }
+
+  private static var repositoryRoot: URL {
     URL(fileURLWithPath: #filePath)
       .deletingLastPathComponent()
       .deletingLastPathComponent()
       .deletingLastPathComponent()
-      .appending(path: "Resources/Localizable.xcstrings")
+  }
+
+  private static func localizedKeysInSources() throws -> Set<String> {
+    let root = repositoryRoot.appending(path: "Sources")
+    let enumerator = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+    let pattern = #"(?:String\s*\(\s*localized:\s*|Text\s*\(\s*|Label\s*\(\s*)"([^"\\]+)""#
+    let expression = try NSRegularExpression(pattern: pattern)
+    var keys = Set<String>()
+
+    for case let url as URL in enumerator where url.pathExtension == "swift" {
+      let source = try String(contentsOf: url, encoding: .utf8)
+      let range = NSRange(source.startIndex..., in: source)
+      for match in expression.matches(in: source, range: range) {
+        guard let keyRange = Range(match.range(at: 1), in: source) else { continue }
+        keys.insert(String(source[keyRange]))
+      }
+    }
+    return keys
   }
 }

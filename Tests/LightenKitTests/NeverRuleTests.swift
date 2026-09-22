@@ -33,6 +33,7 @@ struct NeverRuleTests {
       "localization-bundles",
       "universal-thinning",
       "photos-library",
+      "external-photos-library",
       "xcode-archives",
       "xcode-debug-symbols",
       "docker-disk-image",

@@ -3,6 +3,14 @@ name: CI
 on:
   push:
   pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
@@ -19,6 +27,7 @@ jobs:
           fi
           xcodebuild -version
           swift --version
+          swift format --version
 
       - name: Build
         run: swift build
@@ -27,4 +36,4 @@ jobs:
         run: swift test
 
       - name: Lint Swift formatting
-        run: swift format lint -r Sources Tests
+        run: swift format lint --strict -r Sources Tests

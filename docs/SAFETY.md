@@ -1,8 +1,8 @@
 # Safety
 
-Lighten never offers the following locations or operations for cleanup. These protections are built into the app and apply before any cleanup choice is shown.
+Lighten will never offer these locations or operations for cleanup.
 
-This file is generated from `NeverRule.all`. Edit the rules, then regenerate this document through the safety document test.
+This file is generated from `NeverRule.all`. Edit the rules, then regenerate this document with `LIGHTEN_UPDATE_SAFETY_DOC=1 swift test`.
 
 | Protected pattern | Reason | Evidence |
 | --- | --- | --- |
@@ -10,7 +10,8 @@ This file is generated from `NeverRule.all`. Edit the rules, then regenerate thi
 | `/System/Library/dyld/**` | The dynamic linker cache is required to launch macOS and its applications. | The cache is managed by macOS. |
 | `/**/*.lproj/**` | Localization bundles contain the language resources shipped with applications. | — |
 | `/**/*.app/Contents/MacOS/**` | Removing architecture slices can invalidate signatures and make universal applications unusable. | — |
-| `~/Pictures/Photos Library.photoslibrary/**` | A Photos library contains irreplaceable originals, edits, and database state. | — |
+| `~/**/*.photoslibrary/**` | A Photos library contains irreplaceable originals, edits, and database state. | — |
+| `/Volumes/**/*.photoslibrary/**` | A Photos library contains irreplaceable originals, edits, and database state. | — |
 | `~/Library/Developer/Xcode/Archives/**` | Xcode archives and their debug symbols may be required for distribution and crash analysis. | — |
 | `~/**/*.dSYM/**` | Debug symbol bundles may be required to symbolicate crash reports. | — |
 | `~/Library/Containers/com.docker.docker/Data/vms/**/Docker.raw` | Docker disk images contain container volumes, images, and other user data. | — |

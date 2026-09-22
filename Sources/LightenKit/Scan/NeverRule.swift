@@ -1,3 +1,5 @@
+import Foundation
+
 public struct NeverRule: Sendable {
   public let id: String
   public let pattern: String
@@ -9,6 +11,13 @@ public struct NeverRule: Sendable {
     self.pattern = pattern
     self.reason = reason
     self.evidence = evidence
+  }
+
+  public static func protects(
+    _ path: String,
+    homeDirectory: String = NSHomeDirectory()
+  ) -> NeverRule? {
+    all.first { PathPattern($0.pattern, homeDirectory: homeDirectory).matches(path) }
   }
 
   public static let all: [NeverRule] = [
@@ -36,7 +45,12 @@ public struct NeverRule: Sendable {
     ),
     NeverRule(
       id: "photos-library",
-      pattern: "~/Pictures/Photos Library.photoslibrary/**",
+      pattern: "~/**/*.photoslibrary/**",
+      reason: "A Photos library contains irreplaceable originals, edits, and database state."
+    ),
+    NeverRule(
+      id: "external-photos-library",
+      pattern: "/Volumes/**/*.photoslibrary/**",
       reason: "A Photos library contains irreplaceable originals, edits, and database state."
     ),
     NeverRule(

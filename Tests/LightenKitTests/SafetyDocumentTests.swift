@@ -14,7 +14,10 @@ struct SafetyDocumentTests {
       .appending(path: "docs")
       .appending(path: "SAFETY.md")
 
-    if ProcessInfo.processInfo.environment["LIGHTEN_UPDATE_SAFETY_DOC"] == "1" {
+    let environment = ProcessInfo.processInfo.environment
+    if environment["LIGHTEN_UPDATE_SAFETY_DOC"] == "1" {
+      #expect(environment["CI"] == nil, "Safety document updates are forbidden in CI")
+      guard environment["CI"] == nil else { return }
       try generated.write(to: documentURL, atomically: true, encoding: .utf8)
     }
 

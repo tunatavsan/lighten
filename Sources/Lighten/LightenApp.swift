@@ -1,13 +1,12 @@
 import Darwin
 import Foundation
+import LightenKit
 import SwiftUI
 
 @main
 struct LightenApp: App {
-  private static let expectedBundleIdentifier = "com.tavsn.lighten"
-
   init() {
-    guard Bundle.main.bundleIdentifier == Self.expectedBundleIdentifier else {
+    guard Bundle.main.bundleIdentifier == LightenIdentity.bundleIdentifier else {
       let message = "Lighten must run from a packaged bundle: scripts/run.sh\n"
       FileHandle.standardError.write(Data(message.utf8))
       Darwin.exit(2)
