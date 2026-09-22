@@ -57,6 +57,7 @@ public actor ActionExecutor {
   private let catalog: CleanCatalog?
   private let related: RelatedDataService
   private let runningApplications: any RunningApplicationSource
+  private let duplicates: DuplicateFileComparator
   private var busy = false
 
   public init(
@@ -66,7 +67,8 @@ public actor ActionExecutor {
     activity: any ProcessActivitySource = UnknownProcessActivitySource(),
     catalog: CleanCatalog? = try? CleanCatalog(),
     related: RelatedDataService = RelatedDataService(),
-    runningApplications: any RunningApplicationSource = UnknownRunningApplicationSource()
+    runningApplications: any RunningApplicationSource = UnknownRunningApplicationSource(),
+    duplicates: DuplicateFileComparator = DuplicateFileComparator()
   ) {
     self.journal = journal
     self.trash = trash
@@ -76,6 +78,7 @@ public actor ActionExecutor {
     self.catalog = catalog
     self.related = related
     self.runningApplications = runningApplications
+    self.duplicates = duplicates
   }
 
   public func execute(
@@ -103,6 +106,7 @@ public actor ActionExecutor {
         }
       })
     else { throw ExecutionFailure.invalidPlan }
+    try validateDuplicatePlan(plan)
     if plan.kind == .catalogDelete {
       guard confirmation == IrreversibleConfirmation(planID: plan.id, method: .catalogDelete),
         let catalog
@@ -139,6 +143,9 @@ public actor ActionExecutor {
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
           else { throw RelatedFailure.runningOrUnknown }
         }
+        if let proof = item.duplicateProof {
+          try validateDuplicate(item, proof: proof)
+        }
         try guardService.validate(item)
         try await beforeMutation?(item)
         // The hook models the final window. Never move on its prior validation.
@@ -151,6 +158,9 @@ public actor ActionExecutor {
           try related.validate(item, plan: plan)
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
           else { throw RelatedFailure.runningOrUnknown }
+        }
+        if let proof = item.duplicateProof {
+          try validateDuplicate(item, proof: proof)
         }
         try guardService.validate(item)
       } catch {
@@ -241,6 +251,55 @@ public actor ActionExecutor {
           detail: "stopped after an uncertain result"))
     }
     return ActionResult(planID: plan.id, items: results)
+  }
+
+  private func validateDuplicatePlan(_ plan: ActionPlan) throws {
+    let hasDuplicate = plan.items.contains { $0.duplicateProof != nil }
+    if hasDuplicate {
+      guard plan.kind == .trash,
+        plan.items.allSatisfy({
+          $0.duplicateProof != nil && $0.catalogProof == nil && $0.relatedProof == nil
+            && $0.inventory.count == 1 && $0.inventory.first?.identity?.kind == .regular
+        })
+      else { throw ExecutionFailure.invalidPlan }
+    }
+    let targetPaths = Set(plan.items.map(\.sourcePath))
+    let physicalTargets = Set(
+      plan.items.compactMap { item -> String? in
+        guard let identity = item.inventory.first?.identity else { return nil }
+        return "\(identity.device):\(identity.inode)"
+      })
+    for item in plan.items {
+      guard let proof = item.duplicateProof else { continue }
+      guard plan.kind == .trash, item.catalogProof == nil, item.relatedProof == nil,
+        item.inventory.count == 1, item.inventory[0].id == item.id,
+        item.inventory[0].path == item.sourcePath,
+        item.inventory[0].identity?.kind == .regular,
+        let target = item.inventory[0].identity,
+        let keeper = proof.keeper.identity,
+        keeper.kind == .regular, proof.keeper.path != item.sourcePath,
+        proof.keeperVolumeID == item.volumeID,
+        proof.targetDigest.count == 32, proof.keeperDigest.count == 32,
+        proof.targetDigest == proof.keeperDigest,
+        keeper.device == target.device, keeper.logicalBytes == target.logicalBytes,
+        keeper.device != target.device || keeper.inode != target.inode,
+        !targetPaths.contains(proof.keeper.path),
+        !physicalTargets.contains("\(keeper.device):\(keeper.inode)")
+      else { throw ExecutionFailure.invalidPlan }
+    }
+  }
+
+  private func validateDuplicate(_ item: PlanItem, proof: DuplicateProof) throws {
+    let keeperItem = PlanItem(
+      id: proof.keeper.id, sourcePath: proof.keeper.path, volumeID: proof.keeperVolumeID,
+      inventory: [proof.keeper], ancestors: proof.keeperAncestors)
+    try guardService.validate(keeperItem)
+    guard let target = item.inventory.first, let volumeID = item.volumeID,
+      try duplicates.compare(
+        proof.keeper, target, volumeID: volumeID,
+        expectedFirstDigest: proof.keeperDigest,
+        expectedSecondDigest: proof.targetDigest) == .equal
+    else { throw DuplicateFailure.changed }
   }
 
   private func deleteCatalogItem(_ item: PlanItem, planID: UUID) async -> ItemActionResult {

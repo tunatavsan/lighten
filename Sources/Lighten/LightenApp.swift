@@ -50,6 +50,7 @@ private struct LightenRootView: View {
   @State private var space = SpaceStore()
   @State private var actions = ActionStore()
   @State private var clean = CleanStore()
+  @State private var duplicates = DuplicateStore()
 
   var body: some View {
     NavigationSplitView {
@@ -64,6 +65,8 @@ private struct LightenRootView: View {
         SpaceView(store: space, actions: actions, showHistory: { section = .history })
       case .clean:
         CleanView(store: clean, actions: actions)
+      case .duplicates:
+        DuplicateView(store: duplicates, actions: actions)
       case .history:
         HistoryView(actions: actions)
       case let item:

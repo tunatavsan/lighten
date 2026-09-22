@@ -1928,6 +1928,470 @@
           }
         }
       }
+    },
+    "Choose a folder to compare": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a folder to compare"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Karşılaştırılacak klasörü seçin"
+          }
+        }
+      }
+    },
+    "Choose as keeper": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose as keeper"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Korunacak kopya olarak seç"
+          }
+        }
+      }
+    },
+    "Choose one verified copy to keep, then select others.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose one verified copy to keep, then select others."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Korunacak doğrulanmış bir kopya seçin, sonra diğerlerini işaretleyin."
+          }
+        }
+      }
+    },
+    "Comparison complete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comparison complete"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Karşılaştırma tamamlandı"
+          }
+        }
+      }
+    },
+    "Different metadata subset · choose its keeper": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Different metadata subset · choose its keeper"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Farklı metadata kümesi · onun korunacak kopyasını seçin"
+          }
+        }
+      }
+    },
+    "Exact copy; verified keeper remains": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exact copy; verified keeper remains"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Birebir kopya; doğrulanmış korunan kopya kalır"
+          }
+        }
+      }
+    },
+    "Exact local file copies in a folder you choose": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exact local file copies in a folder you choose"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçtiğiniz klasördeki birebir yerel dosya kopyaları"
+          }
+        }
+      }
+    },
+    "Files changed or could not be verified. Scan again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files changed or could not be verified. Scan again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosyalar değişti veya doğrulanamadı. Yeniden tarayın."
+          }
+        }
+      }
+    },
+    "Keep this copy": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep this copy"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu kopyayı koru"
+          }
+        }
+      }
+    },
+    "Logical bytes to move to Trash; disk space is not yet freed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logical bytes to move to Trash; disk space is not yet freed."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çöp Sepeti’ne taşınacak mantıksal bayt; disk alanı henüz açılmaz."
+          }
+        }
+      }
+    },
+    "Metadata differs · report only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metadata differs · report only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metadata farklı · yalnız rapor"
+          }
+        }
+      }
+    },
+    "Metadata equal": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metadata equal"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metadata eşit"
+          }
+        }
+      }
+    },
+    "Metadata unknown · report only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metadata unknown · report only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metadata bilinmiyor · yalnız rapor"
+          }
+        }
+      }
+    },
+    "No exact copies found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No exact copies found"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Birebir kopya bulunamadı"
+          }
+        }
+      }
+    },
+    "No files are selected for removal by default.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No files are selected for removal by default."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Varsayılan olarak hiçbir dosya kaldırılmak üzere seçilmez."
+          }
+        }
+      }
+    },
+    "No matching groups": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching groups"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eşleşen grup yok"
+          }
+        }
+      }
+    },
+    "Scan again": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan again"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeniden tara"
+          }
+        }
+      }
+    },
+    "Scan folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan folder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Klasörü tara"
+          }
+        }
+      }
+    },
+    "Scanning and comparing files": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanning and comparing files"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosyalar taranıyor ve karşılaştırılıyor"
+          }
+        }
+      }
+    },
+    "Select copy for Trash": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select copy for Trash"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çöp Sepeti’ne taşınacak kopyayı seç"
+          }
+        }
+      }
+    },
+    "Some files or areas could not be verified; results are partial.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some files or areas could not be verified; results are partial."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı dosyalar veya alanlar doğrulanamadı; sonuçlar kısmi."
+          }
+        }
+      }
+    },
+    "compared": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "compared"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "karşılaştırıldı"
+          }
+        }
+      }
+    },
+    "data-identical files": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "data-identical files"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "verisi birebir aynı dosya"
+          }
+        }
+      }
+    },
+    "groups": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "groups"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "grup"
+          }
+        }
+      }
+    },
+    "known files skipped": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "known files skipped"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "bilinen dosya atlandı"
+          }
+        }
+      }
+    },
+    "scanned": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "scanned"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "tarandı"
+          }
+        }
+      }
+    },
+    "Metadata differs or is unknown; this group is report only.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metadata differs or is unknown; this group is report only."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metadata farklı veya bilinmiyor; bu grup yalnızca raporlanır."
+          }
+        }
+      }
+    },
+    "Scan again to refresh duplicate groups before another action.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan again to refresh duplicate groups before another action."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka bir işlemden önce kopya gruplarını güncellemek için yeniden tarayın."
+          }
+        }
+      }
+    },
+    "Scan is out of date after this operation": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan is out of date after this operation"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu işlemden sonra tarama güncelliğini yitirdi"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
