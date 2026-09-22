@@ -85,7 +85,10 @@ public struct ScanService: Sendable {
         )
         return
       }
-      for name in names { try await visit(path + "/" + name, parentID: id) }
+      for name in names {
+        let childPath = path == "/" ? "/" + name : path + "/" + name
+        try await visit(childPath, parentID: id)
+      }
     }
 
     try await visit(rootPath, parentID: nil)

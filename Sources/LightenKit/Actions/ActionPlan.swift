@@ -105,7 +105,8 @@ public struct PlanService: Sendable {
       guard
         inventory.allSatisfy({ entry in
           guard let identity = entry.identity else { return false }
-          return entry.issues.isEmpty && entry.readable && identity.device == snapshot.volumeDevice
+          return entry.issues.isEmpty && entry.readable && identity.hasStableTrashProof
+            && identity.device == snapshot.volumeDevice
         })
       else { throw PlanFailure.unsafeSelection }
       let ancestors = try DescriptorFileSystem.ancestorIdentities(of: root.path)

@@ -60,7 +60,9 @@ public struct ActionGuard: Sendable {
           entry.path == parent.path + "/" + (entry.path as NSString).lastPathComponent
         else { throw GuardFailure.changedInventory }
       }
-      guard let expected = entry.identity, entry.issues.isEmpty, entry.readable else {
+      guard let expected = entry.identity, expected.hasStableTrashProof,
+        entry.issues.isEmpty, entry.readable
+      else {
         throw GuardFailure.unsupportedItem
       }
       if ProtectionPolicy.rule(for: entry.path, homeDirectory: homeDirectory) != nil {

@@ -60,14 +60,12 @@ public actor ActionHistory {
         case .applied, .undoFailed, .undoIntent:
           if let applied, let path = applied.returnedTrashPath,
             let moved = applied.movedIdentity,
-            (try? KnownPathFileSystem.identity(at: path)) == moved
+            Self.verifiedTrashItem(at: path, item: item, moved: moved)
           {
             state = .inTrash
           } else if terminal?.kind == .undoIntent,
             let moved = applied?.movedIdentity,
-            let restored = try? DescriptorFileSystem.identity(at: item.sourcePath),
-            restored.device == moved.device, restored.inode == moved.inode,
-            restored.kind == moved.kind
+            Self.verifiedRestoredItem(item: item, moved: moved)
           {
             state = .reversed
           } else {
@@ -115,7 +113,7 @@ public actor ActionHistory {
       let trashPath = applied.returnedTrashPath,
       let moved = applied.movedIdentity
     else { throw UndoFailure.noAppliedRecord }
-    guard (try? KnownPathFileSystem.identity(at: trashPath)) == moved else {
+    guard Self.verifiedTrashItem(at: trashPath, item: item, moved: moved) else {
       throw UndoFailure.changedTrashItem
     }
     for ancestor in item.ancestors {
@@ -148,7 +146,7 @@ public actor ActionHistory {
         returnedTrashPath: trashPath, movedIdentity: moved
       ))
     // An await can permit a source/parent change; pinning and rechecking precedes rename.
-    guard (try? KnownPathFileSystem.identity(at: trashPath)) == moved,
+    guard Self.verifiedTrashItem(at: trashPath, item: item, moved: moved),
       fstat(parentFD, &openedParent) == 0,
       UInt64(openedParent.st_dev) == expectedParent.device,
       openedParent.st_ino == expectedParent.inode,
@@ -181,14 +179,33 @@ public actor ActionHistory {
       if errno == EEXIST { throw UndoFailure.nameOccupied }
       throw UndoFailure.renameFailed(errno)
     }
-    // A successful exclusive rename changes ctime; dev/inode identify the item.
-    let restored = try DescriptorFileSystem.identity(at: item.sourcePath)
-    guard restored.device == moved.device, restored.inode == moved.inode else {
+    // The exclusive rename changes ctime; require the remaining durable proof.
+    guard Self.verifiedRestoredItem(item: item, moved: moved) else {
       throw UndoFailure.changedTrashItem
     }
     try await journal.append(
       JournalRecord(
         kind: .reversed, planID: planID, itemID: itemID
       ))
+  }
+
+  private static func verifiedTrashItem(at path: String, item: PlanItem, moved: FileIdentity) -> Bool {
+    guard let original = item.inventory.first?.identity,
+      let volumeID = item.volumeID,
+      original.matchesStableTrashIdentity(moved),
+      (try? DescriptorFileSystem.volumeID(at: path)) == volumeID,
+      let observed = try? KnownPathFileSystem.identity(at: path)
+    else { return false }
+    return moved.matchesStableTrashIdentity(observed)
+  }
+
+  private static func verifiedRestoredItem(item: PlanItem, moved: FileIdentity) -> Bool {
+    guard let original = item.inventory.first?.identity,
+      let volumeID = item.volumeID,
+      original.matchesStableTrashIdentity(moved),
+      (try? DescriptorFileSystem.volumeID(at: item.sourcePath)) == volumeID,
+      let observed = try? DescriptorFileSystem.identity(at: item.sourcePath)
+    else { return false }
+    return moved.matchesStableTrashIdentity(observed)
   }
 }

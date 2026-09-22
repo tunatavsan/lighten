@@ -133,8 +133,9 @@ public actor ActionExecutor {
       do {
         let moved = try KnownPathFileSystem.identity(at: returnedPath)
         guard let original = item.inventory.first?.identity,
-          moved.device == original.device, moved.inode == original.inode,
-          moved.kind == original.kind
+          let volumeID = item.volumeID,
+          (try? DescriptorFileSystem.volumeID(at: returnedPath)) == volumeID,
+          moved.matchesStableTrashIdentity(original)
         else {
           results.append(
             ItemActionResult(

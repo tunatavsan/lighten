@@ -5,6 +5,10 @@ public struct FileIdentity: Codable, Sendable, Equatable {
   public let inode: UInt64
   public let changeSeconds: Int64
   public let changeNanoseconds: Int64
+  public let birthSeconds: Int64?
+  public let birthNanoseconds: Int64?
+  public let modificationSeconds: Int64?
+  public let modificationNanoseconds: Int64?
   public let logicalBytes: Int64
   public let allocatedBytes: Int64
   public let linkCount: UInt64
@@ -14,17 +18,45 @@ public struct FileIdentity: Codable, Sendable, Equatable {
   public init(
     device: UInt64, inode: UInt64, changeSeconds: Int64, changeNanoseconds: Int64,
     logicalBytes: Int64, allocatedBytes: Int64, linkCount: UInt64, flags: UInt32,
-    kind: EntryKind
+    kind: EntryKind, birthSeconds: Int64? = nil, birthNanoseconds: Int64? = nil,
+    modificationSeconds: Int64? = nil, modificationNanoseconds: Int64? = nil
   ) {
     self.device = device
     self.inode = inode
     self.changeSeconds = changeSeconds
     self.changeNanoseconds = changeNanoseconds
+    self.birthSeconds = birthSeconds
+    self.birthNanoseconds = birthNanoseconds
+    self.modificationSeconds = modificationSeconds
+    self.modificationNanoseconds = modificationNanoseconds
     self.logicalBytes = logicalBytes
     self.allocatedBytes = allocatedBytes
     self.linkCount = linkCount
     self.flags = flags
     self.kind = kind
+  }
+
+  /// ctime changes during filesystem moves and later metadata maintenance.
+  /// Missing legacy proof never qualifies an item for automatic Trash recovery.
+  var hasStableTrashProof: Bool {
+    birthSeconds != nil && birthNanoseconds != nil
+      && modificationSeconds != nil && modificationNanoseconds != nil
+  }
+
+  func matchesStableTrashIdentity(_ other: FileIdentity) -> Bool {
+    guard let birthSeconds, let birthNanoseconds,
+      let modificationSeconds, let modificationNanoseconds,
+      let otherBirthSeconds = other.birthSeconds,
+      let otherBirthNanoseconds = other.birthNanoseconds,
+      let otherModificationSeconds = other.modificationSeconds,
+      let otherModificationNanoseconds = other.modificationNanoseconds
+    else { return false }
+    return device == other.device && inode == other.inode && kind == other.kind
+      && birthSeconds == otherBirthSeconds && birthNanoseconds == otherBirthNanoseconds
+      && modificationSeconds == otherModificationSeconds
+      && modificationNanoseconds == otherModificationNanoseconds
+      && logicalBytes == other.logicalBytes && linkCount == other.linkCount
+      && flags == other.flags
   }
 }
 

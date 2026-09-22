@@ -30,6 +30,11 @@ let package = Package(
       dependencies: ["LightenKit"],
       path: "Tests/LightenKitTests"
     ),
+    .testTarget(
+      name: "LightenAppTests",
+      dependencies: ["Lighten"],
+      path: "Tests/LightenAppTests"
+    ),
   ],
   swiftLanguageModes: [.v6]
 )

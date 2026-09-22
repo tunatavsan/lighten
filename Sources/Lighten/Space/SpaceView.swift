@@ -1,0 +1,599 @@
+import AppKit
+import LightenKit
+import SwiftUI
+
+struct SpaceView: View {
+  private enum CompactSurface: String, CaseIterable {
+    case map, list
+  }
+
+  static let otherID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+  @Bindable var store: SpaceStore
+  @Bindable var actions: ActionStore
+  let showHistory: () -> Void
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var hoveredTileID: UUID?
+  @State private var mapDirection: CGFloat = 1
+  @State private var compactSurface: CompactSurface = .map
+  @State private var showingCompactInspector = false
+
+  private var navigationAnimation: Animation? {
+    reduceMotion ? nil : .easeInOut(duration: 0.23)
+  }
+
+  private var mapTransition: AnyTransition {
+    reduceMotion ? .opacity : .opacity.combined(with: .offset(y: mapDirection * 10))
+  }
+
+  private func enter(_ id: UUID) {
+    mapDirection = 1
+    withAnimation(navigationAnimation) { store.navigate(to: id) }
+  }
+
+  private func goBack() {
+    mapDirection = -1
+    withAnimation(navigationAnimation) { store.back() }
+  }
+
+  private var visibleItems: [SpaceItem] {
+    guard let group = store.group else { return [] }
+    return store.showingOther ? group.other : group.items
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      header
+      Divider()
+      if store.index != nil {
+        breadcrumb
+        Divider()
+        GeometryReader { geometry in
+          if geometry.size.width < 760 {
+            compactPane
+          } else {
+            HSplitView {
+              mapColumn.frame(minWidth: 410)
+              sidePane.frame(minWidth: 280, idealWidth: 310, maxWidth: 390)
+            }
+          }
+        }
+      } else {
+        ContentUnavailableView(
+          store.phase == .scanning ? String(localized: "Scanning") : String(localized: "Choose a folder and scan"),
+          systemImage: "square.grid.2x2"
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+      Divider()
+      basketDock
+    }
+    .background(LightenStyle.canvas)
+    .tint(LightenStyle.accent)
+    .navigationTitle(String(localized: "Space"))
+    .onAppear { store.loadVolumes() }
+    .sheet(item: $actions.pending) { presentation in
+      ConfirmationView(presentation: presentation, actions: actions)
+    }
+    .sheet(isPresented: $showingCompactInspector) {
+      VStack(spacing: 0) {
+        HStack {
+          Text(String(localized: "Details"))
+            .font(.system(size: 16, weight: .semibold))
+          Spacer()
+          Button(String(localized: "Done")) { showingCompactInspector = false }
+        }
+        .padding(14)
+        Divider()
+        inspector.frame(maxHeight: .infinity)
+      }
+      .frame(width: 440, height: 260)
+      .background(LightenStyle.canvas)
+    }
+    .alert(
+      String(localized: "Action needs attention"),
+      isPresented: Binding(
+        get: { actions.message != nil }, set: { if !$0 { actions.message = nil } }
+      )
+    ) {
+      Button(String(localized: "OK")) { actions.message = nil }
+    } message: {
+      Text(actions.message ?? "")
+    }
+  }
+
+  private var header: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(alignment: .top, spacing: 16) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text(store.selectedRoot.lastPathComponent)
+            .font(.system(size: 21, weight: .semibold))
+            .lineLimit(1)
+          HStack(spacing: 8) {
+            Text(store.selectedRoot.path)
+              .lineLimit(1).truncationMode(.middle)
+              .textSelection(.enabled)
+              .help(store.selectedRoot.path)
+              .accessibilityIdentifier("selected-folder")
+            Text(phaseLabel)
+              .foregroundStyle(store.phase == .partial ? .orange : LightenStyle.muted)
+              .fixedSize()
+          }
+          .font(.system(size: 12))
+          .foregroundStyle(LightenStyle.muted)
+        }
+        Spacer(minLength: 10)
+        Picker(
+          String(localized: "Volume"),
+          selection: Binding(
+            get: { store.selectedRoot.path },
+            set: { store.selectRoot(URL(fileURLWithPath: $0)) }
+          )
+        ) {
+          ForEach(store.volumes, id: \.path) { volume in
+            Text(volume.lastPathComponent.isEmpty ? "/" : volume.lastPathComponent)
+              .tag(volume.path)
+          }
+          if !store.volumes.contains(where: { $0.path == store.selectedRoot.path }) {
+            Text(store.selectedRoot.lastPathComponent).tag(store.selectedRoot.path)
+          }
+        }
+        .frame(width: 170)
+        Button(String(localized: "Choose folder")) { store.chooseFolder() }
+        if store.phase == .scanning {
+          Button(String(localized: "Cancel")) { store.cancel() }
+        } else {
+          Button(String(localized: "Scan")) { store.startScan() }
+            .buttonStyle(.borderedProminent)
+        }
+      }
+      HStack(alignment: .center, spacing: 18) {
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(spacing: 14) {
+            metricValue(String(localized: "Volume used"), store.volumeMeasure?.usedBytes)
+            metricValue(String(localized: "Volume free"), store.volumeMeasure?.freeBytes)
+            Image(systemName: "info.circle")
+              .foregroundStyle(LightenStyle.muted)
+              .help(
+                String(
+                  localized: "Volume use includes snapshots and shared storage; scan covers only the selected folder.")
+              )
+              .accessibilityLabel(
+                String(
+                  localized: "Volume use includes snapshots and shared storage; scan covers only the selected folder."))
+          }
+          if let total = store.volumeMeasure?.totalBytes,
+            let used = store.volumeMeasure?.usedBytes, total > 0, used >= 0
+          {
+            ProgressView(value: min(1, Double(used) / Double(total)))
+              .tint(LightenStyle.accent)
+              .frame(maxWidth: 270)
+              .accessibilityLabel(String(localized: "Volume used"))
+          }
+        }
+        Spacer(minLength: 10)
+        VStack(alignment: .trailing, spacing: 2) {
+          Text(String(localized: "Selected scan"))
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+          Text(sizeLabel(store.current?.bytes(store.metric)))
+            .font(.system(size: 16, weight: .semibold))
+            .monospacedDigit()
+            .contentTransition(reduceMotion ? .identity : .numericText())
+            .animation(navigationAnimation, value: store.metric)
+        }
+      }
+      if store.phase == .scanning {
+        HStack(spacing: 8) {
+          ProgressView().controlSize(.small)
+          Text("\(store.progressCount) \(String(localized: "items scanned"))")
+            .monospacedDigit()
+          Text(store.progressPath).lineLimit(1).truncationMode(.middle)
+        }
+        .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+      } else if case .error(let detail) = store.phase {
+        Text(detail).font(.system(size: 12)).foregroundStyle(.red).lineLimit(2)
+      }
+    }
+    .padding(.horizontal, 18).padding(.vertical, 14)
+  }
+
+  private func metricValue(_ title: String, _ value: Int64?) -> some View {
+    HStack(spacing: 5) {
+      Text(title).foregroundStyle(LightenStyle.muted)
+      Text(format(value)).fontWeight(.medium).monospacedDigit()
+    }.font(.system(size: 12))
+  }
+
+  private var phaseLabel: String {
+    switch store.phase {
+    case .idle: String(localized: "Ready")
+    case .scanning: String(localized: "Scanning")
+    case .cancelled: String(localized: "Cancelled")
+    case .partial: String(localized: "Partial scan")
+    case .complete: String(localized: "Scan complete")
+    case .error: String(localized: "Scan failed")
+    }
+  }
+
+  private var breadcrumb: some View {
+    HStack(spacing: 8) {
+      Button {
+        goBack()
+      } label: {
+        Image(systemName: "chevron.left")
+      }
+      .disabled(store.current?.parentID == nil && !store.showingOther)
+      .accessibilityLabel(String(localized: "Back"))
+      ScrollView(.horizontal) {
+        HStack(spacing: 5) {
+          if let index = store.index, let currentID = store.currentID {
+            ForEach(index.breadcrumb(to: currentID)) { item in
+              Button(item.name) { enter(item.id) }
+                .buttonStyle(.plain)
+              Image(systemName: "chevron.right")
+                .font(.system(size: 9)).foregroundStyle(LightenStyle.muted)
+            }
+          }
+          if store.showingOther { Text(String(localized: "Other")) }
+        }
+        .font(.system(size: 12))
+      }
+      .scrollIndicators(.hidden)
+      Picker(String(localized: "Size metric"), selection: $store.metric) {
+        Text(String(localized: "Logical")).tag(SpaceMetric.logical)
+        Text(String(localized: "Allocated")).tag(SpaceMetric.allocated)
+      }
+      .pickerStyle(.segmented)
+      .frame(width: 220)
+    }
+    .padding(.horizontal, 16).padding(.vertical, 9)
+    .onChange(of: store.metric) { _, _ in
+      store.layout = nil
+      if let id = store.currentID { store.navigate(to: id) }
+    }
+  }
+
+  private var mapColumn: some View {
+    VStack(spacing: 0) {
+      GeometryReader { geometry in
+        ZStack(alignment: .topLeading) {
+          if let layout = store.layout {
+            ForEach(layout.tiles) { tile in tileButton(tile) }
+              .transition(mapTransition)
+          }
+        }
+        .frame(width: geometry.size.width, height: geometry.size.height)
+        .animation(navigationAnimation, value: store.layout?.tiles.map(\.id))
+        .task(
+          id:
+            "\(store.index?.runID.uuidString ?? ""):\(store.currentID?.uuidString ?? ""):\(store.metric.rawValue):\(Int(geometry.size.width)):\(Int(geometry.size.height))"
+        ) {
+          store.updateLayout(width: geometry.size.width, height: geometry.size.height)
+        }
+      }
+      .background(LightenStyle.surface)
+      HStack(spacing: 14) {
+        legendSwatch(LightenStyle.folderTile, String(localized: "Folders"))
+        legendSwatch(LightenStyle.fileTile, String(localized: "Files"))
+        Spacer()
+        if store.phase == .partial {
+          Text(String(localized: "Incomplete areas show a known minimum"))
+            .foregroundStyle(LightenStyle.muted)
+        }
+      }
+      .font(.system(size: 11))
+      .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+  }
+
+  private func legendSwatch(_ color: Color, _ title: String) -> some View {
+    HStack(spacing: 5) {
+      Rectangle().fill(color).frame(width: 10, height: 10)
+        .overlay(Rectangle().strokeBorder(LightenStyle.separator, lineWidth: 0.5))
+      Text(title).foregroundStyle(LightenStyle.muted)
+    }
+  }
+
+  private func tileButton(_ tile: TreemapTile) -> some View {
+    let isOther = tile.id == Self.otherID
+    let item = store.index?.items[tile.id]
+    let name = isOther ? String(localized: "Other") : (item?.name ?? "")
+    let size = isOther ? store.group?.otherBytes : item?.bytes(store.metric)
+    return Button {
+      if isOther {
+        withAnimation(navigationAnimation) { store.showingOther = true }
+      } else {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { store.selectedID = tile.id }
+      }
+    } label: {
+      Rectangle()
+        .fill(isOther ? LightenStyle.surface : color(for: item))
+        .overlay(
+          Rectangle().strokeBorder(
+            store.selectedID == tile.id
+              ? LightenStyle.accent
+              : hoveredTileID == tile.id ? LightenStyle.accent.opacity(0.6) : LightenStyle.separator,
+            lineWidth: store.selectedID == tile.id ? 2 : hoveredTileID == tile.id ? 1.5 : 0.7)
+        )
+        .overlay(alignment: .topLeading) {
+          if tile.width >= 95, tile.height >= 46 {
+            VStack(alignment: .leading, spacing: 2) {
+              Text(name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+              Text(sizeLabel(size))
+                .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+                .monospacedDigit().lineLimit(1)
+            }
+            .foregroundStyle(LightenStyle.text)
+            .padding(10)
+          }
+        }
+        .frame(width: tile.width, height: tile.height)
+        .clipped()
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .position(x: tile.x + tile.width / 2, y: tile.y + tile.height / 2)
+    .onHover { hovering in
+      withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+        hoveredTileID = hovering ? tile.id : (hoveredTileID == tile.id ? nil : hoveredTileID)
+      }
+    }
+    .accessibilityLabel("\(name), \(sizeLabel(size))")
+    .accessibilityIdentifier(isOther ? "space-other" : "space-tile-\(tile.id)")
+    .onTapGesture(count: 2) {
+      if isOther {
+        withAnimation(navigationAnimation) { store.showingOther = true }
+      } else if let item, item.canInspect {
+        enter(item.id)
+      }
+    }
+  }
+
+  private func color(for item: SpaceItem?) -> Color {
+    guard let item else { return LightenStyle.surface }
+    if item.partial || item.protected { return LightenStyle.surface }
+    return item.kind == .directory ? LightenStyle.folderTile : LightenStyle.fileTile
+  }
+
+  private var sidePane: some View {
+    VStack(spacing: 0) {
+      listPanel
+      Divider()
+      inspector
+    }
+    .background(LightenStyle.surface)
+  }
+
+  private var compactPane: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 10) {
+        Picker(String(localized: "Space view"), selection: $compactSurface) {
+          Text(String(localized: "Map")).tag(CompactSurface.map)
+          Text(String(localized: "List")).tag(CompactSurface.list)
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 200)
+        Spacer(minLength: 0)
+        if let item = store.selected {
+          Text(item.name).lineLimit(1).truncationMode(.middle)
+            .font(.system(size: 12, weight: .medium))
+          Text(sizeLabel(item.bytes(store.metric)))
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+            .monospacedDigit().fixedSize()
+          Button(String(localized: "Details")) { showingCompactInspector = true }
+        }
+      }
+      .padding(.horizontal, 12).padding(.vertical, 8)
+      Divider()
+      Group {
+        if compactSurface == .map { mapColumn } else { listPanel }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 5)))
+    }
+    .background(LightenStyle.surface)
+    .animation(navigationAnimation, value: compactSurface)
+  }
+
+  private var listPanel: some View {
+    VStack(spacing: 0) {
+      HStack {
+        Text(store.showingOther ? String(localized: "Other items") : String(localized: "Largest items"))
+          .font(.system(size: 15, weight: .semibold))
+        Spacer()
+        Text(String(localized: "Size"))
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      }
+      .padding(.horizontal, 12).padding(.vertical, 11)
+      Divider()
+      List(selection: $store.selectedID) {
+        ForEach(visibleItems) { item in
+          HStack(spacing: 8) {
+            Image(systemName: item.kind == .directory ? "folder" : "doc")
+              .foregroundStyle(LightenStyle.muted)
+              .frame(width: 17)
+            Text(item.name).lineLimit(1)
+            Spacer(minLength: 5)
+            Text(sizeLabel(item.bytes(store.metric)))
+              .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+              .monospacedDigit().lineLimit(1)
+              .frame(minWidth: 72, alignment: .trailing)
+            if item.canInspect {
+              Button {
+                enter(item.id)
+              } label: {
+                Image(systemName: "chevron.right")
+              }
+              .buttonStyle(.borderless)
+              .accessibilityLabel(String(localized: "Open folder"))
+            }
+          }
+          .font(.system(size: 12))
+          .tag(item.id)
+          .accessibilityLabel(
+            "\(item.name), \(sizeLabel(item.bytes(store.metric))), \(item.partial ? String(localized: "Partial or unknown") : String(localized: "Ready"))"
+          )
+        }
+        if !store.showingOther, let other = store.group?.other, !other.isEmpty {
+          Button {
+            withAnimation(navigationAnimation) { store.showingOther = true }
+          } label: {
+            HStack {
+              Text("\(String(localized: "Other")) (\(other.count))")
+              Spacer()
+              Text(sizeLabel(store.group?.otherBytes)).monospacedDigit()
+            }
+          }
+        }
+      }
+    }
+    .background(LightenStyle.surface)
+  }
+
+  private var inspector: some View {
+    Group {
+      if let item = store.selected {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .firstTextBaseline) {
+              Text(item.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+              Spacer()
+              if item.canInspect {
+                Button(String(localized: "Open folder")) { enter(item.id) }
+                  .buttonStyle(.link)
+              }
+            }
+            Text(item.path)
+              .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+              .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+              .help(item.path)
+            HStack(spacing: 18) {
+              inspectorMetric(String(localized: "Logical"), item.logical)
+              inspectorMetric(String(localized: "Allocated"), item.allocated)
+            }
+            if item.partial { Text(String(localized: "Partial or unknown")).foregroundStyle(.orange) }
+            if item.protected { Text(String(localized: "Protected")).foregroundStyle(.orange) }
+            if !item.issues.isEmpty {
+              Text(item.issues.map(\.rawValue).joined(separator: ", "))
+                .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+            }
+            HStack {
+              Button(String(localized: "Show in Finder")) {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
+              }
+              Spacer()
+              if item.canSelect, let snapshot = store.snapshot, item.path != snapshot.rootPath {
+                Button(String(localized: "Add to basket")) {
+                  withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) {
+                    actions.add(item, snapshot: snapshot)
+                  }
+                }
+                .buttonStyle(.borderedProminent)
+              }
+            }
+          }
+          .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        }
+      } else {
+        Text(String(localized: "Select an item to see details"))
+          .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(12)
+      }
+    }
+    .frame(maxHeight: 205)
+    .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.selectedID)
+  }
+
+  private func inspectorMetric(_ title: String, _ bytes: ByteAggregate) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(title).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      Text(sizeLabel(bytes)).font(.system(size: 13, weight: .medium)).monospacedDigit()
+    }
+  }
+
+  private var basketDock: some View {
+    VStack(alignment: .leading, spacing: 7) {
+      HStack(spacing: 10) {
+        Image(systemName: "basket").foregroundStyle(LightenStyle.accent)
+        Text("\(String(localized: "Basket")): \(actions.basket.count)")
+          .font(.system(size: 13, weight: .semibold))
+        Text(format(actions.basketLogicalBytes))
+          .font(.system(size: 13, weight: .medium)).monospacedDigit()
+        if actions.busy { ProgressView().controlSize(.small) }
+        Spacer()
+        if !actions.basket.isEmpty {
+          Button(String(localized: "Clear basket")) { actions.clearBasket() }
+            .disabled(actions.busy)
+          Button(String(localized: "Review removal")) {
+            Task { await actions.prepare(snapshot: store.snapshot) }
+          }
+          .buttonStyle(.borderedProminent).disabled(actions.busy)
+        }
+        Button(String(localized: "History"), action: showHistory)
+      }
+      if !actions.basket.isEmpty {
+        ScrollView(.horizontal) {
+          HStack(spacing: 5) {
+            ForEach(actions.basket.values.sorted { $0.path < $1.path }, id: \.id) { item in
+              HStack(spacing: 5) {
+                Text(item.label).lineLimit(1)
+                Button {
+                  actions.remove(item.id)
+                } label: {
+                  Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(String(localized: "Remove from basket"))
+                .disabled(actions.busy)
+              }
+              .font(.system(size: 11))
+              .padding(.horizontal, 8).padding(.vertical, 5)
+              .background(LightenStyle.surface, in: Capsule())
+              .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
+            }
+          }
+        }
+        .scrollIndicators(.hidden)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: actions.basket.count)
+      }
+      if let result = actions.result {
+        Text(resultLine(result))
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+          .lineLimit(1)
+          .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
+      }
+    }
+    .padding(.horizontal, 16).padding(.vertical, 10)
+    .background(LightenStyle.canvas)
+    .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: actions.result?.planID)
+  }
+
+  private func resultLine(_ result: ActionResult) -> String {
+    let parts: [(ActionOutcome, String)] = [
+      (.applied, String(localized: "Moved to Trash")),
+      (.skipped, String(localized: "Skipped")),
+      (.failed, String(localized: "Failed")),
+      (.uncertain, String(localized: "Uncertain")),
+      (.notAttempted, String(localized: "Not attempted")),
+    ]
+    let counts = parts.compactMap { outcome, label -> String? in
+      let count = result.items.filter { $0.outcome == outcome }.count
+      return count > 0 ? "\(count) \(label)" : nil
+    }
+    return "\(String(localized: "Last result")): \(counts.joined(separator: " · "))"
+  }
+}
+
+func sizeLabel(_ bytes: ByteAggregate?) -> String {
+  guard let bytes else { return String(localized: "Unknown") }
+  if let total = bytes.completeTotal { return format(total) }
+  if bytes.knownLowerBound > 0 {
+    return "\(String(localized: "Known minimum")) \(format(bytes.knownLowerBound))"
+  }
+  return String(localized: "Unknown")
+}
+
+func format(_ bytes: Int64?) -> String {
+  guard let bytes else { return String(localized: "Unknown") }
+  return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+}

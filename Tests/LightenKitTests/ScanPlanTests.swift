@@ -128,11 +128,15 @@ private func fakeIdentity(
 @Test func diskRootCanBeObservedButNeverSelected() async throws {
   #expect(try DescriptorFileSystem.identity(at: "/").kind == .directory)
   let source = StubAttributes(
-    values: ["/": FileAttributes(identity: fakeIdentity(), readable: true)],
-    names: ["/": []], delay: .zero)
+    values: [
+      "/": FileAttributes(identity: fakeIdentity(), readable: true),
+      "/probe": FileAttributes(identity: fakeIdentity(inode: 2, kind: .regular), readable: true),
+    ],
+    names: ["/": ["probe"]], delay: .zero)
   let scan = try await ScanService(attributes: source).scan(rootPath: "/")
-  #expect(scan.entries.count == 1)
+  #expect(scan.entries.count == 2)
   #expect(scan.entries[0].path == "/")
+  #expect(scan.entries[1].path == "/probe")
   #expect(throws: PlanFailure.self) {
     try PlanService().makePlan(snapshot: scan, selectedIDs: [scan.entries[0].id])
   }

@@ -14,97 +14,62 @@ struct LightenApp: App {
   }
 
   var body: some Scene {
-    WindowGroup {
-      LightenRootView()
-    }
-    .defaultSize(width: 880, height: 600)
-
-    Settings {
-      LightenSettingsView()
-    }
+    WindowGroup { LightenRootView() }
+      .defaultSize(width: 1220, height: 800)
+    Settings { Text(String(localized: "Settings")).scenePadding() }
   }
 }
 
 private enum LightenSection: String, CaseIterable, Identifiable {
-  case overview
-  case clean
-  case memory
-  case health
-
+  case overview, space, clean, duplicates, apps, history
   var id: Self { self }
-
   var title: String {
     switch self {
-    case .overview:
-      String(localized: "Overview")
-    case .clean:
-      String(localized: "Clean")
-    case .memory:
-      String(localized: "Memory")
-    case .health:
-      String(localized: "Health")
+    case .overview: String(localized: "Overview")
+    case .space: String(localized: "Space")
+    case .clean: String(localized: "Clean")
+    case .duplicates: String(localized: "Duplicates")
+    case .apps: String(localized: "Apps")
+    case .history: String(localized: "History")
     }
   }
-
-  var systemImage: String {
+  var icon: String {
     switch self {
-    case .overview:
-      "rectangle.grid.2x2"
-    case .clean:
-      "sparkles"
-    case .memory:
-      "memorychip"
-    case .health:
-      "heart.text.square"
+    case .overview: "rectangle.grid.2x2"
+    case .space: "square.grid.3x3.fill"
+    case .clean: "sparkles"
+    case .duplicates: "doc.on.doc"
+    case .apps: "app.dashed"
+    case .history: "clock.arrow.circlepath"
     }
   }
 }
 
 private struct LightenRootView: View {
-  @State private var selection: LightenSection? = .overview
+  @State private var section: LightenSection? = .space
+  @State private var space = SpaceStore()
+  @State private var actions = ActionStore()
 
   var body: some View {
     NavigationSplitView {
-      List(LightenSection.allCases, selection: $selection) { section in
-        Label(section.title, systemImage: section.systemImage)
-          .tag(section)
+      List(LightenSection.allCases, selection: $section) { item in
+        Label(item.title, systemImage: item.icon).tag(item)
       }
-      .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 280)
+      .listStyle(.sidebar)
+      .navigationSplitViewColumnWidth(min: 170, ideal: 195, max: 250)
     } detail: {
-      PlaceholderView(section: selection ?? .overview)
+      switch section ?? .space {
+      case .space:
+        SpaceView(store: space, actions: actions, showHistory: { section = .history })
+      case .history:
+        HistoryView(actions: actions)
+      case let item:
+        ContentUnavailableView(item.title, systemImage: item.icon)
+          .navigationTitle(item.title)
+      }
     }
-    .frame(minWidth: 680, minHeight: 440)
-  }
-}
-
-private struct PlaceholderView: View {
-  let section: LightenSection
-
-  var body: some View {
-    VStack(spacing: 12) {
-      Image(systemName: section.systemImage)
-        .font(.system(size: 42))
-        .foregroundStyle(.secondary)
-        .accessibilityHidden(true)
-      Text(section.title)
-        .font(.title)
-      Text(String(localized: "Pre-alpha build"))
-        .foregroundStyle(.secondary)
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .navigationTitle(section.title)
-  }
-}
-
-private struct LightenSettingsView: View {
-  var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text(String(localized: "Settings"))
-        .font(.title2)
-      Text(String(localized: "Pre-alpha build"))
-        .foregroundStyle(.secondary)
-    }
-    .scenePadding()
-    .frame(width: 320, height: 120, alignment: .topLeading)
+    .frame(minWidth: 820, minHeight: 560)
+    .tint(LightenStyle.accent)
+    .task { await actions.reloadHistory() }
   }
 }

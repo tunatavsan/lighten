@@ -148,7 +148,13 @@ public enum DescriptorFileSystem {
       logicalBytes: details.st_size,
       allocatedBytes: Int64(details.st_blocks) * 512,
       linkCount: UInt64(details.st_nlink), flags: details.st_flags,
-      kind: kind
+      kind: kind,
+      birthSeconds: details.st_birthtimespec.tv_sec > 0
+        ? Int64(details.st_birthtimespec.tv_sec) : nil,
+      birthNanoseconds: details.st_birthtimespec.tv_sec > 0
+        ? Int64(details.st_birthtimespec.tv_nsec) : nil,
+      modificationSeconds: Int64(details.st_mtimespec.tv_sec),
+      modificationNanoseconds: Int64(details.st_mtimespec.tv_nsec)
     )
   }
 
