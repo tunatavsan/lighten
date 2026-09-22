@@ -16,12 +16,12 @@ struct LightenApp: App {
   var body: some Scene {
     WindowGroup { LightenRootView() }
       .defaultSize(width: 1220, height: 800)
-    Settings { Text(String(localized: "Settings")).scenePadding() }
+    Settings { LightenSettingsView() }
   }
 }
 
 private enum LightenSection: String, CaseIterable, Identifiable {
-  case overview, space, clean, duplicates, apps, history
+  case overview, space, clean, duplicates, apps, history, settings
   var id: Self { self }
   var title: String {
     switch self {
@@ -31,6 +31,7 @@ private enum LightenSection: String, CaseIterable, Identifiable {
     case .duplicates: String(localized: "Duplicates")
     case .apps: String(localized: "Apps")
     case .history: String(localized: "History")
+    case .settings: String(localized: "Settings")
     }
   }
   var icon: String {
@@ -41,12 +42,14 @@ private enum LightenSection: String, CaseIterable, Identifiable {
     case .duplicates: "doc.on.doc"
     case .apps: "app.dashed"
     case .history: "clock.arrow.circlepath"
+    case .settings: "gearshape"
     }
   }
 }
 
 private struct LightenRootView: View {
-  @State private var section: LightenSection? = .space
+  @State private var section: LightenSection? = .overview
+  @State private var overview = OverviewStore()
   @State private var space = SpaceStore()
   @State private var actions = ActionStore()
   @State private var clean = CleanStore()
@@ -61,7 +64,11 @@ private struct LightenRootView: View {
       .listStyle(.sidebar)
       .navigationSplitViewColumnWidth(min: 170, ideal: 195, max: 250)
     } detail: {
-      switch section ?? .space {
+      switch section ?? .overview {
+      case .overview:
+        OverviewView(
+          store: overview, space: space, actions: actions,
+          showSpace: { section = .space }, showHistory: { section = .history })
       case .space:
         SpaceView(store: space, actions: actions, showHistory: { section = .history })
       case .clean:
@@ -72,9 +79,26 @@ private struct LightenRootView: View {
         AppsView(store: apps, actions: actions)
       case .history:
         HistoryView(actions: actions)
-      case let item:
-        ContentUnavailableView(item.title, systemImage: item.icon)
-          .navigationTitle(item.title)
+      case .settings:
+        LightenSettingsView(
+          retrySpace: {
+            space.startScan()
+            section = .space
+          },
+          retryClean: {
+            clean.startScan()
+            section = .clean
+          },
+          retryDuplicates: {
+            if let folder = duplicates.folderPath {
+              duplicates.startScan(folder: folder, actions: actions)
+            }
+            section = .duplicates
+          },
+          retryApps: {
+            apps.startScan(actions: actions)
+            section = .apps
+          })
       }
     }
     .frame(minWidth: 820, minHeight: 560)

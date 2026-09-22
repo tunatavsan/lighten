@@ -474,8 +474,8 @@ struct SpaceView: View {
               inspectorMetric(String(localized: "Logical"), item.logical)
               inspectorMetric(String(localized: "Allocated"), item.allocated)
             }
-            if item.partial { Text(String(localized: "Partial or unknown")).foregroundStyle(.orange) }
-            if item.protected { Text(String(localized: "Protected")).foregroundStyle(.orange) }
+            if item.partial { Text(String(localized: "Partial or unknown")).foregroundStyle(LightenStyle.warning) }
+            if item.protected { Text(String(localized: "Protected")).foregroundStyle(LightenStyle.warning) }
             if !item.issues.isEmpty {
               Text(item.issues.map(\.rawValue).joined(separator: ", "))
                 .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)

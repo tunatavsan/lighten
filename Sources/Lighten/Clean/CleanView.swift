@@ -104,7 +104,7 @@ struct CleanView: View {
                     .disabled(store.busy || actions.busy)
                   } else {
                     Text(String(localized: "Report only"))
-                      .font(.system(size: 10)).foregroundStyle(.orange)
+                      .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
                   }
                 }
                 .padding(.vertical, 3)
@@ -149,10 +149,10 @@ struct CleanView: View {
       }
       .padding(.top, 13)
       if let message = store.message {
-        Text(message).font(.system(size: 11)).foregroundStyle(.orange)
+        Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
       } else if let detail = actions.message {
         Text(String(localized: "Action paused. Review History and scan again."))
-          .font(.system(size: 11)).foregroundStyle(.orange)
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
         Text(detail).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
       }
       if let result = actions.result, result.planID == store.presentedPlanID {
@@ -208,7 +208,7 @@ struct CleanView: View {
             .monospacedDigit()
             if !candidate.canAct {
               Text(String(localized: "Report only"))
-                .font(.system(size: 10)).foregroundStyle(.orange)
+                .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
             }
           }
           .font(.system(size: 12)).padding(.vertical, 3)

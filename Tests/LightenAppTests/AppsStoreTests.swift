@@ -11,6 +11,72 @@ private struct ClosedAppSource: RunningApplicationSource {
   func isRunning(bundleID: String) async -> Bool? { false }
 }
 
+@MainActor private func waitForApps(_ condition: @escaping @MainActor () -> Bool) async {
+  for _ in 0..<1_000 {
+    if condition() { return }
+    await Task.yield()
+  }
+}
+
+@Test("Apps publishes metadata before measurements and rejects stale completion after Cancel")
+@MainActor func appsMetadataFirstAndStaleProgress() async {
+  let path = "/Applications/Fixture.app"
+  let bundleID = "com.example.fixture"
+  let inventory = BundleInventory(
+    applications: [InstalledApplication(bundleID: bundleID, path: path, version: "1")],
+    unidentifiedPaths: [], complete: true, observedAt: Date())
+  let metadata = ApplicationReport(
+    path: path, bundleID: bundleID, version: "1", signerTeamID: nil,
+    logical: ByteAggregate(knownLowerBound: 0, completeTotal: nil),
+    allocated: ByteAggregate(knownLowerBound: 0, completeTotal: nil),
+    knownItemCount: 0, partial: true, related: [], manualUninstallerSuggested: false)
+  let measured = ApplicationReport(
+    path: path, bundleID: bundleID, version: "1", signerTeamID: nil,
+    logical: ByteAggregate(knownLowerBound: 512, completeTotal: 512),
+    allocated: ByteAggregate(knownLowerBound: 512, completeTotal: 512),
+    knownItemCount: 2, partial: false, related: [], manualUninstallerSuggested: false)
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let store = AppsStore(running: ClosedAppSource(), events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  continuation.yield(.inventory(inventory, [metadata]))
+  await waitForApps { store.reports.count == 1 }
+  #expect(store.busy)
+  #expect(store.measuringPaths == [path])
+  #expect(store.reports[0].version == "1")
+  #expect(!store.inventoryComplete)
+  store.select(path, actions: actions)
+  #expect(store.selectedReport?.path == path)
+  continuation.yield(.measured([measured]))
+  await waitForApps { store.measuredCount == 1 }
+  #expect(store.reports[0].logical.completeTotal == 512)
+  store.cancelScan()
+  continuation.yield(.completed(inventory, [measured]))
+  continuation.finish()
+  await Task.yield()
+  #expect(store.needsRescan)
+  #expect(!store.inventoryComplete)
+  #expect(store.scannedAt == nil)
+  #expect(store.selectedReport?.path == path)
+}
+
+@Test("Unexpected end of Apps progress keeps review closed")
+@MainActor func appsUnexpectedEndNeedsRescan() async {
+  let inventory = BundleInventory(
+    applications: [], unidentifiedPaths: [], complete: true, observedAt: Date())
+  let store = AppsStore(events: {
+    AsyncStream { continuation in
+      continuation.yield(.inventory(inventory, []))
+      continuation.finish()
+    }
+  })
+  store.startScan(actions: ActionStore())
+  await waitForApps { !store.busy }
+  #expect(store.needsRescan)
+  #expect(!store.inventoryComplete)
+  #expect(store.scannedAt == nil)
+}
+
 private actor AppsPlanGate {
   private var requests: [CheckedContinuation<ActionPlan, Error>] = []
   private var waiting: [(Int, CheckedContinuation<Void, Never>)] = []
@@ -59,12 +125,7 @@ private actor AppsPlanGate {
   let gate = AppsPlanGate()
   let store = AppsStore(
     running: ClosedAppSource(),
-    discover: {
-      (
-        BundleInventory(
-          applications: [], unidentifiedPaths: [], complete: true, observedAt: Date()), []
-      )
-    },
+    events: { AsyncStream { $0.finish() } },
     planBuilder: { _, _ in try await gate.next() })
   let actions = ActionStore()
   store.reports = [app]

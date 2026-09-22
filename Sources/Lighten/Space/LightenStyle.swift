@@ -11,6 +11,7 @@ enum LightenStyle {
   static let accent = adaptive(light: 0x3A6C93, dark: 0x72A6CD)
   static let fileTile = adaptive(light: 0xDCE5EB, dark: 0x435661)
   static let folderTile = adaptive(light: 0xC7D9E5, dark: 0x365F79)
+  static let warning = adaptive(light: 0x795000, dark: 0xE4B451)
 
   private static func adaptive(light: UInt32, dark: UInt32) -> Color {
     Color(

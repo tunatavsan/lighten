@@ -63,6 +63,66 @@ private struct AppsRunning: RunningApplicationSource {
   func isRunning(bundleID: String) async -> Bool? { value }
 }
 
+private final class AppsStepClock: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: TimeInterval = 0
+  private let step: TimeInterval
+
+  init(step: TimeInterval) { self.step = step }
+
+  func now() -> TimeInterval {
+    lock.lock()
+    defer { lock.unlock() }
+    let result = value
+    value += step
+    return result
+  }
+}
+
+@Test("Per-app size budget keeps measured bytes as a partial lower bound")
+func appSizeBudgetProducesPartialLowerBound() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let clock = AppsStepClock(step: 0.7)
+  let (_, reports) = await ApplicationDiscovery(
+    related: fixture.service, uptime: { clock.now() }
+  ).discover()
+  let report = try #require(reports.first { $0.path == fixture.app })
+  #expect(report.sizeLimitReached)
+  #expect(report.partial)
+  #expect(report.logical.completeTotal == nil)
+  #expect(report.logical.knownLowerBound >= 0)
+}
+
+@Test("Global size budget leaves metadata visible and still emits final review event")
+func globalAppSizeBudgetKeepsInventory() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let clock = AppsStepClock(step: 21)
+  let discovery = ApplicationDiscovery(related: fixture.service, uptime: { clock.now() })
+  var sawInventory = false
+  var finished: [ApplicationReport]?
+  for await event in discovery.events() {
+    switch event {
+    case .inventory(let inventory, let metadata):
+      sawInventory = inventory.complete && metadata.contains { $0.path == fixture.app }
+      #expect(metadata.first?.logical.completeTotal == nil)
+    case .measured:
+      break
+    case .completed(let inventory, let reports):
+      #expect(inventory.complete)
+      finished = reports
+    }
+  }
+  #expect(sawInventory)
+  let report = try #require(finished?.first { $0.path == fixture.app })
+  #expect(report.bundleID == fixture.bundleID)
+  #expect(report.version == "2.4.1")
+  #expect(report.sizeLimitReached)
+  #expect(report.logical.completeTotal == nil)
+  #expect(report.logical.knownLowerBound == 0)
+}
+
 private actor MutatingRunning: RunningApplicationSource {
   let infoPath: String
   private var calls = 0

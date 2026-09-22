@@ -43,16 +43,49 @@ struct AppsView: View {
         }
       }
       .padding(.bottom, 10)
+      if store.busy {
+        HStack(spacing: 8) {
+          ProgressView().controlSize(.small)
+          Text("\(store.measuredCount) \(String(localized: "applications measured"))")
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+          if !store.reports.isEmpty {
+            Text(
+              store.measuringPaths.isEmpty
+                ? String(localized: "Reviewing related data")
+                : String(localized: "Remaining sizes are being measured")
+            )
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+          }
+        }
+        .padding(.bottom, 10)
+      }
+      if store.needsRescan {
+        Label(
+          String(localized: "This list needs a new scan before actions are available."),
+          systemImage: "arrow.clockwise.circle"
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+        .padding(.bottom, 10)
+      }
       if store.scannedAt != nil && !store.inventoryComplete {
         Label(
           String(localized: "Application inventory is incomplete. Other locations and unreadable apps remain unknown."),
           systemImage: "exclamationmark.circle"
         )
-        .font(.system(size: 11)).foregroundStyle(.orange)
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+        .padding(.bottom, 10)
+      }
+      let limitedCount = store.reports.filter(\.sizeLimitReached).count
+      if limitedCount > 0 {
+        Label(
+          "\(limitedCount) \(String(localized: "app sizes reached the measurement time limit"))",
+          systemImage: "clock.badge.exclamationmark"
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
         .padding(.bottom, 10)
       }
       Divider()
-      if store.scannedAt == nil && !store.busy {
+      if store.reports.isEmpty && !store.busy {
         ContentUnavailableView(
           String(localized: "Scan installed apps"), systemImage: "app.dashed",
           description: Text(String(localized: "Inspect applications in /Applications and your Applications folder.")))
@@ -86,9 +119,31 @@ struct AppsView: View {
           }
         }
       }
+      if store.selectedReport != nil {
+        Divider()
+        HStack {
+          Text(
+            store.needsRescan
+              ? String(localized: "Scan again to review data")
+              : store.busy
+                ? String(localized: "Review is available after the scan")
+                : String(localized: "App data is reviewed separately")
+          )
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+          Spacer()
+          Button(String(localized: "Review selected data")) {
+            Task { await store.prepareSelectedData(actions: actions) }
+          }
+          .buttonStyle(.borderedProminent)
+          .disabled(
+            store.selectedDataPath == nil || store.busy || store.preparing
+              || store.needsRescan || actions.busy)
+        }
+        .padding(.top, 10)
+      }
       if let message = store.message {
         Divider()
-        Text(message).font(.system(size: 11)).foregroundStyle(.orange).padding(.top, 9)
+        Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning).padding(.top, 9)
       }
       if let result = actions.result, result.planID == store.presentedPlanID {
         Text(resultLine(result))
@@ -127,9 +182,12 @@ struct AppsView: View {
         }
         Spacer(minLength: 4)
         VStack(alignment: .trailing, spacing: 2) {
-          Text(sizeText(app))
+          Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
             .font(.system(size: 11, weight: .medium)).monospacedDigit()
-          if app.partial && app.logical.knownLowerBound > 0 {
+          if app.sizeLimitReached {
+            Text(String(localized: "Time limit"))
+              .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+          } else if !store.measuringPaths.contains(app.path) && app.partial && app.logical.knownLowerBound > 0 {
             Text(String(localized: "At least"))
               .font(.system(size: 9)).foregroundStyle(LightenStyle.muted)
           }
@@ -143,8 +201,10 @@ struct AppsView: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
+    .disabled(store.needsRescan)
     .accessibilityLabel(
-      "\(app.path), \(app.partial ? String(localized: "Partial size") : String(localized: "Measured size"))")
+      "\(app.path), \(app.sizeLimitReached ? String(localized: "Size measurement stopped at the time limit") : store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : app.partial ? String(localized: "Partial size") : String(localized: "Measured size"))"
+    )
   }
 
   private func detail(_ app: ApplicationReport) -> some View {
@@ -163,7 +223,7 @@ struct AppsView: View {
           }
         }
         HStack(alignment: .firstTextBaseline) {
-          Text(sizeText(app))
+          Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
             .font(.system(size: 23, weight: .semibold)).monospacedDigit()
           Text(
             app.partial && app.logical.knownLowerBound == 0
@@ -178,6 +238,10 @@ struct AppsView: View {
             localized: "Package size excludes protected or unreadable contents. Trash size is not freed disk space.")
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        if app.sizeLimitReached {
+          Label(String(localized: "Size measurement stopped at the time limit"), systemImage: "clock")
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+        }
         VStack(alignment: .leading, spacing: 5) {
           metadataRow(String(localized: "Bundle ID"), app.bundleID ?? String(localized: "Unknown"))
           metadataRow(String(localized: "Version"), app.version ?? String(localized: "Unknown"))
@@ -190,16 +254,16 @@ struct AppsView: View {
             String(localized: "App is running. Quit it normally before reviewing its data."),
             systemImage: "pause.circle"
           )
-          .font(.system(size: 11)).foregroundStyle(.orange)
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
         }
         if app.manualUninstallerSuggested {
           Label(
             String(localized: "This app contains a system extension or helper. Check the vendor's uninstaller."),
             systemImage: "info.circle"
           )
-          .font(.system(size: 11)).foregroundStyle(.orange)
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
         }
-        packageSelection(app)
+        packageSelection()
         relatedSection(app)
       }
       .padding(14)
@@ -214,27 +278,16 @@ struct AppsView: View {
     }
   }
 
-  private func packageSelection(_ app: ApplicationReport) -> some View {
+  private func packageSelection() -> some View {
     VStack(alignment: .leading, spacing: 7) {
-      Button {
-        store.togglePackage(actions: actions)
-      } label: {
-        Label(
-          String(localized: "Whole application package"),
-          systemImage: store.packageSelected ? "checkmark.square.fill" : "square"
-        )
+      Label(String(localized: "Whole application package"), systemImage: "lock.square")
         .font(.system(size: 13, weight: .medium))
-      }
-      .buttonStyle(.plain)
+        .accessibilityLabel(String(localized: "Whole application package unavailable"))
       Text(String(localized: "Package removal is unavailable while safety rules protect app contents."))
-        .font(.system(size: 11)).foregroundStyle(.orange)
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
         .fixedSize(horizontal: false, vertical: true)
       Text(String(localized: "No app package will be moved to Trash from this screen."))
         .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-      if store.packageSelected {
-        Text(app.path).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-          .lineLimit(2).truncationMode(.middle)
-      }
     }
     .padding(12).frame(maxWidth: .infinity, alignment: .leading)
     .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
@@ -250,8 +303,14 @@ struct AppsView: View {
       .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       .fixedSize(horizontal: false, vertical: true)
       if app.related.isEmpty {
-        Text(String(localized: "No matching standard data locations found"))
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        Text(
+          store.needsRescan
+            ? String(localized: "Scan again to review related data")
+            : store.busy
+              ? String(localized: "Related data is being reviewed")
+              : String(localized: "No matching standard data locations found")
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       }
       ForEach(app.related) { candidate in
         relatedRow(candidate, app: app)
@@ -261,17 +320,6 @@ struct AppsView: View {
         systemImage: "lock.shield"
       )
       .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-      Button(String(localized: "Review selected data")) {
-        Task { await store.prepareSelectedData(actions: actions) }
-      }
-      .buttonStyle(.borderedProminent)
-      .disabled(
-        store.selectedDataPath == nil || store.packageSelected || store.busy
-          || store.preparing || store.needsRescan || actions.busy)
-      if store.packageSelected {
-        Text(String(localized: "Deselect the blocked package to review data separately."))
-          .font(.system(size: 10)).foregroundStyle(.orange)
-      }
     }
     .padding(12).frame(maxWidth: .infinity, alignment: .leading)
     .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
@@ -287,13 +335,16 @@ struct AppsView: View {
         Image(systemName: selected ? "checkmark.square.fill" : "square")
       }
       .buttonStyle(.plain).disabled(!eligible)
+      .accessibilityLabel(
+        "\(selected ? String(localized: "Deselect") : String(localized: "Select")) \(URL(fileURLWithPath: candidate.path).lastPathComponent)"
+      )
       VStack(alignment: .leading, spacing: 2) {
         Text(URL(fileURLWithPath: candidate.path).lastPathComponent)
           .font(.system(size: 11, weight: .medium))
         Text(candidate.path).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
           .lineLimit(1).truncationMode(.middle).help(candidate.path)
         Text(relatedReason(candidate, eligible: eligible))
-          .font(.system(size: 10)).foregroundStyle(eligible ? LightenStyle.muted : .orange)
+          .font(.system(size: 10)).foregroundStyle(eligible ? LightenStyle.muted : LightenStyle.warning)
       }
       Spacer(minLength: 3)
       if let node = candidate.snapshot?.nodes.first(where: { $0.parentID != nil }) {
@@ -301,12 +352,12 @@ struct AppsView: View {
           .font(.system(size: 10)).monospacedDigit()
       }
     }
-    .accessibilityLabel("\(candidate.path), \(relatedReason(candidate, eligible: eligible))")
+    .accessibilityElement(children: .contain)
   }
 
   private func canSelect(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> Bool {
     guard candidate.classification == .installed, candidate.snapshot != nil,
-      store.inventoryComplete, !store.needsRescan, let id = app.bundleID,
+      store.inventoryComplete, !store.busy, !store.needsRescan, let id = app.bundleID,
       store.reports.filter({
         $0.bundleID?.lowercased(with: Locale(identifier: "en_US_POSIX"))
           == id.lowercased(with: Locale(identifier: "en_US_POSIX"))

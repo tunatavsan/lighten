@@ -6,8 +6,23 @@ struct ConfirmationView: View {
   @Bindable var actions: ActionStore
   @Environment(\.dismiss) private var dismiss
 
-  private var logical: Int64 {
-    presentation.items.reduce(0) { $0 + ($1.logicalBytes ?? 0) }
+  private var logicalSummary: String {
+    var known: Int64 = 0
+    var unknownCount = 0
+    for item in presentation.items {
+      guard let bytes = item.logicalBytes, bytes >= 0 else {
+        unknownCount += 1
+        continue
+      }
+      let (sum, overflow) = known.addingReportingOverflow(bytes)
+      if overflow { return String(localized: "Size unknown") }
+      known = sum
+    }
+    if unknownCount == presentation.items.count { return String(localized: "Size unknown") }
+    if unknownCount > 0 {
+      return "\(String(localized: "At least")) \(format(known)) · \(unknownCount) \(String(localized: "sizes unknown"))"
+    }
+    return format(known)
   }
 
   var body: some View {
@@ -15,7 +30,7 @@ struct ConfirmationView: View {
       VStack(alignment: .leading, spacing: 5) {
         Text(String(localized: "Review removal"))
           .font(.system(size: 21, weight: .semibold))
-        Text("\(presentation.items.count) \(String(localized: "items")) · \(format(logical))")
+        Text("\(presentation.items.count) \(String(localized: "items")) · \(logicalSummary)")
           .font(.system(size: 16, weight: .medium)).monospacedDigit()
         Text(
           presentation.plan.kind == .trash
@@ -119,53 +134,72 @@ struct HistoryView: View {
       .foregroundStyle(LightenStyle.muted)
       .padding(.horizontal, 8).padding(.vertical, 9)
       Divider()
-      List {
-        ForEach(actions.history?.items ?? [], id: \.itemID) { item in
-          HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-              Text(
-                actions.historyMetadata[item.itemID].map {
-                  URL(fileURLWithPath: $0.path).lastPathComponent
-                } ?? item.itemID.uuidString
-              )
-              .font(.system(size: 13, weight: .medium)).lineLimit(1)
-              if let metadata = actions.historyMetadata[item.itemID] {
-                Text(metadata.path)
-                  .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-                  .lineLimit(1).truncationMode(.middle).help(metadata.path)
-              }
-              if item.state == .deleted {
-                Text(String(localized: "Undo unavailable — permanently cleaned"))
-                  .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-              } else if let detail = item.detail {
-                Text(detail).font(.system(size: 11)).foregroundStyle(LightenStyle.muted).lineLimit(2)
-              }
-              if item.deletedCount > 0 {
+      ScrollView {
+        LazyVStack(spacing: 0) {
+          ForEach(actions.history?.items ?? [], id: \.itemID) { item in
+            VStack(alignment: .leading, spacing: 5) {
+              HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(
+                    actions.historyMetadata[item.itemID].map {
+                      URL(fileURLWithPath: $0.path).lastPathComponent
+                    } ?? item.itemID.uuidString
+                  )
+                  .font(.system(size: 13, weight: .medium)).lineLimit(1)
+                  if let metadata = actions.historyMetadata[item.itemID] {
+                    Text(metadata.path)
+                      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+                      .lineLimit(1).truncationMode(.middle).help(metadata.path)
+                  }
+                  if item.state == .deleted {
+                    Text(String(localized: "Undo unavailable — permanently cleaned"))
+                      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+                  } else if let detail = item.detail {
+                    Text(detail).font(.system(size: 11)).foregroundStyle(LightenStyle.muted).lineLimit(2)
+                  }
+                  if item.deletedCount > 0 {
+                    Text(
+                      "\(item.deletedCount) \(String(localized: "irreversibly removed entries")) · \(format(item.deletedLogicalBytes)) \(String(localized: "known logical bytes"))"
+                    )
+                    .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+                  }
+                }
+                Spacer(minLength: 5)
                 Text(
-                  "\(item.deletedCount) \(String(localized: "irreversibly removed entries")) · \(format(item.deletedLogicalBytes)) \(String(localized: "known logical bytes"))"
+                  format(
+                    item.deletedCount > 0
+                      ? item.deletedLogicalBytes : actions.historyMetadata[item.itemID]?.logicalBytes)
                 )
-                .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+                .font(.system(size: 12)).monospacedDigit()
+                .frame(width: 90, alignment: .trailing)
+                Text(status(item.state))
+                  .font(.system(size: 12)).foregroundStyle(statusColor(item.state))
+                  .frame(width: 105, alignment: .trailing)
+              }
+              .accessibilityElement(children: .combine)
+              if item.state == .inTrash {
+                HStack {
+                  Spacer()
+                  Button(String(localized: "Undo")) { Task { await actions.undo(item) } }
+                    .buttonStyle(.bordered)
+                    .disabled(actions.busy)
+                    .accessibilityLabel(
+                      String(localized: "Undo") + " "
+                        + (actions.historyMetadata[item.itemID].map {
+                          URL(fileURLWithPath: $0.path).lastPathComponent
+                        } ?? item.itemID.uuidString)
+                    )
+                    .accessibilityIdentifier("history.undo.\(item.itemID.uuidString)")
+                }
               }
             }
-            Spacer(minLength: 5)
-            Text(
-              format(
-                item.deletedCount > 0
-                  ? item.deletedLogicalBytes : actions.historyMetadata[item.itemID]?.logicalBytes)
-            )
-            .font(.system(size: 12)).monospacedDigit()
-            .frame(width: 90, alignment: .trailing)
-            Text(status(item.state))
-              .font(.system(size: 12)).foregroundStyle(statusColor(item.state))
-              .frame(width: 105, alignment: .trailing)
-            if item.state == .inTrash {
-              Button(String(localized: "Undo")) { Task { await actions.undo(item) } }
-                .disabled(actions.busy)
-            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            Divider()
           }
-          .padding(.vertical, 4)
         }
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
       if let result = actions.result {
         Text(
           "\(String(localized: "Last result")): \(result.items.map { status($0.outcome, kind: actions.resultKind) }.joined(separator: ", "))"
@@ -183,7 +217,7 @@ struct HistoryView: View {
 
   private func statusColor(_ state: HistoryState) -> Color {
     switch state {
-    case .uncertain, .failed: .orange
+    case .uncertain, .failed: LightenStyle.warning
     case .inTrash: LightenStyle.accent
     default: LightenStyle.muted
     }

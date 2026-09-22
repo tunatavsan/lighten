@@ -85,7 +85,7 @@ struct DuplicateView: View {
         } icon: {
           Image(systemName: "exclamationmark.triangle")
         }
-        .font(.system(size: 12)).foregroundStyle(.orange)
+        .font(.system(size: 12)).foregroundStyle(LightenStyle.warning)
         .padding(.bottom, 9)
       }
       Divider()
@@ -133,7 +133,7 @@ struct DuplicateView: View {
       }
       .padding(.top, 12)
       if let message = store.message ?? actions.message {
-        Text(message).font(.system(size: 11)).foregroundStyle(.orange)
+        Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
           .padding(.top, 5)
       }
       if let result = actions.result, result.planID == store.presentedPlanID {

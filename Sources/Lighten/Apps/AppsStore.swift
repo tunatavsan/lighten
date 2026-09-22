@@ -4,7 +4,7 @@ import Observation
 
 @MainActor @Observable
 final class AppsStore {
-  @ObservationIgnored private let discover: @Sendable () async -> (BundleInventory, [ApplicationReport])
+  @ObservationIgnored private let events: @Sendable () -> AsyncStream<ApplicationDiscovery.Event>
   @ObservationIgnored private let planBuilder:
     @Sendable (ApplicationReport, RelatedDataCandidate) async throws -> ActionPlan
   @ObservationIgnored private var scanTask: Task<Void, Never>?
@@ -13,6 +13,8 @@ final class AppsStore {
   @ObservationIgnored private var preparationGeneration = UUID()
   @ObservationIgnored private let running: any RunningApplicationSource
   var reports: [ApplicationReport] = []
+  var measuringPaths: Set<String> = []
+  var measuredCount = 0
   var inventoryComplete = false
   var scannedAt: Date?
   var busy = false
@@ -29,8 +31,8 @@ final class AppsStore {
 
   init(
     running: any RunningApplicationSource = MacOSRunningApplicationSource(),
-    discover: @escaping @Sendable () async -> (BundleInventory, [ApplicationReport]) = {
-      await ApplicationDiscovery().discover()
+    events: @escaping @Sendable () -> AsyncStream<ApplicationDiscovery.Event> = {
+      ApplicationDiscovery().events()
     },
     planBuilder: @escaping @Sendable (ApplicationReport, RelatedDataCandidate) async throws -> ActionPlan = {
       report, candidate in
@@ -43,7 +45,7 @@ final class AppsStore {
     }
   ) {
     self.running = running
-    self.discover = discover
+    self.events = events
     self.planBuilder = planBuilder
   }
 
@@ -56,6 +58,9 @@ final class AppsStore {
     generation = id
     busy = true
     reports = []
+    measuringPaths = []
+    measuredCount = 0
+    inventoryComplete = false
     selectedPath = nil
     packageSelected = false
     selectedDataPath = nil
@@ -65,15 +70,47 @@ final class AppsStore {
     scannedAt = nil
     message = nil
     needsRescan = false
+    let events = self.events
     scanTask = Task { @concurrent in
-      let result = await discover()
-      await MainActor.run {
-        guard self.generation == id else { return }
-        self.reports = result.1
-        self.inventoryComplete = result.0.complete
-        self.scannedAt = Date()
+      var finishedInventory: BundleInventory?
+      for await event in events() {
+        if Task.isCancelled { return }
+        await MainActor.run {
+          guard self.generation == id else { return }
+          switch event {
+          case .inventory(_, let metadata):
+            self.reports = metadata
+            self.measuringPaths = Set(metadata.map(\.path))
+          case .measured(let batch):
+            for report in batch {
+              if let index = self.reports.firstIndex(where: { $0.path == report.path }) {
+                self.reports[index] = report
+                self.measuringPaths.remove(report.path)
+                self.measuredCount += 1
+              }
+            }
+          case .completed(let inventory, let reports):
+            self.reports = reports
+            self.measuringPaths = []
+            self.measuredCount = reports.count
+            self.inventoryComplete = inventory.complete
+            self.scannedAt = Date()
+            finishedInventory = inventory
+          }
+        }
       }
-      for app in result.0.applications {
+      guard let inventory = finishedInventory, !Task.isCancelled else {
+        await MainActor.run {
+          guard self.generation == id, !Task.isCancelled else { return }
+          self.busy = false
+          self.needsRescan = true
+          self.measuringPaths = []
+          self.scanTask = nil
+          self.message = String(localized: "Scan stopped before review was complete. Scan again.")
+        }
+        return
+      }
+      for app in inventory.applications {
         if Task.isCancelled { break }
         let status = await running.isRunning(bundleID: app.bundleID)
         await MainActor.run {
@@ -97,8 +134,8 @@ final class AppsStore {
     scanTask?.cancel()
     scanTask = nil
     busy = false
-    reports = []
-    selectedPath = nil
+    measuringPaths = []
+    needsRescan = true
     packageSelected = false
     selectedDataPath = nil
     message = String(localized: "Scan cancelled")
@@ -118,13 +155,12 @@ final class AppsStore {
   }
 
   func togglePackage(actions: ActionStore) {
-    guard !needsRescan else { return }
     invalidatePreparation(actions: actions)
-    packageSelected.toggle()
+    packageSelected = false
   }
 
   func toggleData(_ path: String, actions: ActionStore) {
-    guard !needsRescan else { return }
+    guard !busy, !needsRescan else { return }
     invalidatePreparation(actions: actions)
     selectedDataPath = selectedDataPath == path ? nil : path
   }
