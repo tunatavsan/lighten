@@ -18,8 +18,10 @@ struct ConfirmationView: View {
         Text("\(presentation.items.count) \(String(localized: "items")) · \(format(logical))")
           .font(.system(size: 16, weight: .medium)).monospacedDigit()
         Text(
-          String(
-            localized: "These items move to macOS Trash. Space is not freed until Trash is emptied outside Lighten.")
+          presentation.plan.kind == .trash
+            ? String(
+              localized: "These items move to macOS Trash. Space is not freed until Trash is emptied outside Lighten.")
+            : String(localized: "Permanent cleanup cannot be undone. Cached data may need to be downloaded or rebuilt.")
         )
         .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
         .fixedSize(horizontal: false, vertical: true)
@@ -51,7 +53,11 @@ struct ConfirmationView: View {
           dismiss()
         }
         Spacer()
-        Button(String(localized: "Move to Trash")) {
+        Button(
+          presentation.plan.kind == .trash
+            ? String(localized: "Move to Trash")
+            : String(localized: "Permanently clean — cannot undo")
+        ) {
           guard let confirmedPlan = actions.takeConfirmedPlan(presentation) else { return }
           dismiss()
           Task { await actions.executeConfirmed(confirmedPlan) }
@@ -128,14 +134,27 @@ struct HistoryView: View {
                   .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
                   .lineLimit(1).truncationMode(.middle).help(metadata.path)
               }
-              if let detail = item.detail {
+              if item.state == .deleted {
+                Text(String(localized: "Undo unavailable — permanently cleaned"))
+                  .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+              } else if let detail = item.detail {
                 Text(detail).font(.system(size: 11)).foregroundStyle(LightenStyle.muted).lineLimit(2)
+              }
+              if item.deletedCount > 0 {
+                Text(
+                  "\(item.deletedCount) \(String(localized: "irreversibly removed entries")) · \(format(item.deletedLogicalBytes)) \(String(localized: "known logical bytes"))"
+                )
+                .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
               }
             }
             Spacer(minLength: 5)
-            Text(format(actions.historyMetadata[item.itemID]?.logicalBytes))
-              .font(.system(size: 12)).monospacedDigit()
-              .frame(width: 90, alignment: .trailing)
+            Text(
+              format(
+                item.deletedCount > 0
+                  ? item.deletedLogicalBytes : actions.historyMetadata[item.itemID]?.logicalBytes)
+            )
+            .font(.system(size: 12)).monospacedDigit()
+            .frame(width: 90, alignment: .trailing)
             Text(status(item.state))
               .font(.system(size: 12)).foregroundStyle(statusColor(item.state))
               .frame(width: 105, alignment: .trailing)
@@ -148,9 +167,11 @@ struct HistoryView: View {
         }
       }
       if let result = actions.result {
-        Text("\(String(localized: "Last result")): \(result.items.map { status($0.outcome) }.joined(separator: ", "))")
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          .padding(.top, 8)
+        Text(
+          "\(String(localized: "Last result")): \(result.items.map { status($0.outcome, kind: actions.resultKind) }.joined(separator: ", "))"
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        .padding(.top, 8)
       }
     }
     .padding(18)
@@ -176,12 +197,16 @@ struct HistoryView: View {
     case .failed: String(localized: "Failed")
     case .skipped: String(localized: "Skipped")
     case .uncertain: String(localized: "Uncertain")
+    case .deleted: String(localized: "Permanently cleaned")
+    case .partiallyDeleted: String(localized: "Partially cleaned")
     }
   }
 
-  private func status(_ outcome: ActionOutcome) -> String {
+  private func status(_ outcome: ActionOutcome, kind: ActionKind?) -> String {
     switch outcome {
-    case .applied: String(localized: "Moved to Trash")
+    case .applied:
+      kind == .catalogDelete
+        ? String(localized: "Permanently cleaned") : String(localized: "Moved to Trash")
     case .skipped: String(localized: "Skipped")
     case .failed: String(localized: "Failed")
     case .uncertain: String(localized: "Uncertain")

@@ -35,7 +35,10 @@ final class ActionStore {
     trash: any TrashMoving = MacOSTrashService()
   ) {
     self.journal = journal
-    self.executor = ActionExecutor(journal: journal, trash: trash)
+    self.executor = ActionExecutor(
+      journal: journal, trash: trash,
+      activity: MacOSProcessActivitySource(),
+      runningApplications: MacOSRunningApplicationSource())
     self.historyService = ActionHistory(journal: journal)
   }
 
@@ -43,6 +46,7 @@ final class ActionStore {
   var basketRunID: UUID?
   var pending: ActionPresentation?
   var result: ActionResult?
+  var resultKind: ActionKind?
   var history: HistoryReadout?
   var historyMetadata: [UUID: HistoryMetadata] = [:]
   var busy = false
@@ -109,7 +113,7 @@ final class ActionStore {
 
   /// Other modules supply their own guarded plan and reason summary.
   func present(plan: ActionPlan, items: [ActionItemSummary]) {
-    guard plan.kind == .trash, Set(plan.items.map(\.id)) == Set(items.map(\.id)) else { return }
+    guard Set(plan.items.map(\.id)) == Set(items.map(\.id)) else { return }
     pending = ActionPresentation(plan: plan, items: items)
   }
 
@@ -118,12 +122,13 @@ final class ActionStore {
   func takeConfirmedPlan(_ presentation: ActionPresentation) -> ActionPlan? {
     guard !busy, claimedPlan == nil,
       pending?.plan == presentation.plan,
-      presentation.plan.kind == .trash
+      presentation.plan.kind == .trash || presentation.plan.kind == .catalogDelete
     else { return nil }
     claimedPlan = presentation.plan
     pending = nil
     busy = true
     result = nil
+    resultKind = nil
     return presentation.plan
   }
 
@@ -132,7 +137,11 @@ final class ActionStore {
     claimedPlan = nil
     defer { busy = false }
     do {
-      result = try await executor.execute(plan)
+      let confirmation =
+        plan.kind == .catalogDelete
+        ? IrreversibleConfirmation(planID: plan.id, method: .catalogDelete) : nil
+      result = try await executor.execute(plan, confirmation: confirmation)
+      resultKind = plan.kind
       basket = [:]
       basketRunID = nil
       message = nil

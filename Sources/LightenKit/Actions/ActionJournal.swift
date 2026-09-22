@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 public enum JournalEventKind: String, Codable, Sendable {
-  case intent, applied, failed, skipped, undoIntent, reversed, undoFailed
+  case intent, applied, failed, skipped, undoIntent, reversed, undoFailed, deleteProgress
 }
 
 public struct JournalRecord: Codable, Sendable, Equatable {
@@ -16,11 +16,14 @@ public struct JournalRecord: Codable, Sendable, Equatable {
   public let returnedTrashPath: String?
   public let movedIdentity: FileIdentity?
   public let detail: String?
+  public let deletedCount: Int?
+  public let deletedLogicalBytes: Int64?
 
   public init(
     kind: JournalEventKind, planID: UUID, itemID: UUID? = nil,
     plan: ActionPlan? = nil, returnedTrashPath: String? = nil,
-    movedIdentity: FileIdentity? = nil, detail: String? = nil
+    movedIdentity: FileIdentity? = nil, detail: String? = nil,
+    deletedCount: Int? = nil, deletedLogicalBytes: Int64? = nil
   ) {
     self.schema = 1
     self.eventID = UUID()
@@ -32,6 +35,8 @@ public struct JournalRecord: Codable, Sendable, Equatable {
     self.returnedTrashPath = returnedTrashPath
     self.movedIdentity = movedIdentity
     self.detail = detail
+    self.deletedCount = deletedCount
+    self.deletedLogicalBytes = deletedLogicalBytes
   }
 }
 
@@ -157,6 +162,7 @@ public actor JSONLActionJournal: ActionJournal {
     var issues: [JournalIssue] = []
     var plans: [UUID: ActionPlan] = [:]
     var states: [ItemKey: JournalEventKind] = [:]
+    var progress: [ItemKey: (Int, Int64)] = [:]
     for (offset, line) in lines.enumerated() {
       if offset == lines.count - 1 && line.isEmpty { break }
       if offset == lines.count - 1 && data.last != 0x0A {
@@ -171,7 +177,10 @@ public actor JSONLActionJournal: ActionJournal {
         issues.append(JournalIssue(line: offset + 1, reason: "unknown schema"))
         continue
       }
-      if let reason = Self.semanticIssue(record, plans: &plans, states: &states) {
+      if let reason = Self.semanticIssue(
+        record, plans: &plans,
+        states: &states, progress: &progress)
+      {
         issues.append(JournalIssue(line: offset + 1, reason: reason))
       } else {
         records.append(record)
@@ -186,10 +195,17 @@ public actor JSONLActionJournal: ActionJournal {
     guard existing.issues.isEmpty else { throw JournalFailure.corruptHistory }
     var plans: [UUID: ActionPlan] = [:]
     var states: [ItemKey: JournalEventKind] = [:]
+    var progress: [ItemKey: (Int, Int64)] = [:]
     for prior in existing.records {
-      _ = Self.semanticIssue(prior, plans: &plans, states: &states)
+      _ = Self.semanticIssue(
+        prior, plans: &plans,
+        states: &states, progress: &progress)
     }
-    guard Self.semanticIssue(record, plans: &plans, states: &states) == nil else {
+    guard
+      Self.semanticIssue(
+        record, plans: &plans,
+        states: &states, progress: &progress) == nil
+    else {
       throw JournalFailure.corruptHistory
     }
     let encoded = try JSONEncoder().encode(record)
@@ -257,7 +273,8 @@ public actor JSONLActionJournal: ActionJournal {
 
   private static func semanticIssue(
     _ record: JournalRecord, plans: inout [UUID: ActionPlan],
-    states: inout [ItemKey: JournalEventKind]
+    states: inout [ItemKey: JournalEventKind],
+    progress: inout [ItemKey: (Int, Int64)]
   ) -> String? {
     if record.kind == .intent {
       guard record.itemID == nil, let plan = record.plan,
@@ -273,19 +290,43 @@ public actor JSONLActionJournal: ActionJournal {
     else { return "event without known plan item" }
     let key = ItemKey(planID: record.planID, itemID: itemID)
     let previous = states[key]
+    let latest = progress[key] ?? (0, 0)
     switch record.kind {
     case .applied:
-      guard previous == nil, record.returnedTrashPath != nil,
-        record.movedIdentity != nil
+      guard previous == nil || (plan.kind == .catalogDelete && previous == .deleteProgress),
+        plan.kind == .catalogDelete
+          ? (record.returnedTrashPath == nil && record.movedIdentity == nil
+            && record.deletedCount == latest.0
+            && record.deletedLogicalBytes == latest.1
+            && latest.0 == plan.items.first(where: { $0.id == itemID })?.inventory.count)
+          : (record.returnedTrashPath != nil && record.movedIdentity != nil)
       else { return "invalid applied event" }
     case .failed, .skipped:
-      guard previous == nil else { return "duplicate item outcome" }
+      guard previous == nil || (plan.kind == .catalogDelete && previous == .deleteProgress)
+      else { return "duplicate item outcome" }
+      if plan.kind == .catalogDelete {
+        guard
+          previous == .deleteProgress
+            ? (record.deletedCount == latest.0 && record.deletedLogicalBytes == latest.1)
+            : (record.deletedCount == nil || record.deletedCount == 0)
+              && (record.deletedLogicalBytes == nil || record.deletedLogicalBytes == 0)
+        else { return "invalid delete outcome count" }
+      }
+    case .deleteProgress:
+      guard plan.kind == .catalogDelete, previous == nil || previous == .deleteProgress,
+        let count = record.deletedCount, count == latest.0 + 1,
+        count <= plan.items.first(where: { $0.id == itemID })?.inventory.count ?? 0,
+        let bytes = record.deletedLogicalBytes, bytes >= latest.1
+      else { return "invalid delete progress" }
+      progress[key] = (count, bytes)
     case .undoIntent:
-      guard previous == .applied || previous == .undoIntent || previous == .undoFailed,
+      guard plan.kind == .trash,
+        previous == .applied || previous == .undoIntent || previous == .undoFailed,
         record.returnedTrashPath != nil, record.movedIdentity != nil
       else { return "invalid undo intent" }
     case .reversed, .undoFailed:
-      guard previous == .undoIntent else { return "invalid undo outcome" }
+      guard plan.kind == .trash, previous == .undoIntent
+      else { return "invalid undo outcome" }
     case .intent:
       return "invalid intent"
     }

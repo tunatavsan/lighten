@@ -14,7 +14,24 @@ public struct ScanService: Sendable {
   }
 
   public func scan(rootPath: String) async throws -> ScanSnapshot {
-    let task = Task.detached { try await performScan(rootPath: rootPath, progress: nil) }
+    let task = Task.detached {
+      try await performScan(
+        rootPath: rootPath,
+        immediateChild: nil, progress: nil)
+    }
+    return try await withTaskCancellationHandler {
+      try await task.value
+    } onCancel: {
+      task.cancel()
+    }
+  }
+
+  public func scanImmediateChild(parentPath: String, name: String) async throws -> ScanSnapshot {
+    guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\0")
+    else { throw FileSystemFailure.invalidPath }
+    let task = Task.detached {
+      try await performScan(rootPath: parentPath, immediateChild: name, progress: nil)
+    }
     return try await withTaskCancellationHandler {
       try await task.value
     } onCancel: {
@@ -26,7 +43,7 @@ public struct ScanService: Sendable {
     AsyncThrowingStream { continuation in
       let task = Task.detached {
         do {
-          let snapshot = try await performScan(rootPath: rootPath) { count, path in
+          let snapshot = try await performScan(rootPath: rootPath, immediateChild: nil) { count, path in
             continuation.yield(.progress(scannedItems: count, path: path))
           }
           continuation.yield(.completed(snapshot))
@@ -40,7 +57,8 @@ public struct ScanService: Sendable {
   }
 
   private func performScan(
-    rootPath: String, progress: (@Sendable (Int, String) -> Void)?
+    rootPath: String, immediateChild: String?,
+    progress: (@Sendable (Int, String) -> Void)?
   ) async throws -> ScanSnapshot {
     let rootIdentity = try await attributes.inspect(at: rootPath).identity
     guard rootIdentity.kind == .directory else { throw ScanFailure.rootNotDirectory }
@@ -85,7 +103,14 @@ public struct ScanService: Sendable {
         )
         return
       }
-      for name in names {
+      if path == rootPath, let immediateChild {
+        guard names.contains(immediateChild) else { throw ScanFailure.childUnavailable }
+        let position = indexByID[id]!
+        entries[position] = ScanEntry(
+          id: id, parentID: parentID, path: path,
+          identity: identity, issues: [.notTraversed], readable: observed?.readable == true)
+      }
+      for name in names where path != rootPath || immediateChild == nil || name == immediateChild {
         let childPath = path == "/" ? "/" + name : path + "/" + name
         try await visit(childPath, parentID: id)
       }
@@ -147,4 +172,5 @@ public struct ScanService: Sendable {
 
 public enum ScanFailure: Error, Sendable {
   case rootNotDirectory
+  case childUnavailable
 }

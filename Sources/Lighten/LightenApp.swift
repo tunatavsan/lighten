@@ -49,6 +49,7 @@ private struct LightenRootView: View {
   @State private var section: LightenSection? = .space
   @State private var space = SpaceStore()
   @State private var actions = ActionStore()
+  @State private var clean = CleanStore()
 
   var body: some View {
     NavigationSplitView {
@@ -61,6 +62,8 @@ private struct LightenRootView: View {
       switch section ?? .space {
       case .space:
         SpaceView(store: space, actions: actions, showHistory: { section = .history })
+      case .clean:
+        CleanView(store: clean, actions: actions)
       case .history:
         HistoryView(actions: actions)
       case let item:

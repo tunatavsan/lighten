@@ -11,13 +11,16 @@ let package = Package(
   ],
   dependencies: [],
   targets: [
+    .target(name: "CLightenPlatform", path: "Sources/CLightenPlatform",
+      cSettings: [.unsafeFlags(["-Wall", "-Wextra", "-Werror"])]),
     .target(
       name: "LightenKit",
-      path: "Sources/LightenKit"
+      path: "Sources/LightenKit",
+      resources: [.process("Clean/Resources")]
     ),
     .executableTarget(
       name: "Lighten",
-      dependencies: ["LightenKit"],
+      dependencies: ["LightenKit", "CLightenPlatform"],
       path: "Sources/Lighten",
       swiftSettings: [
         .defaultIsolation(MainActor.self),
@@ -32,7 +35,7 @@ let package = Package(
     ),
     .testTarget(
       name: "LightenAppTests",
-      dependencies: ["Lighten"],
+      dependencies: ["Lighten", "CLightenPlatform"],
       path: "Tests/LightenAppTests"
     ),
   ],

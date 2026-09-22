@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 public enum HistoryState: String, Sendable {
-  case atSource, inTrash, reversed, failed, skipped, uncertain
+  case atSource, inTrash, reversed, failed, skipped, uncertain, deleted, partiallyDeleted
 }
 
 public struct HistoryItem: Sendable {
@@ -11,6 +11,8 @@ public struct HistoryItem: Sendable {
   public let state: HistoryState
   public let returnedTrashPath: String?
   public let detail: String?
+  public let deletedCount: Int
+  public let deletedLogicalBytes: Int64
 }
 
 public struct HistoryReadout: Sendable {
@@ -53,6 +55,23 @@ public actor ActionHistory {
         let terminal = events.last
         let applied = events.last { $0.kind == .applied }
         let state: HistoryState
+        if plan.kind == .catalogDelete {
+          switch terminal?.kind {
+          case .applied: state = .deleted
+          case .failed, .skipped:
+            state =
+              (terminal?.deletedCount ?? 0) > 0 ? .partiallyDeleted : (terminal?.kind == .skipped ? .skipped : .failed)
+          case .deleteProgress: state = .uncertain
+          default: state = .uncertain
+          }
+          items.append(
+            HistoryItem(
+              planID: plan.id, itemID: item.id, state: state,
+              returnedTrashPath: nil, detail: terminal?.detail,
+              deletedCount: terminal?.deletedCount ?? 0,
+              deletedLogicalBytes: terminal?.deletedLogicalBytes ?? 0))
+          continue
+        }
         switch terminal?.kind {
         case .reversed: state = .reversed
         case .failed: state = .failed
@@ -71,7 +90,7 @@ public actor ActionHistory {
           } else {
             state = .uncertain
           }
-        case .intent, .none:
+        case .intent, .deleteProgress, .none:
           if let original = item.inventory.first?.identity,
             (try? DescriptorFileSystem.identity(at: item.sourcePath)) == original
           {
@@ -83,7 +102,8 @@ public actor ActionHistory {
         items.append(
           HistoryItem(
             planID: plan.id, itemID: item.id, state: state,
-            returnedTrashPath: applied?.returnedTrashPath, detail: terminal?.detail
+            returnedTrashPath: applied?.returnedTrashPath, detail: terminal?.detail,
+            deletedCount: 0, deletedLogicalBytes: 0
           ))
       }
     }
@@ -107,6 +127,7 @@ public actor ActionHistory {
         $0.kind == .intent && $0.planID == planID
       })?.plan, let item = plan.items.first(where: { $0.id == itemID })
     else { throw UndoFailure.unknownItem }
+    guard plan.kind == .trash else { throw UndoFailure.noAppliedRecord }
     let records = readout.records.filter { $0.planID == planID && $0.itemID == itemID }
     guard let applied = records.last(where: { $0.kind == .applied }),
       records.last?.kind != .reversed,

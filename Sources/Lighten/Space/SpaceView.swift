@@ -574,7 +574,11 @@ struct SpaceView: View {
 
   private func resultLine(_ result: ActionResult) -> String {
     let parts: [(ActionOutcome, String)] = [
-      (.applied, String(localized: "Moved to Trash")),
+      (
+        .applied,
+        actions.resultKind == .catalogDelete
+          ? String(localized: "Permanently cleaned") : String(localized: "Moved to Trash")
+      ),
       (.skipped, String(localized: "Skipped")),
       (.failed, String(localized: "Failed")),
       (.uncertain, String(localized: "Uncertain")),

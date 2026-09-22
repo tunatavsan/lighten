@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "id": "pip-http-v2", "relativeRoot": "Library/Caches/pip/http-v2", "removal": "delete", "class": "regenerableCache", "activity": "pip",
+      "titleEN": "pip HTTP cache", "titleTR": "pip HTTP önbelleği",
+      "reasonEN": "Cached downloads can be fetched again.", "reasonTR": "Önbellekteki indirmeler yeniden alınabilir.",
+      "costEN": "Future installs may download packages again.", "costTR": "Sonraki kurulumlar paketleri yeniden indirebilir.",
+      "evidenceURL": "https://pip.pypa.io/en/stable/topics/caching/", "ruleSource": "pip caching documentation, HTTP cache", "verifiedOn": "2026-09-22"
+    },
+    {
+      "id": "pip-wheels", "relativeRoot": "Library/Caches/pip/wheels", "removal": "delete", "class": "regenerableCache", "activity": "pip",
+      "titleEN": "pip wheel cache", "titleTR": "pip wheel önbelleği",
+      "reasonEN": "Cached wheels can be rebuilt or downloaded again.", "reasonTR": "Önbellekteki wheel dosyaları yeniden derlenebilir veya indirilebilir.",
+      "costEN": "Future installs may need downloads or builds.", "costTR": "Sonraki kurulumlar indirme veya derleme gerektirebilir.",
+      "evidenceURL": "https://pip.pypa.io/en/stable/topics/caching/", "ruleSource": "pip caching documentation, locally built wheels", "verifiedOn": "2026-09-22"
+    },
+    {
+      "id": "homebrew-downloads", "relativeRoot": "Library/Caches/Homebrew/downloads", "removal": "delete", "class": "regenerableCache", "activity": "homebrew",
+      "titleEN": "Homebrew downloads", "titleTR": "Homebrew indirmeleri",
+      "reasonEN": "Downloaded archive cache can be fetched again.", "reasonTR": "İndirilen arşiv önbelleği yeniden alınabilir.",
+      "costEN": "Future installs may download archives again.", "costTR": "Sonraki kurulumlar arşivleri yeniden indirebilir.",
+      "evidenceURL": "https://docs.brew.sh/Manpage#--cache-options-formulacask-", "ruleSource": "Homebrew cache and cleanup documentation", "verifiedOn": "2026-09-22"
+    }
+  ]
+}

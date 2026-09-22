@@ -65,7 +65,8 @@ public enum EntryKind: String, Codable, Sendable {
 }
 
 public enum ScanIssue: String, Codable, Sendable {
-  case unreadable, unknownMetadata, unknownVolume, protected, symbolicLink, mountBoundary, dataless, packageBoundary
+  case unreadable, unknownMetadata, unknownVolume, protected, symbolicLink, mountBoundary, dataless, packageBoundary,
+    notTraversed
 }
 
 public struct ScanEntry: Codable, Sendable, Identifiable, Equatable {

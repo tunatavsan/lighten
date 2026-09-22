@@ -1216,6 +1216,718 @@
           }
         }
       }
+    },
+    "Action": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Action"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eylem"
+          }
+        }
+      }
+    },
+    "Cancel scan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel scan"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taramayı iptal et"
+          }
+        }
+      }
+    },
+    "Documented caches and related app data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Documented caches and related app data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Belgeli önbellekler ve ilişkili uygulama verileri"
+          }
+        }
+      }
+    },
+    "Last scan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last scan"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Son tarama"
+          }
+        }
+      }
+    },
+    "Not scanned": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not scanned"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taranmadı"
+          }
+        }
+      }
+    },
+    "Only exact metadata links can qualify. Other locations and incomplete scans remain unknown.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only exact metadata links can qualify. Other locations and incomplete scans remain unknown."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnız kesin metadata ilişkileri uygun olabilir. Diğer konumlar ve eksik taramalar bilinmez kalır."
+          }
+        }
+      }
+    },
+    "Partially cleaned": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partially cleaned"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kısmen temizlendi"
+          }
+        }
+      }
+    },
+    "Permanent cleanup cannot be undone. Cached data may need to be downloaded or rebuilt.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permanent cleanup cannot be undone. Cached data may need to be downloaded or rebuilt."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kalıcı temizlik geri alınamaz. Önbellek verilerinin yeniden indirilmesi veya derlenmesi gerekebilir."
+          }
+        }
+      }
+    },
+    "Permanent cleanup · cannot undo": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permanent cleanup · cannot undo"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kalıcı temizlik · geri alınamaz"
+          }
+        }
+      }
+    },
+    "Permanently clean — cannot undo": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permanently clean — cannot undo"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kalıcı temizle — geri alınamaz"
+          }
+        }
+      }
+    },
+    "Permanently cleaned": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permanently cleaned"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kalıcı temizlendi"
+          }
+        }
+      }
+    },
+    "Previously verified relationship; owner absent from searched app locations. Data may exist elsewhere.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previously verified relationship; owner absent from searched app locations. Data may exist elsewhere."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceden doğrulanmış ilişki; uygulama aranan konumlarda yok. Başka yerde bulunabilir."
+          }
+        }
+      }
+    },
+    "Removed app data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed app data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaldırılmış uygulama verileri"
+          }
+        }
+      }
+    },
+    "Report only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Report only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnız rapor"
+          }
+        }
+      }
+    },
+    "Review Trash": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review Trash"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trash işlemini incele"
+          }
+        }
+      }
+    },
+    "Review selection": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review selection"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçimi incele"
+          }
+        }
+      }
+    },
+    "Scan cancelled": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan cancelled"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tarama iptal edildi"
+          }
+        }
+      }
+    },
+    "Scan to inspect candidate areas": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan to inspect candidate areas"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aday alanları incelemek için tara"
+          }
+        }
+      }
+    },
+    "Selectable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selectable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilebilir"
+          }
+        }
+      }
+    },
+    "Selection requires a complete, clear scan of one cache area": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selection requires a complete, clear scan of one cache area"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçim, tek bir önbellek alanının eksiksiz ve güvenli taramasını gerektirir"
+          }
+        }
+      }
+    },
+    "candidates": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "candidates"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "aday"
+          }
+        }
+      }
+    },
+    "selected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "selected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "seçili"
+          }
+        }
+      }
+    },
+    "Application inventory incomplete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application inventory incomplete"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama envanteri eksik"
+          }
+        }
+      }
+    },
+    "Candidate area unreadable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Candidate area unreadable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aday alan okunamıyor"
+          }
+        }
+      }
+    },
+    "Could not prepare a safe plan. Scan again or inspect the item.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not prepare a safe plan. Scan again or inspect the item."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Güvenli plan hazırlanamadı. Yeniden tarayın veya öğeyi inceleyin."
+          }
+        }
+      }
+    },
+    "Could not prepare related data for Trash. Scan again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not prepare related data for Trash. Scan again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişkili veri Trash için hazırlanamadı. Yeniden tarayın."
+          }
+        }
+      }
+    },
+    "Current-user process check clear": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Current-user process check clear"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geçerli kullanıcı süreç kontrolü temiz"
+          }
+        }
+      }
+    },
+    "Exact name alone does not prove former ownership": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exact name alone does not prove former ownership"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tek başına aynı ad önceki sahipliği kanıtlamaz"
+          }
+        }
+      }
+    },
+    "No entries": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No entries"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öğe yok"
+          }
+        }
+      }
+    },
+    "Owner found in searched app locations": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Owner found in searched app locations"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sahip uygulama aranan konumlarda bulundu"
+          }
+        }
+      }
+    },
+    "Previously verified owner absent here; it may exist elsewhere": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previously verified owner absent here; it may exist elsewhere"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceden doğrulanmış sahip burada yok; başka yerde bulunabilir"
+          }
+        }
+      }
+    },
+    "Process activity unknown — report only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Process activity unknown — report only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Süreç etkinliği bilinmiyor — yalnız rapor"
+          }
+        }
+      }
+    },
+    "Protected by safety rules": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protected by safety rules"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Güvenlik kurallarıyla korunuyor"
+          }
+        }
+      }
+    },
+    "Relation record unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relation record unavailable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişki kaydı kullanılamıyor"
+          }
+        }
+      }
+    },
+    "Relation record unreadable or unsafe": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relation record unreadable or unsafe"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişki kaydı okunamıyor veya güvenli değil"
+          }
+        }
+      }
+    },
+    "Tool running — cleaning paused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tool running — cleaning paused"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Araç çalışıyor — temizlik duraklatıldı"
+          }
+        }
+      }
+    },
+    "Unavailable or unreadable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unavailable or unreadable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kullanılamıyor veya okunamıyor"
+          }
+        }
+      }
+    },
+    "Shared Group Containers are protected and report only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared Group Containers are protected and report only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paylaşılan Group Container alanları korunur ve yalnız raporlanır"
+          }
+        }
+      }
+    },
+    "Clean catalog unavailable. Reinstall the app.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean catalog unavailable. Reinstall the app."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Temizlik kataloğu kullanılamıyor. Uygulamayı yeniden kurun."
+          }
+        }
+      }
+    },
+    "irreversibly removed entries": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "irreversibly removed entries"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "geri alınamaz biçimde kaldırılan öğe"
+          }
+        }
+      }
+    },
+    "known logical bytes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "known logical bytes"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "bilinen mantıksal bayt"
+          }
+        }
+      }
+    },
+    "Action paused. Review History and scan again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Action paused. Review History and scan again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eylem duraklatıldı. Geçmişi inceleyip yeniden tarayın."
+          }
+        }
+      }
+    },
+    "Clear search": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Clear search" } },
+        "tr": { "stringUnit": { "state": "translated", "value": "Aramayı temizle" } }
+      }
+    },
+    "Search by name or path": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Search by name or path" } },
+        "tr": { "stringUnit": { "state": "translated", "value": "Ada veya yola göre ara" } }
+      }
+    },
+    "No matching candidates": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "No matching candidates" } },
+        "tr": { "stringUnit": { "state": "translated", "value": "Eşleşen aday yok" } }
+      }
+    },
+    "matches": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "matches" } },
+        "tr": { "stringUnit": { "state": "translated", "value": "eşleşen" } }
+      }
+    },
+    "Undo unavailable — permanently cleaned": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Undo unavailable — permanently cleaned"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geri alma kullanılamaz — kalıcı temizlendi"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -10,16 +10,21 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   public let volumeID: UUID?
   public let inventory: [ScanEntry]
   public let ancestors: [PathIdentity]
+  public let catalogProof: CatalogProof?
+  public let relatedProof: RelatedProof?
 
   public init(
     id: UUID, sourcePath: String, volumeID: UUID? = nil,
-    inventory: [ScanEntry], ancestors: [PathIdentity]
+    inventory: [ScanEntry], ancestors: [PathIdentity], catalogProof: CatalogProof? = nil,
+    relatedProof: RelatedProof? = nil
   ) {
     self.id = id
     self.sourcePath = sourcePath
     self.volumeID = volumeID
     self.inventory = inventory
     self.ancestors = ancestors
+    self.catalogProof = catalogProof
+    self.relatedProof = relatedProof
   }
 }
 

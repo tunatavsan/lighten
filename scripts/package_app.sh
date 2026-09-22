@@ -135,6 +135,8 @@ verify_package() {
       fail "Missing $language localization in packaged app."
   done
   [[ -s "$RESOURCES_DIR/PrivacyInfo.xcprivacy" ]] || fail "Missing privacy manifest in packaged app."
+  [[ -s "$RESOURCES_DIR/Lighten_LightenKit.bundle/catalog.json" ]] ||
+    fail "Missing bundled Clean catalog in packaged app."
   actual_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$CONTENTS_DIR/Info.plist")" ||
     fail "Packaged Info.plist has no bundle identity."
   [[ "$actual_id" == "$bundle_id" ]] || fail "Packaged Info.plist identity changed."
