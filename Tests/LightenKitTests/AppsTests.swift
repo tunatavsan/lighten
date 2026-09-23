@@ -288,6 +288,13 @@ func linkedApplicationsResolveReadOnly() throws {
   #expect(linked.path == fixture.appRoot + "/Linked.app")
   #expect(linked.linkTarget == elsewhere)
 
+  try Data("doc".utf8).write(to: URL(fileURLWithPath: fixture.home + "/readme.html"))
+  #expect(symlink(fixture.home + "/readme.html", fixture.appRoot + "/Readme.html") == 0)
+  #expect(fixture.service.inventory().complete)
+
+  #expect(symlink(fixture.home + "/Shared", fixture.appRoot + "/More Apps") == 0)
+  #expect(!fixture.service.inventory().complete)
+  #expect(unlink(fixture.appRoot + "/More Apps") == 0)
   #expect(symlink(fixture.home + "/missing.app", fixture.appRoot + "/Broken.app") == 0)
   #expect(!fixture.service.inventory().complete)
 }
@@ -304,4 +311,28 @@ func installedElsewhereIsNotALeftover() async throws {
   let candidate = try #require((await service.discover()).first { $0.path == orphan })
   #expect(candidate.classification == .uncertain)
   #expect(candidate.reason == .installedElsewhere)
+}
+
+@Test("Bundles without an identifier are listed without making the inventory incomplete")
+func identifierlessAndWrappedApps() throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let plain = fixture.appRoot + "/Launcher.app/Contents"
+  try FileManager.default.createDirectory(atPath: plain, withIntermediateDirectories: true)
+  try PropertyListSerialization.data(fromPropertyList: ["CFBundleName": "Launcher"], format: .xml, options: 0)
+    .write(to: URL(fileURLWithPath: plain + "/Info.plist"))
+  let wrapped = fixture.appRoot + "/Phone.app/Wrapper/Phone.app"
+  try FileManager.default.createDirectory(atPath: wrapped, withIntermediateDirectories: true)
+  try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": "com.example.phone"], format: .xml, options: 0
+  )
+  .write(to: URL(fileURLWithPath: wrapped + "/Info.plist"))
+  let inventory = fixture.service.inventory()
+  #expect(inventory.complete)
+  #expect(inventory.unidentifiedPaths.contains(fixture.appRoot + "/Launcher.app"))
+  #expect(
+    inventory.applications.contains { $0.bundleID == "com.example.phone" && $0.path == fixture.appRoot + "/Phone.app" })
+
+  try FileManager.default.createDirectory(atPath: fixture.appRoot + "/Empty.app", withIntermediateDirectories: true)
+  #expect(!fixture.service.inventory().complete)
 }

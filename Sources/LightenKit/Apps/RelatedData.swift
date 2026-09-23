@@ -152,14 +152,15 @@ public struct RelatedDataService: Sendable {
           // Resolve read-only: the link's target identifies an app, never an action path.
           if let linked = Self.resolveLinkedApplication(at: path) {
             apps.append(linked)
-          } else {
+          } else if !Self.linksToPlainFile(path) {
+            // A link to a folder may hide apps that are never followed.
             complete = false
           }
           continue
         }
         guard child.kind == .directory else { continue }
         if name.lowercased(with: Locale(identifier: "en_US_POSIX")).hasSuffix(".app") {
-          let metadataPath = path + "/Contents/Info.plist"
+          let metadataPath = Self.infoPlistPath(ofBundleAt: path)
           guard
             let data = try? SecureMetadataFile.read(
               path: metadataPath,
@@ -167,12 +168,22 @@ public struct RelatedDataService: Sendable {
             (try? DescriptorFileSystem.identity(at: path)) == child,
             (try? DescriptorFileSystem.volumeID(at: metadataPath)) == volumeID,
             let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
-            let dict = plist as? [String: Any],
-            let bundleID = dict["CFBundleIdentifier"] as? String,
-            Self.validBundleID(bundleID)
+            let dict = plist as? [String: Any]
           else {
             complete = false
             unidentifiedPaths.append(path)
+            continue
+          }
+          guard let bundleID = dict["CFBundleIdentifier"] as? String, Self.validBundleID(bundleID) else {
+            // A readable bundle that declares no identifier cannot own a data
+            // folder named by one, and receipts come only from identified apps,
+            // so it is listed without making the inventory incomplete.
+            if dict["CFBundleIdentifier"] == nil {
+              unidentifiedPaths.append(path)
+            } else {
+              complete = false
+              unidentifiedPaths.append(path)
+            }
             continue
           }
           let version =
@@ -205,6 +216,28 @@ public struct RelatedDataService: Sendable {
     return BundleInventory(
       applications: apps, unidentifiedPaths: unidentifiedPaths,
       complete: complete, observedAt: Date())
+  }
+
+  /// A link resolving to a regular file (a document or script) cannot be an app.
+  static func linksToPlainFile(_ path: String) -> Bool {
+    guard !path.lowercased(with: Locale(identifier: "en_US_POSIX")).hasSuffix(".app"),
+      let resolved = realpath(path, nil)
+    else { return false }
+    defer { free(resolved) }
+    return (try? DescriptorFileSystem.identity(at: String(cString: resolved)))?.kind == .regular
+  }
+
+  /// Info.plist of a Mac bundle, or of the single app inside an iOS wrapper.
+  static func infoPlistPath(ofBundleAt path: String) -> String {
+    let mac = path + "/Contents/Info.plist"
+    if (try? DescriptorFileSystem.identity(at: path + "/Contents"))?.kind == .directory { return mac }
+    let wrapper = path + "/Wrapper"
+    guard let identity = try? DescriptorFileSystem.identity(at: wrapper), identity.kind == .directory,
+      let names = try? DescriptorFileSystem.children(at: wrapper, expected: identity)
+    else { return mac }
+    let apps = names.filter { $0.lowercased(with: Locale(identifier: "en_US_POSIX")).hasSuffix(".app") }
+    guard apps.count == 1 else { return mac }
+    return wrapper + "/" + apps[0] + "/Info.plist"
   }
 
   /// A link in an application folder counts only when it resolves, without
@@ -245,6 +278,11 @@ public struct RelatedDataService: Sendable {
           classification: .uncertain, reason: .recordUnsafe,
           snapshot: nil, receipt: nil))
     }
+    var pending:
+      [(
+        path: String, classification: RelatedClassification, reason: RelatedReason, receipt: RelatedReceipt?,
+        identity: FileIdentity?, needsSnapshot: Bool
+      )] = []
     for parent in [homeDirectory + "/Library/Caches", homeDirectory + "/Library/Preferences"] {
       if Task.isCancelled { return [] }
       guard let parentIdentity = try? DescriptorFileSystem.identity(at: parent),
@@ -299,16 +337,37 @@ public struct RelatedDataService: Sendable {
         let needsSnapshot =
           classification == .historicallyVerifiedAbsent
           || (classification == .installed && apps.complete && receiptStoreHealthy)
-        let snapshot =
-          needsSnapshot
-          ? await snapshotForCandidate(path: path, identity: identity) : nil
-        candidates.append(
-          RelatedDataCandidate(
-            id: path, path: path,
-            classification: snapshot == nil && classification == .historicallyVerifiedAbsent
-              ? .uncertain : classification,
-            reason: reason, snapshot: snapshot, receipt: receipt))
+        pending.append((path, classification, reason, receipt, needsSnapshot ? identity : nil, needsSnapshot))
       }
+    }
+    // Evidence snapshots are independent subtree walks; a few run at once.
+    let snapshots = await withTaskGroup(of: (Int, ScanSnapshot?).self) { group in
+      var results = [ScanSnapshot?](repeating: nil, count: pending.count)
+      var next = 0
+      func enqueue() {
+        while next < pending.count && !pending[next].needsSnapshot { next += 1 }
+        guard next < pending.count else { return }
+        let index = next
+        let item = pending[index]
+        next += 1
+        group.addTask { (index, await snapshotForCandidate(path: item.path, identity: item.identity)) }
+      }
+      for _ in 0..<6 { enqueue() }
+      while let (index, snapshot) = await group.next() {
+        results[index] = snapshot
+        enqueue()
+      }
+      return results
+    }
+    if Task.isCancelled { return [] }
+    for (index, item) in pending.enumerated() {
+      let snapshot = snapshots[index]
+      candidates.append(
+        RelatedDataCandidate(
+          id: item.path, path: item.path,
+          classification: snapshot == nil && item.classification == .historicallyVerifiedAbsent
+            ? .uncertain : item.classification,
+          reason: item.reason, snapshot: snapshot, receipt: item.receipt))
     }
     // Group Containers are shared and protected. Only root metadata is observed;
     // their names and contents are never enumerated for cleanup.
