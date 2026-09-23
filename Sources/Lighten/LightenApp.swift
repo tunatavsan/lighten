@@ -11,6 +11,7 @@ struct LightenApp: App {
       FileHandle.standardError.write(Data(message.utf8))
       Darwin.exit(2)
     }
+    MainThreadWatchdog.startIfEnabled()
   }
 
   var body: some Scene {
