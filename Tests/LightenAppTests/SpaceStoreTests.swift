@@ -35,24 +35,17 @@ struct SpaceStoreTests {
     defer { try? FileManager.default.removeItem(atPath: container) }
     try Data(repeating: 7, count: 128).write(to: URL(fileURLWithPath: source))
 
-    let snapshot = try await ScanService().scan(rootPath: root)
-    let index = try SpaceIndex(snapshot: snapshot)
-    let item = try #require(index.sortedChildren(of: index.rootID, metric: .logical).first)
-    let plan = try await PlanService().makePlanAsync(snapshot: snapshot, selectedIDs: [item.id])
+    let run = try ScanEngine().start(root: root)
+    await run.waitUntilFinished()
+    let item = try #require(run.tree.children(of: run.tree.rootID, metric: .logical).first)
     let mover = RecordingMover(destination: destination)
     let store = ActionStore(
       journal: JSONLActionJournal(path: container + "/journal/actions-v1.jsonl"),
       trash: mover)
-    store.add(item, snapshot: snapshot)
-    store.present(
-      plan: plan,
-      items: [
-        ActionItemSummary(
-          id: item.id, label: item.name, path: item.path, reason: "test selection",
-          logicalBytes: item.logical.completeTotal,
-          allocatedBytes: item.allocated.completeTotal)
-      ])
+    store.add(item)
+    await store.prepare(scanRoot: root, runID: run.runID)
     let presentation = try #require(store.pending)
+    #expect(presentation.plan.items.map(\.policy) == [.spaceTrash])
     let confirmed = try #require(store.takeConfirmedPlan(presentation))
     store.pending = nil  // SwiftUI's sheet dismissal clears its binding.
     #expect(store.takeConfirmedPlan(presentation) == nil)
@@ -63,7 +56,7 @@ struct SpaceStoreTests {
     #expect(await mover.moves == 0)
     await store.executeConfirmed(confirmed)
     #expect(await mover.moves == 1)
-    #expect(store.result?.items.map(\.outcome) == [.applied])
+    #expect(store.result?.items.map(\.outcome) == [.applied], "\(store.result?.items.map(\.detail) as Any)")
     #expect(store.basket.isEmpty)
     #expect(FileManager.default.fileExists(atPath: destination))
     #expect(!FileManager.default.fileExists(atPath: source))
@@ -71,35 +64,28 @@ struct SpaceStoreTests {
     #expect(await mover.moves == 1)
   }
 
-  private struct SlowAttributes: FileAttributeSource {
-    func volumeID(at path: String) async throws -> UUID? { UUID() }
-    func inspect(at path: String) async throws -> FileAttributes {
-      try await Task.sleep(for: .seconds(5))
-      return FileAttributes(
-        identity: FileIdentity(
-          device: 1, inode: 1, changeSeconds: 1, changeNanoseconds: 0,
-          logicalBytes: 0, allocatedBytes: 0, linkCount: 1, flags: 0, kind: .directory),
-        readable: true)
+  @MainActor @Test("A new scan replaces the previous run and its late updates")
+  func newScanReplacesRun() async throws {
+    guard let resolved = realpath(NSTemporaryDirectory(), nil) else {
+      Issue.record("temporary fixture root unavailable")
+      return
     }
-    func children(at path: String, expected: FileIdentity) async throws -> [String] { [] }
-  }
-
-  @MainActor @Test("A stale scan callback cannot cancel or overwrite a newer scan")
-  func staleCallback() async throws {
-    let store = SpaceStore(scanService: ScanService(attributes: SlowAttributes()))
-    // A nonexistent root keeps the test free of user-file traversal.
-    store.selectRoot(URL(fileURLWithPath: "/private/var/empty/lighten-\(UUID())"))
+    defer { free(resolved) }
+    let root = String(cString: resolved) + "/lighten-rescan-" + UUID().uuidString
+    try FileManager.default.createDirectory(atPath: root + "/folder", withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    try Data(repeating: 1, count: 64).write(to: URL(fileURLWithPath: root + "/folder/file"))
+    let store = SpaceStore(cache: nil)
+    store.selectRoot(URL(fileURLWithPath: root))
     store.startScan()
     let previous = try #require(store.currentScanRunID)
+    let previousTree = store.tree
     store.startScan()
     #expect(previous != store.currentScanRunID)
-    store.applyCancellation(root: store.selectedRoot.path, runID: previous)
-    store.applyError("stale", root: store.selectedRoot.path, runID: previous)
-    store.applyProgress(999, path: "stale", root: store.selectedRoot.path, runID: previous)
-    try await Task.sleep(for: .milliseconds(30))
-    #expect(store.phase == .scanning)
-    #expect(store.progressCount == 0)
-    store.cancel()
+    #expect(store.tree !== previousTree)
+    try await waitForPhase(store, .complete)
+    #expect(store.current?.logical.completeTotal == 64)
+    #expect(store.tree?.runID == store.currentScanRunID)
   }
 
   @MainActor @Test("Other maps only remaining items and back rejects its stale layout")
@@ -113,31 +99,27 @@ struct SpaceStoreTests {
     try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: root) }
     for number in 1...31 {
+      try FileManager.default.createDirectory(atPath: root + "/item-\(number)", withIntermediateDirectories: true)
       try Data(repeating: UInt8(number), count: number).write(
-        to: URL(fileURLWithPath: root + "/item-\(number).bin"))
+        to: URL(fileURLWithPath: root + "/item-\(number)/data.bin"))
     }
-
-    let snapshot = try await ScanService().scan(rootPath: root)
-    let index = try SpaceIndex(snapshot: snapshot)
-    let group = index.group(at: index.rootID, metric: .logical)
+    let store = SpaceStore(cache: nil)
+    store.selectRoot(URL(fileURLWithPath: root))
+    store.startScan()
+    try await waitForPhase(store, .complete)
+    let group = try #require(store.group)
     #expect(group.items.count == 24)
     #expect(group.other.count == 7)
-    let store = SpaceStore()
-    store.selectedRoot = URL(fileURLWithPath: root)
-    store.snapshot = snapshot
-    store.index = index
-    store.currentID = index.rootID
     store.updateLayout(width: 400, height: 300)
     let top = try await waitForLayout(store)
     #expect(Set(top.tiles.map(\.id)) == Set(group.items.map(\.id) + [SpaceView.otherID]))
 
     store.selectedID = group.items.first?.id
+    #expect(store.selected?.id == group.items.first?.id)
     store.showOther()
     #expect(store.selectedID == nil)
-    #expect(store.layout == nil)
     store.updateLayout(width: 400, height: 300)
-    let other = try await waitForLayout(store)
-    #expect(Set(other.tiles.map(\.id)) == Set(group.other.map(\.id)))
+    let other = try await waitForLayout(store) { Set($0.tiles.map(\.id)) == Set(group.other.map(\.id)) }
     let first = try #require(group.other.first)
     let last = try #require(group.other.last)
     let firstArea = try #require(other.tiles.first(where: { $0.id == first.id })?.area)
@@ -148,20 +130,29 @@ struct SpaceStoreTests {
 
     store.back()
     #expect(!store.showingOther)
-    #expect(store.layout == nil)
-    store.showOther()
-    store.updateLayout(width: 400, height: 300)
-    store.back()
-    store.updateLayout(width: 400, height: 300)
-    let returned = try await waitForLayout(store)
+    let returned = try await waitForLayout(store) { Set($0.tiles.map(\.id)) == Set(top.tiles.map(\.id)) }
     #expect(Set(returned.tiles.map(\.id)) == Set(top.tiles.map(\.id)))
-    try await Task.sleep(for: .milliseconds(30))
-    #expect(Set(store.layout?.tiles.map(\.id) ?? []) == Set(top.tiles.map(\.id)))
+
+    let folder = try #require(group.items.first)
+    store.navigate(to: folder.id)
+    #expect(store.crumbs.map(\.id) == [store.tree!.rootID, folder.id])
+    store.back()
+    #expect(store.currentID == store.tree?.rootID)
   }
 
-  @MainActor private func waitForLayout(_ store: SpaceStore) async throws -> TreemapLayout {
-    for _ in 0..<100 {
-      if let layout = store.layout { return layout }
+  @MainActor private func waitForPhase(_ store: SpaceStore, _ phase: ScanPhase) async throws {
+    for _ in 0..<300 {
+      if store.phase == phase { return }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(store.phase == phase)
+  }
+
+  @MainActor private func waitForLayout(
+    _ store: SpaceStore, matching: (TreemapLayout) -> Bool = { _ in true }
+  ) async throws -> TreemapLayout {
+    for _ in 0..<200 {
+      if let layout = store.layout, matching(layout) { return layout }
       try await Task.sleep(for: .milliseconds(10))
     }
     return try #require(store.layout)

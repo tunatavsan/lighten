@@ -25,9 +25,15 @@ struct SpaceTests {
     return directory
   }
 
+  private func scannedTree(_ path: String) async throws -> ScanTree {
+    let run = try ScanEngine().start(root: path)
+    await run.waitUntilFinished()
+    return run.tree
+  }
+
   @Test("Treemap tile area follows bytes and exactly partitions the viewport")
   func proportionalArea() {
-    let ids = (0..<25).map { _ in UUID() }
+    let ids = (0..<25).map { ScanItemID(node: Int32($0)) }
     let sizes: [Int64] = [1, 4, 9] + (1..<23).map { Int64($0 + 10) }
     let values = zip(ids, sizes).map { ($0.0, $0.1) }
     let layout = Treemap.layout(values: values, width: 900, height: 600)
@@ -54,15 +60,15 @@ struct SpaceTests {
       }
     }
     #expect(Treemap.layout(values: values, width: 900, height: 600).tiles == layout.tiles)
-    #expect(Treemap.layout(values: [(UUID(), 0)], width: 900, height: 600).tiles.isEmpty)
+    #expect(Treemap.layout(values: [(ScanItemID(node: 1), 0)], width: 900, height: 600).tiles.isEmpty)
   }
 
   @Test("Equal sizes keep the caller's stable path and ID order")
   func equalSizeOrder() {
-    let first = UUID()
-    let second = UUID()
-    let third = UUID()
-    let values: [(UUID, Int64)] = [(second, 10), (first, 10), (third, 0)]
+    let first = ScanItemID(node: 1)
+    let second = ScanItemID(node: 2)
+    let third = ScanItemID(node: 3)
+    let values: [(ScanItemID, Int64)] = [(second, 10), (first, 10), (third, 0)]
     let tiles = Treemap.layout(values: values, width: 100, height: 60).tiles
     #expect(tiles.map(\.id) == [second, first])
     #expect(abs(tiles.reduce(0) { $0 + $1.area } - 6000) < 1e-9)
@@ -70,8 +76,8 @@ struct SpaceTests {
 
   @Test("Extreme byte totals do not overflow or create negative rectangles")
   func extremeBytes() {
-    let values: [(UUID, Int64)] = [
-      (UUID(), Int64.max), (UUID(), Int64.max), (UUID(), 1),
+    let values: [(ScanItemID, Int64)] = [
+      (ScanItemID(node: 1), Int64.max), (ScanItemID(node: 2), Int64.max), (ScanItemID(node: 3), 1),
     ]
     let tiles = Treemap.layout(values: values, width: 900, height: 600).tiles
     #expect(tiles.count == 3)
@@ -90,9 +96,8 @@ struct SpaceTests {
     defer { try? FileManager.default.removeItem(at: directory) }
     try Data(repeating: 1, count: 10).write(to: directory.appending(path: "zeta"))
     try Data(repeating: 2, count: 10).write(to: directory.appending(path: "alpha"))
-    let snapshot = try await ScanService().scan(rootPath: directory.path)
-    let index = try SpaceIndex(snapshot: snapshot)
-    let children = index.sortedChildren(of: index.rootID, metric: .logical)
+    let tree = try await scannedTree(directory.path)
+    let children = tree.children(of: tree.rootID, metric: .logical)
     #expect(children.map(\.name) == ["alpha", "zeta"])
     let tiles = Treemap.layout(
       values: children.map { ($0.id, $0.logical.knownLowerBound) },
@@ -112,39 +117,36 @@ struct SpaceTests {
         .write(to: directory.appending(path: "file-\(index)"))
     }
     try Data(repeating: 1, count: 5).write(to: nested.appending(path: "child"))
-    let snapshot = try await ScanService().scan(rootPath: directory.path)
-    let index = try SpaceIndex(snapshot: snapshot)
-    let group = index.group(at: index.rootID, metric: .logical)
+    let tree = try await scannedTree(directory.path)
+    let group = tree.group(at: tree.rootID, metric: .logical)
     #expect(group.items.count == 24)
     #expect(group.other.count == 7)
-    #expect(group.items.count + group.other.count == index.children[index.rootID]?.count)
+    #expect(group.items.count + group.other.count == tree.item(tree.rootID)?.childCount)
     #expect(
       group.otherBytes.completeTotal
         == group.other.reduce(0) {
           $0 + $1.logical.knownLowerBound
         })
     let nestedItem = try #require(
-      index.sortedChildren(of: index.rootID, metric: .logical)
-        .first(where: { $0.name == "nested" }))
-    #expect(index.breadcrumb(to: nestedItem.id).map(\.id) == [index.rootID, nestedItem.id])
-    #expect(index.runID == snapshot.runID)
-    #expect(index.items[index.rootID]?.canSelect == false)
+      tree.children(of: tree.rootID, metric: .logical).first(where: { $0.name == "nested" }))
+    #expect(tree.breadcrumb(to: nestedItem.id).map(\.id) == [tree.rootID, nestedItem.id])
+    #expect(tree.item(tree.rootID)?.canSelect == false)
   }
 
-  @Test("A zero file is known and a skipped link is unknown")
+  @Test("A zero file is known and a link is a known leaf that moves only with its folder")
   func zeroVsUnknown() async throws {
     let directory = try fixtureDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     FileManager.default.createFile(atPath: directory.appending(path: "zero").path, contents: Data())
     try FileManager.default.createSymbolicLink(
       at: directory.appending(path: "link"), withDestinationURL: directory.appending(path: "zero"))
-    let snapshot = try await ScanService().scan(rootPath: directory.path)
-    let index = try SpaceIndex(snapshot: snapshot)
-    let children = index.sortedChildren(of: index.rootID, metric: .logical)
+    let tree = try await scannedTree(directory.path)
+    let children = tree.children(of: tree.rootID, metric: .logical)
     let zero = try #require(children.first { $0.name == "zero" })
     let link = try #require(children.first { $0.name == "link" })
     #expect(zero.logical.completeTotal == 0)
-    #expect(link.logical.completeTotal == nil)
+    #expect(link.logical.completeTotal == Int64(directory.appending(path: "zero").path.utf8.count))
+    #expect(link.kind == .symlink)
     #expect(!link.canSelect)
   }
 }

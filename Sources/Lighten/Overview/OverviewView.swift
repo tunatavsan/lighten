@@ -59,7 +59,7 @@ struct OverviewView: View {
         VStack(alignment: .leading, spacing: 3) {
           Text("\(String(localized: "Selected scan")): \(scanSize)")
           Text(
-            "\(String(localized: "Scanned items")): \(space.snapshot?.entries.count.formatted() ?? String(localized: "Not scanned"))"
+            "\(String(localized: "Scanned items")): \(space.tree.flatMap { $0.item($0.rootID) }.map { $0.itemCount.formatted() } ?? String(localized: "Not scanned"))"
           )
         }
         Spacer(minLength: 0)
@@ -79,7 +79,7 @@ struct OverviewView: View {
   }
 
   private var scanSize: String {
-    guard let index = space.index, let root = index.items[index.rootID] else {
+    guard let tree = space.tree, let root = tree.item(tree.rootID) else {
       return String(localized: "Not scanned")
     }
     if let complete = root.logical.completeTotal { return format(complete) }

@@ -1,7 +1,7 @@
 import Foundation
 
 public struct TreemapTile: Sendable, Identifiable, Equatable {
-  public let id: UUID
+  public let id: ScanItemID
   public let x: Double
   public let y: Double
   public let width: Double
@@ -20,7 +20,7 @@ public struct TreemapLayout: Sendable {
 /// Input order breaks equal-byte ties; callers supply stable path/ID order.
 public enum Treemap {
   public static func layout(
-    values: [(UUID, Int64)], width: Double, height: Double
+    values: [(ScanItemID, Int64)], width: Double, height: Double
   ) -> TreemapLayout {
     guard width.isFinite, height.isFinite, width > 0, height > 0 else {
       return TreemapLayout(tiles: [], width: width, height: height)
@@ -36,7 +36,7 @@ public enum Treemap {
     let scale = width * height / total
     let entries = sorted.map { (id: $0.element.0, area: Double($0.element.1) * scale) }
     var remaining = Rect(x: 0, y: 0, width: width, height: height)
-    var row: [(id: UUID, area: Double)] = []
+    var row: [(id: ScanItemID, area: Double)] = []
     var tiles: [TreemapTile] = []
     for entry in entries {
       let candidate = row + [entry]
@@ -59,7 +59,7 @@ public enum Treemap {
     var height: Double
   }
 
-  private static func worst(_ row: [(id: UUID, area: Double)], shortSide: Double) -> Double {
+  private static func worst(_ row: [(id: ScanItemID, area: Double)], shortSide: Double) -> Double {
     guard !row.isEmpty, shortSide > 0 else { return .infinity }
     let sum = row.reduce(0) { $0 + $1.area }
     let largest = row.map(\.area).max()!
@@ -70,7 +70,7 @@ public enum Treemap {
   }
 
   private static func append(
-    _ row: [(id: UUID, area: Double)], to tiles: inout [TreemapTile],
+    _ row: [(id: ScanItemID, area: Double)], to tiles: inout [TreemapTile],
     in remaining: inout Rect, final: Bool
   ) {
     guard !row.isEmpty else { return }

@@ -14,12 +14,16 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   public let relatedProof: RelatedProof?
   public let installedRelatedProof: InstalledRelatedProof?
   public let duplicateProof: DuplicateProof?
+  /// Absent in records written before tree policies existed; absent means strict.
+  public let policy: TreePolicy?
+  /// Bundle identifier of a whole application moved to the Trash; it must not be running.
+  public let applicationBundleID: String?
 
   public init(
     id: UUID, sourcePath: String, volumeID: UUID? = nil,
     inventory: [ScanEntry], ancestors: [PathIdentity], catalogProof: CatalogProof? = nil,
     relatedProof: RelatedProof? = nil, installedRelatedProof: InstalledRelatedProof? = nil,
-    duplicateProof: DuplicateProof? = nil
+    duplicateProof: DuplicateProof? = nil, policy: TreePolicy? = nil, applicationBundleID: String? = nil
   ) {
     self.id = id
     self.sourcePath = sourcePath
@@ -30,6 +34,8 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     self.relatedProof = relatedProof
     self.installedRelatedProof = installedRelatedProof
     self.duplicateProof = duplicateProof
+    self.policy = policy
+    self.applicationBundleID = applicationBundleID
   }
 }
 
@@ -134,6 +140,64 @@ public struct PlanService: Sendable {
           inventory: inventory, ancestors: ancestors))
     }
     return ActionPlan(snapshotRunID: snapshot.runID, kind: kind, items: items)
+  }
+
+  /// A Space selection observed by a scan tree. The tree is only a pointer:
+  /// every fact in the plan comes from a fresh exact inventory.
+  public struct Selection: Sendable, Equatable {
+    public let path: String
+    public let device: UInt64
+    public let inode: UInt64
+
+    public init(path: String, device: UInt64, inode: UInt64) {
+      self.path = path
+      self.device = device
+      self.inode = inode
+    }
+  }
+
+  /// Builds a Trash plan for Space selections. All refusals are collected so
+  /// the person sees every reason and path at once.
+  public func makeSpacePlan(
+    selections: [Selection], scanRootPath: String, runID: UUID,
+    isCancelled: @Sendable () -> Bool = { false }
+  ) throws(PlanRejections) -> ActionPlan {
+    guard !selections.isEmpty else { throw PlanRejections(rejections: []) }
+    let sorted = selections.sorted { $0.path < $1.path }
+    var roots: [Selection] = []
+    for selection in sorted
+    where !roots.contains(where: { $0.path == selection.path || selection.path.hasPrefix($0.path + "/") }) {
+      roots.append(selection)
+    }
+    let inventory = ExactInventory(homeDirectory: homeDirectory)
+    var items: [PlanItem] = []
+    var rejections: [PlanRejection] = []
+    for root in roots {
+      if root.path == scanRootPath {
+        rejections.append(PlanRejection(.scanRoot, path: root.path))
+        continue
+      }
+      do throws(PlanRejection) {
+        let result = try inventory.collect(
+          rootPath: root.path, expected: (root.device, root.inode), isCancelled: isCancelled)
+        var bundleID: String?
+        if result.policy == .wholeBundle, root.path.lowercased().hasSuffix(".app") {
+          bundleID = ApplicationIdentity.bundleIdentifier(ofApplicationAt: root.path)
+          guard let bundleID else { throw PlanRejection(.missingMetadata, path: root.path) }
+          if bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame {
+            throw PlanRejection(.lightenItself, path: root.path)
+          }
+        }
+        items.append(
+          PlanItem(
+            id: result.entries[0].id, sourcePath: root.path, volumeID: result.volumeID, inventory: result.entries,
+            ancestors: result.ancestors, policy: result.policy, applicationBundleID: bundleID))
+      } catch {
+        rejections.append(error)
+      }
+    }
+    guard rejections.isEmpty else { throw PlanRejections(rejections: rejections) }
+    return ActionPlan(snapshotRunID: runID, kind: .trash, items: items)
   }
 
   private func isDescendant(

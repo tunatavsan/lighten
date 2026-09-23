@@ -116,6 +116,9 @@ public actor ActionExecutor {
       })
     else { throw ExecutionFailure.invalidPlan }
     try validateDuplicatePlan(plan)
+    guard plan.kind == .trash || plan.items.allSatisfy({ $0.policy == nil }) else {
+      throw ExecutionFailure.invalidPlan
+    }
     if plan.kind == .catalogDelete {
       guard confirmation == IrreversibleConfirmation(planID: plan.id, method: .catalogDelete),
         let catalog
@@ -163,6 +166,7 @@ public actor ActionExecutor {
         if let proof = item.duplicateProof {
           try validateDuplicate(item, proof: proof)
         }
+        try await validateApplication(item)
         try guardService.validate(item)
         try await beforeMutation?(item)
         // The hook models the final window. Never move on its prior validation.
@@ -184,6 +188,7 @@ public actor ActionExecutor {
         if let proof = item.duplicateProof {
           try validateDuplicate(item, proof: proof)
         }
+        try await validateApplication(item)
         try guardService.validate(item)
       } catch {
         let detail = String(describing: error)
@@ -273,6 +278,18 @@ public actor ActionExecutor {
           detail: "stopped after an uncertain result"))
     }
     return ActionResult(planID: plan.id, items: results)
+  }
+
+  /// A whole application leaves only while it is not running and still carries
+  /// the identity recorded in the plan. Lighten never removes itself.
+  private func validateApplication(_ item: PlanItem) async throws {
+    let isApplication = item.sourcePath.lowercased(with: Locale(identifier: "en_US_POSIX")).hasSuffix(".app")
+    guard item.policy == .wholeBundle, isApplication || item.applicationBundleID != nil else { return }
+    guard let expected = item.applicationBundleID,
+      ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath) == expected,
+      expected.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame,
+      await runningApplications.isRunning(bundleID: expected) == false
+    else { throw RelatedFailure.runningOrUnknown }
   }
 
   private func validateDuplicatePlan(_ plan: ActionPlan) throws {

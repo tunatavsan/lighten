@@ -13,11 +13,21 @@ public struct ActionGuard: Sendable {
   }
 
   public func validate(_ item: PlanItem) throws {
+    let policy = item.policy
+    // A tree policy only ever applies to a plain Trash item without other proofs.
+    if policy != nil {
+      guard item.catalogProof == nil, item.relatedProof == nil, item.installedRelatedProof == nil,
+        item.duplicateProof == nil,
+        !ExactInventory(homeDirectory: homeDirectory).isBulkRoot(item.sourcePath)
+      else { throw GuardFailure.unsupportedItem }
+    }
+    let rootIsPackage = ScanService.isPackage(item.sourcePath)
     guard let root = item.inventory.first, root.id == item.id,
       root.path == item.sourcePath,
       root.identity?.kind == .regular || root.identity?.kind == .directory,
       !PlanService.isBulkRoot(item.sourcePath, homeDirectory: homeDirectory),
-      !ScanService.isPackage(item.sourcePath),
+      !rootIsPackage || (policy == .wholeBundle && root.identity?.kind == .directory),
+      policy != .wholeBundle || rootIsPackage,
       !ScanService.isInsidePackage(item.sourcePath),
       let volumeID = item.volumeID,
       (try? DescriptorFileSystem.volumeID(at: item.sourcePath)) == volumeID
@@ -65,12 +75,21 @@ public struct ActionGuard: Sendable {
       else {
         throw GuardFailure.unsupportedItem
       }
-      if ProtectionPolicy.rule(for: entry.path, homeDirectory: homeDirectory) != nil {
-        throw GuardFailure.protectedItem
+      if let rule = ProtectionPolicy.rule(for: entry.path, homeDirectory: homeDirectory) {
+        // Whole-bundle exception: only beneath a package that is itself the operation root.
+        let exempt =
+          policy == .wholeBundle && entry.id != item.id && entry.path.hasPrefix(item.sourcePath + "/")
+          && ExactInventory.applicationRules.contains(rule.id)
+          && Self.onlyApplicationRules(entry.path, homeDirectory: homeDirectory)
+        if !exempt { throw GuardFailure.protectedItem }
       }
-      if ScanService.isPackage(entry.path) || ScanService.isInsidePackage(entry.path)
+      // Tree policies move symlinks as leaves (never followed) and packages as contents.
+      let packageBoundary =
+        policy == nil && (ScanService.isPackage(entry.path) || ScanService.isInsidePackage(entry.path))
+      if packageBoundary
         || expected.device != root.identity?.device
-        || expected.kind == .symbolicLink || expected.kind == .other
+        || (expected.kind == .symbolicLink && (policy == nil || entry.id == item.id))
+        || expected.kind == .other
         || expected.flags & UInt32(SF_DATALESS | UF_DATAVAULT) != 0
       {
         throw GuardFailure.unsupportedItem
@@ -86,6 +105,20 @@ public struct ActionGuard: Sendable {
         let planned = (childrenByParent[entry.id] ?? []).map(\.1).sorted()
         guard names == planned else { throw GuardFailure.changedInventory }
       }
+    }
+  }
+}
+
+extension ActionGuard {
+  /// True when every NeverRule matching `path` is one of the application-bundle rules.
+  static func onlyApplicationRules(_ path: String, homeDirectory: String) -> Bool {
+    let locale = Locale(identifier: "en_US_POSIX")
+    let folded = path.lowercased(with: locale)
+    let home = homeDirectory.lowercased(with: locale)
+    return NeverRule.all.allSatisfy { rule in
+      ExactInventory.applicationRules.contains(rule.id)
+        || (!PathPattern(rule.pattern, homeDirectory: homeDirectory).matches(path)
+          && !PathPattern(rule.pattern.lowercased(with: locale), homeDirectory: home).matches(folded))
     }
   }
 }

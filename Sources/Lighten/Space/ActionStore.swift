@@ -11,6 +11,14 @@ struct ActionItemSummary: Sendable {
   let allocatedBytes: Int64?
 }
 
+struct BasketEntry: Sendable, Equatable {
+  let path: String
+  let label: String
+  let device: UInt64
+  let inode: UInt64
+  let logicalBytes: Int64
+}
+
 struct ActionPresentation: Identifiable, Sendable {
   let plan: ActionPlan
   let items: [ActionItemSummary]
@@ -37,13 +45,12 @@ final class ActionStore {
     self.journal = journal
     self.executor = ActionExecutor(
       journal: journal, trash: trash,
-      activity: MacOSProcessActivitySource(),
+      activity: MacOSProcessActivitySource(), related: .system,
       runningApplications: MacOSRunningApplicationSource())
     self.historyService = ActionHistory(journal: journal)
   }
 
-  var basket: [UUID: ActionItemSummary] = [:]
-  var basketRunID: UUID?
+  var basket: [String: BasketEntry] = [:]
   var pending: ActionPresentation?
   var result: ActionResult?
   var resultKind: ActionKind?
@@ -52,25 +59,18 @@ final class ActionStore {
   var busy = false
   var message: String?
 
-  func add(_ item: SpaceItem, snapshot: ScanSnapshot) {
-    guard item.canSelect, item.path != snapshot.rootPath else { return }
-    if basketRunID != snapshot.runID { basket = [:] }
-    basketRunID = snapshot.runID
-    basket[item.id] = ActionItemSummary(
-      id: item.id, label: item.name, path: item.path,
-      reason: String(localized: "Selected in Space"),
-      logicalBytes: item.logical.completeTotal,
-      allocatedBytes: item.allocated.completeTotal)
+  func add(_ item: SpaceItem) {
+    guard item.canSelect else { return }
+    basket[item.path] = BasketEntry(
+      path: item.path, label: item.name, device: item.device, inode: item.inode,
+      logicalBytes: item.logical.completeTotal ?? item.logical.knownLowerBound)
   }
 
-  func remove(_ id: UUID) { basket.removeValue(forKey: id) }
-  func clearBasket() {
-    basket = [:]
-    basketRunID = nil
-  }
+  func remove(_ path: String) { basket.removeValue(forKey: path) }
+  func clearBasket() { basket = [:] }
 
   var basketLogicalBytes: Int64 {
-    basket.values.reduce(0) { $0 + ($1.logicalBytes ?? 0) }
+    basket.values.reduce(0) { $0 + $1.logicalBytes }
   }
 
   var pendingTrashLogicalBytes: Int64 {
@@ -81,33 +81,55 @@ final class ActionStore {
 
   var pendingTrashCount: Int { history?.items.filter { $0.state == .inTrash }.count ?? 0 }
 
-  func prepare(snapshot: ScanSnapshot?) async {
-    guard let snapshot, basketRunID == snapshot.runID else {
-      message = String(localized: "Selection is from an earlier scan")
-      return
-    }
+  /// Builds the plan from a fresh exact inventory of each basket item. The scan
+  /// tree only told us where to look.
+  func prepare(scanRoot: String, runID: UUID?) async {
+    guard !basket.isEmpty else { return }
     busy = true
     defer { busy = false }
-    do {
-      let plan = try await PlanService().makePlanAsync(
-        snapshot: snapshot, selectedIDs: Set(basket.keys))
-      let reason = String(localized: "Selected in Space")
-      let summary = await Task.detached {
-        let nodes = Dictionary(uniqueKeysWithValues: snapshot.nodes.map { ($0.id, $0) })
-        return plan.items.map { item in
-          let node = nodes[item.id]
+    let selections = basket.values.map {
+      PlanService.Selection(path: $0.path, device: $0.device, inode: $0.inode)
+    }
+    let reason = String(localized: "Selected in Space")
+    let outcome = await Task.detached { () -> Result<(ActionPlan, [ActionItemSummary]), PlanRejections> in
+      do throws(PlanRejections) {
+        let plan = try PlanService().makeSpacePlan(
+          selections: selections, scanRootPath: scanRoot, runID: runID ?? UUID())
+        let summary = plan.items.map { item in
+          var logical: Int64 = 0
+          var allocated: Int64 = 0
+          for entry in item.inventory where entry.identity?.kind != .directory {
+            logical &+= entry.identity?.logicalBytes ?? 0
+            allocated &+= entry.identity?.allocatedBytes ?? 0
+          }
           return ActionItemSummary(
             id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
-            path: item.sourcePath, reason: reason,
-            logicalBytes: node?.logical.completeTotal,
-            allocatedBytes: node?.allocated.completeTotal)
+            path: item.sourcePath, reason: reason, logicalBytes: logical, allocatedBytes: allocated)
         }
-      }.value
+        return .success((plan, summary))
+      } catch {
+        return .failure(error)
+      }
+    }.value
+    switch outcome {
+    case .success(let (plan, summary)):
+      var running: [PlanRejection] = []
+      for item in plan.items {
+        guard let bundleID = item.applicationBundleID else { continue }
+        if await MacOSRunningApplicationSource().isRunning(bundleID: bundleID) != false {
+          running.append(PlanRejection(.applicationRunning, path: item.sourcePath))
+        }
+      }
+      guard running.isEmpty else {
+        pending = nil
+        message = running.map(SpaceText.rejection).joined(separator: "\n")
+        return
+      }
       present(plan: plan, items: summary)
       message = nil
-    } catch {
+    case .failure(let refused):
       pending = nil
-      message = String(describing: error)
+      message = refused.rejections.map(SpaceText.rejection).joined(separator: "\n")
     }
   }
 
@@ -143,7 +165,6 @@ final class ActionStore {
       result = try await executor.execute(plan, confirmation: confirmation)
       resultKind = plan.kind
       basket = [:]
-      basketRunID = nil
       message = nil
     } catch {
       message = String(describing: error)

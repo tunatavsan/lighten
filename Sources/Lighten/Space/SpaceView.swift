@@ -7,12 +7,12 @@ struct SpaceView: View {
     case map, list
   }
 
-  static let otherID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+  static let otherID = ScanItemID(node: -1, slot: -3)
   @Bindable var store: SpaceStore
   @Bindable var actions: ActionStore
   let showHistory: () -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var hoveredTileID: UUID?
+  @State private var hoveredTileID: ScanItemID?
   @State private var mapDirection: CGFloat = 1
   @State private var compactSurface: CompactSurface = .map
   @State private var showingCompactInspector = false
@@ -25,7 +25,7 @@ struct SpaceView: View {
     reduceMotion ? .opacity : .opacity.combined(with: .offset(y: mapDirection * 10))
   }
 
-  private func enter(_ id: UUID) {
+  private func enter(_ id: ScanItemID) {
     mapDirection = 1
     withAnimation(navigationAnimation) { store.navigate(to: id) }
   }
@@ -44,7 +44,7 @@ struct SpaceView: View {
     VStack(spacing: 0) {
       header
       Divider()
-      if store.index != nil {
+      if store.tree != nil {
         breadcrumb
         Divider()
         GeometryReader { geometry in
@@ -59,7 +59,7 @@ struct SpaceView: View {
         }
       } else {
         ContentUnavailableView(
-          store.phase == .scanning ? String(localized: "Scanning") : String(localized: "Choose a folder and scan"),
+          String(localized: "Choose a folder and scan"),
           systemImage: "square.grid.2x2"
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -182,12 +182,21 @@ struct SpaceView: View {
             .animation(navigationAnimation, value: store.metric)
         }
       }
-      if store.phase == .scanning {
+      if let cachedAt = store.cachedAt {
+        HStack(spacing: 8) {
+          if store.phase == .scanning { ProgressView().controlSize(.small) }
+          Text(
+            "\(String(localized: "Last scan")): \(cachedAt.formatted(date: .abbreviated, time: .shortened))"
+              + (store.phase == .scanning ? " — \(String(localized: "refreshing"))" : ""))
+        }
+        .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+      } else if store.phase == .scanning {
         HStack(spacing: 8) {
           ProgressView().controlSize(.small)
-          Text("\(store.progressCount) \(String(localized: "items scanned"))")
+          Text("\((store.progress?.itemsSeen ?? 0).formatted()) \(String(localized: "items scanned"))")
             .monospacedDigit()
-          Text(store.progressPath).lineLimit(1).truncationMode(.middle)
+          Text(String(localized: "Sizes grow as folders are measured"))
+            .lineLimit(1)
         }
         .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
       } else if case .error(let detail) = store.phase {
@@ -226,8 +235,8 @@ struct SpaceView: View {
       .accessibilityLabel(String(localized: "Back"))
       ScrollView(.horizontal) {
         HStack(spacing: 5) {
-          if let index = store.index, let currentID = store.currentID {
-            ForEach(index.breadcrumb(to: currentID)) { item in
+          if store.currentID != nil {
+            ForEach(store.crumbs) { item in
               Button(item.name) { enter(item.id) }
                 .buttonStyle(.plain)
               Image(systemName: "chevron.right")
@@ -247,10 +256,7 @@ struct SpaceView: View {
       .frame(width: 220)
     }
     .padding(.horizontal, 20).padding(.vertical, 9)
-    .onChange(of: store.metric) { _, _ in
-      store.layout = nil
-      if let id = store.currentID { store.navigate(to: id) }
-    }
+
   }
 
   private var mapColumn: some View {
@@ -266,7 +272,7 @@ struct SpaceView: View {
         .animation(navigationAnimation, value: store.layout?.tiles.map(\.id))
         .task(
           id:
-            "\(store.index?.runID.uuidString ?? ""):\(store.currentID?.uuidString ?? ""):\(store.metric.rawValue):\(store.showingOther):\(Int(geometry.size.width)):\(Int(geometry.size.height))"
+            "\(store.tree?.runID.uuidString ?? ""):\(store.currentID?.description ?? ""):\(Int(geometry.size.width)):\(Int(geometry.size.height))"
         ) {
           store.updateLayout(width: geometry.size.width, height: geometry.size.height)
         }
@@ -276,7 +282,7 @@ struct SpaceView: View {
         legendSwatch(LightenStyle.folderTile, String(localized: "Folders"))
         legendSwatch(LightenStyle.fileTile, String(localized: "Files"))
         Spacer()
-        if store.phase == .partial {
+        if store.phase == .partial || store.phase == .scanning || store.phase == .cancelled {
           Text(String(localized: "Incomplete areas show a known minimum"))
             .foregroundStyle(LightenStyle.muted)
         }
@@ -296,8 +302,8 @@ struct SpaceView: View {
 
   private func tileButton(_ tile: TreemapTile) -> some View {
     let isOther = tile.id == Self.otherID
-    let item = store.index?.items[tile.id]
-    let name = isOther ? String(localized: "Other") : (item?.name ?? "")
+    let item = store.visibleByID[tile.id]
+    let name = isOther ? String(localized: "Other") : (item.map(SpaceText.name) ?? "")
     let size = isOther ? store.group?.otherBytes : item?.bytes(store.metric)
     return Button {
       if isOther {
@@ -355,8 +361,8 @@ struct SpaceView: View {
 
   private func color(for item: SpaceItem?) -> Color {
     guard let item else { return LightenStyle.surface }
-    if item.partial || item.protected { return LightenStyle.surface }
-    return item.kind == .directory ? LightenStyle.folderTile : LightenStyle.fileTile
+    if item.isProtected || item.kind == .systemVolume { return LightenStyle.surface }
+    return item.kind == .directory || item.kind == .package ? LightenStyle.folderTile : LightenStyle.fileTile
   }
 
   private var sidePane: some View {
@@ -413,10 +419,10 @@ struct SpaceView: View {
       List(selection: $store.selectedID) {
         ForEach(visibleItems) { item in
           HStack(spacing: 8) {
-            Image(systemName: item.kind == .directory ? "folder" : "doc")
+            Image(systemName: SpaceText.symbol(item))
               .foregroundStyle(LightenStyle.muted)
               .frame(width: 17)
-            Text(item.name).lineLimit(1)
+            Text(SpaceText.name(item)).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 5)
             Text(sizeLabel(item.bytes(store.metric)))
               .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
@@ -435,7 +441,7 @@ struct SpaceView: View {
           .font(.system(size: 12))
           .tag(item.id)
           .accessibilityLabel(
-            "\(item.name), \(sizeLabel(item.bytes(store.metric))), \(item.partial ? String(localized: "Partial or unknown") : String(localized: "Ready"))"
+            "\(SpaceText.name(item)), \(sizeLabel(item.bytes(store.metric))), \(SpaceText.state(item) ?? String(localized: "Ready"))"
           )
         }
         if !store.showingOther, let other = store.group?.other, !other.isEmpty {
@@ -460,7 +466,7 @@ struct SpaceView: View {
         ScrollView {
           VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline) {
-              Text(item.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+              Text(SpaceText.name(item)).font(.system(size: 15, weight: .semibold)).lineLimit(1)
               Spacer()
               if item.canInspect {
                 Button(String(localized: "Open folder")) { enter(item.id) }
@@ -475,24 +481,28 @@ struct SpaceView: View {
               inspectorMetric(String(localized: "Logical"), item.logical)
               inspectorMetric(String(localized: "Allocated"), item.allocated)
             }
-            if item.partial { Text(String(localized: "Partial or unknown")).foregroundStyle(LightenStyle.warning) }
-            if item.protected { Text(String(localized: "Protected")).foregroundStyle(LightenStyle.warning) }
-            if !item.issues.isEmpty {
-              Text(item.issues.map(\.rawValue).joined(separator: ", "))
-                .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+            if let state = SpaceText.state(item) {
+              Text(state).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            if let reason = SpaceText.unselectable(item), reason != SpaceText.state(item) {
+              Text(reason).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+                .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
               Button(String(localized: "Show in Finder")) {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
               }
               Spacer()
-              if item.canSelect, let snapshot = store.snapshot, item.path != snapshot.rootPath {
-                Button(String(localized: "Add to basket")) {
-                  withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) {
-                    actions.add(item, snapshot: snapshot)
-                  }
+              if item.canSelect {
+                Button(
+                  actions.basket[item.path] == nil
+                    ? String(localized: "Add to basket") : String(localized: "In basket")
+                ) {
+                  withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) { actions.add(item) }
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(actions.basket[item.path] != nil)
               }
             }
           }
@@ -530,7 +540,7 @@ struct SpaceView: View {
           Button(String(localized: "Clear basket")) { actions.clearBasket() }
             .disabled(actions.busy)
           Button(String(localized: "Review removal")) {
-            Task { await actions.prepare(snapshot: store.snapshot) }
+            Task { await actions.prepare(scanRoot: store.selectedRoot.path, runID: store.tree?.runID) }
           }
           .buttonStyle(.borderedProminent).disabled(actions.busy)
         }
@@ -539,11 +549,11 @@ struct SpaceView: View {
       if !actions.basket.isEmpty {
         ScrollView(.horizontal) {
           HStack(spacing: 5) {
-            ForEach(actions.basket.values.sorted { $0.path < $1.path }, id: \.id) { item in
+            ForEach(actions.basket.values.sorted { $0.path < $1.path }, id: \.path) { item in
               HStack(spacing: 5) {
                 Text(item.label).lineLimit(1)
                 Button {
-                  actions.remove(item.id)
+                  actions.remove(item.path)
                 } label: {
                   Image(systemName: "xmark.circle.fill")
                 }
