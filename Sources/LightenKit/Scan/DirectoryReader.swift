@@ -52,7 +52,9 @@ public final class DirectoryReader {
   private let capacity: Int
   private let counters: ScanCounters
 
-  public init(counters: ScanCounters, bufferSize: Int = 256 * 1024) {
+  /// 64 KB keeps one bulk call short even in very large folders, so cancellation
+  /// and progress stay responsive.
+  public init(counters: ScanCounters, bufferSize: Int = 64 * 1024) {
     self.counters = counters
     self.bufferSize = bufferSize
     self.buffer = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 16)

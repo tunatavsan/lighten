@@ -109,6 +109,39 @@ enum Bench {
     ]
   }
 
+  // MARK: Apps screen path
+
+  /// Runs the Apps screen's discovery end to end, then times one package alone.
+  static func apps(focus: String) async -> [String: Any] {
+    let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+    var inventoryAt: UInt64?
+    var reports: [ApplicationReport] = []
+    var complete = false
+    for await event in ApplicationDiscovery().events() {
+      switch event {
+      case .inventory: inventoryAt = inventoryAt ?? clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+      case .measured: break
+      case .completed(let inventory, let final):
+        reports = final
+        complete = inventory.complete
+      }
+    }
+    let finished = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+    let unknown = reports.filter { $0.logical.completeTotal == nil }
+    let focusStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+    let size = await ApplicationDiscovery.measure(path: focus, homeDirectory: NSHomeDirectory())
+    let focusEnd = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+    return [
+      "engine": "apps", "apps": reports.count, "inventoryComplete": complete,
+      "listVisibleSeconds": inventoryAt.map { seconds(from: start, to: $0) } ?? -1,
+      "allMeasuredSeconds": seconds(from: start, to: finished),
+      "unknownCount": unknown.count, "unknownPaths": unknown.map(\.path),
+      "focus": focus, "focusLogical": size.logical.completeTotal ?? -1,
+      "focusAllocated": size.allocated.completeTotal ?? -1, "focusItems": size.count,
+      "focusSeconds": seconds(from: focusStart, to: focusEnd),
+    ]
+  }
+
   // MARK: Cancellation latency
 
   static func cancellation(engine: String, root: String, trials: Int, workers: Int) async -> [String: Any] {

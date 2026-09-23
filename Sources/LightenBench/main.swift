@@ -7,6 +7,7 @@ import LightenKit
 //
 //   lighten-bench generate --out DIR --files N [--seed S]
 //   lighten-bench scan --engine old|new --root PATH [--timeout SECONDS] [--workers N]
+//   lighten-bench apps [--app PATH]
 //   lighten-bench cancel --engine old|new --root PATH [--trials N] [--workers N]
 
 struct Options {
@@ -61,6 +62,8 @@ case "scan":
     engine: engine, root: root, timeout: options.double("timeout", 600),
     workers: options.int("workers", 0))
   emit(result)
+case "apps":
+  emit(await Bench.apps(focus: options.string("app") ?? "/Applications/Xcode.app"))
 case "cancel":
   guard let root = options.string("root"), let engine = options.string("engine") else { usage() }
   let result = await Bench.cancellation(

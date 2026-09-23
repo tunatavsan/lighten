@@ -183,7 +183,7 @@ public struct ApplicationDiscovery: Sendable {
 
   /// Complete package size from the parallel engine. Protected interiors are
   /// summed from metadata; unreadable parts leave a lower bound.
-  static func measure(path: String, homeDirectory: String) async -> (
+  public static func measure(path: String, homeDirectory: String) async -> (
     logical: ByteAggregate, allocated: ByteAggregate, count: Int, partial: Bool
   ) {
     let configuration = ScanConfiguration(workers: 4, homeDirectory: homeDirectory)
