@@ -245,6 +245,7 @@ struct CleanView: View {
     case .historicallyVerified: String(localized: "Previously verified owner absent here; it may exist elsewhere")
     case .nameOnly: String(localized: "Exact name alone does not prove former ownership")
     case .sharedGroup: String(localized: "Shared Group Containers are protected and report only")
+    case .installedElsewhere: String(localized: "An app with this identifier is installed elsewhere")
     }
   }
 

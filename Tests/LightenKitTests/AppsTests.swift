@@ -63,43 +63,24 @@ private struct AppsRunning: RunningApplicationSource {
   func isRunning(bundleID: String) async -> Bool? { value }
 }
 
-private final class AppsStepClock: @unchecked Sendable {
-  private let lock = NSLock()
-  private var value: TimeInterval = 0
-  private let step: TimeInterval
-
-  init(step: TimeInterval) { self.step = step }
-
-  func now() -> TimeInterval {
-    lock.lock()
-    defer { lock.unlock() }
-    let result = value
-    value += step
-    return result
-  }
-}
-
-@Test("Per-app size budget keeps measured bytes as a partial lower bound")
-func appSizeBudgetProducesPartialLowerBound() async throws {
+@Test("Package sizes are exact, including protected interiors summed from metadata")
+func appSizeIsExactWithoutBudget() async throws {
   let fixture = try AppsFixture()
   defer { fixture.remove() }
-  let clock = AppsStepClock(step: 0.7)
-  let (_, reports) = await ApplicationDiscovery(
-    related: fixture.service, uptime: { clock.now() }
-  ).discover()
+  let (_, reports) = await ApplicationDiscovery(related: fixture.service).discover()
   let report = try #require(reports.first { $0.path == fixture.app })
-  #expect(report.sizeLimitReached)
-  #expect(report.partial)
-  #expect(report.logical.completeTotal == nil)
-  #expect(report.logical.knownLowerBound >= 0)
+  let info = try Data(contentsOf: URL(fileURLWithPath: fixture.app + "/Contents/Info.plist")).count
+  #expect(!report.partial)
+  #expect(report.logical.completeTotal == Int64("executable".utf8.count + "localized".utf8.count + info))
+  // Contents, MacOS, Resources, en.lproj, three files.
+  #expect(report.knownItemCount == 7)
 }
 
-@Test("Global size budget leaves metadata visible and still emits final review event")
-func globalAppSizeBudgetKeepsInventory() async throws {
+@Test("Inventory metadata is published before sizes and the final event carries the review")
+func inventoryPrecedesMeasurement() async throws {
   let fixture = try AppsFixture()
   defer { fixture.remove() }
-  let clock = AppsStepClock(step: 21)
-  let discovery = ApplicationDiscovery(related: fixture.service, uptime: { clock.now() })
+  let discovery = ApplicationDiscovery(related: fixture.service)
   var sawInventory = false
   var finished: [ApplicationReport]?
   for await event in discovery.events() {
@@ -108,7 +89,7 @@ func globalAppSizeBudgetKeepsInventory() async throws {
       sawInventory = inventory.complete && metadata.contains { $0.path == fixture.app }
       #expect(metadata.first?.logical.completeTotal == nil)
     case .measured:
-      break
+      #expect(sawInventory)
     case .completed(let inventory, let reports):
       #expect(inventory.complete)
       finished = reports
@@ -118,9 +99,7 @@ func globalAppSizeBudgetKeepsInventory() async throws {
   let report = try #require(finished?.first { $0.path == fixture.app })
   #expect(report.bundleID == fixture.bundleID)
   #expect(report.version == "2.4.1")
-  #expect(report.sizeLimitReached)
-  #expect(report.logical.completeTotal == nil)
-  #expect(report.logical.knownLowerBound == 0)
+  #expect(report.logical.completeTotal != nil)
 }
 
 private actor MutatingRunning: RunningApplicationSource {
@@ -145,7 +124,7 @@ private struct AppsTrash: TrashMoving {
   }
 }
 
-@Test("App inventory and package size expose metadata and protected lower bound")
+@Test("App inventory exposes metadata and a complete package size")
 func appInventoryMetadataAndPartialSize() async throws {
   let fixture = try AppsFixture()
   defer { fixture.remove() }
@@ -155,8 +134,9 @@ func appInventoryMetadataAndPartialSize() async throws {
   #expect(app.bundleID == fixture.bundleID)
   #expect(app.version == "2.4.1")
   #expect(app.signerTeamID == nil)
-  #expect(app.partial)
-  #expect(app.logical.completeTotal == nil)
+  // Protected application interiors are summed from metadata, so the size is exact.
+  #expect(!app.partial)
+  #expect(app.logical.completeTotal == app.logical.knownLowerBound)
   #expect(app.logical.knownLowerBound > 0)
   #expect(app.related.first { $0.path == fixture.cache }?.classification == .installed)
   let snapshot = try await ScanService(homeDirectory: fixture.home).scan(rootPath: fixture.appRoot)
@@ -290,4 +270,38 @@ func appOtherDataStaysReportOnly() async throws {
       try fixture.service.planInstalled(app: fixture.installedApp(), candidate: candidate)
     }
   }
+}
+
+@Test("Linked apps resolve read-only; an unresolvable link keeps the inventory incomplete")
+func linkedApplicationsResolveReadOnly() throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let elsewhere = fixture.home + "/Shared/Real.app"
+  try FileManager.default.createDirectory(atPath: elsewhere + "/Contents", withIntermediateDirectories: true)
+  let data = try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": "com.example.linked"], format: .xml, options: 0)
+  try data.write(to: URL(fileURLWithPath: elsewhere + "/Contents/Info.plist"))
+  #expect(symlink(elsewhere, fixture.appRoot + "/Linked.app") == 0)
+  let inventory = fixture.service.inventory()
+  #expect(inventory.complete)
+  let linked = try #require(inventory.applications.first { $0.bundleID == "com.example.linked" })
+  #expect(linked.path == fixture.appRoot + "/Linked.app")
+  #expect(linked.linkTarget == elsewhere)
+
+  #expect(symlink(fixture.home + "/missing.app", fixture.appRoot + "/Broken.app") == 0)
+  #expect(!fixture.service.inventory().complete)
+}
+
+@Test("An app known elsewhere keeps its data from being called a leftover")
+func installedElsewhereIsNotALeftover() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let orphan = fixture.home + "/Library/Caches/com.example.elsewhere"
+  try FileManager.default.createDirectory(atPath: orphan, withIntermediateDirectories: true)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot],
+    installedElsewhere: { $0 == "com.example.elsewhere" })
+  let candidate = try #require((await service.discover()).first { $0.path == orphan })
+  #expect(candidate.classification == .uncertain)
+  #expect(candidate.reason == .installedElsewhere)
 }

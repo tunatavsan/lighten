@@ -110,7 +110,7 @@ final class CleanStore {
         }
       }
     }
-    let related = await RelatedDataService().discover()
+    let related = await RelatedDataService.system.discover()
     if Task.isCancelled || scanGeneration != generation { return }
     relatedCandidates = related
     scannedAt = Date()
@@ -122,7 +122,7 @@ final class CleanStore {
     defer { busy = false }
     do {
       let plan = try await Task.detached(priority: .utility) {
-        try RelatedDataService().plan(candidate: candidate)
+        try RelatedDataService.system.plan(candidate: candidate)
       }.value
       actions.present(
         plan: plan,

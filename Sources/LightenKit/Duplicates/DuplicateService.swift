@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 public struct DuplicateService: Sendable {
   private let scan: ScanService
@@ -117,6 +118,25 @@ public struct DuplicateService: Sendable {
     return ActionPlan(snapshotRunID: generic.snapshotRunID, kind: .trash, items: items)
   }
 
+  /// Reads several files at once; results keep input order and a failed read is nil.
+  static func parallel(
+    _ entries: [ScanEntry], width: Int = 6, _ work: @Sendable (ScanEntry) throws -> Data
+  ) throws -> [Data?] {
+    try Task.checkCancellation()
+    let results = Mutex([Data?](repeating: nil, count: entries.count))
+    let next = Atomic<Int>(0)
+    DispatchQueue.concurrentPerform(iterations: min(width, entries.count)) { _ in
+      while true {
+        let index = next.add(1, ordering: .relaxed).oldValue
+        guard index < entries.count else { return }
+        let value = try? work(entries[index])
+        results.withLock { $0[index] = value }
+      }
+    }
+    try Task.checkCancellation()
+    return results.withLock { $0 }
+  }
+
   private func group(
     snapshot: ScanSnapshot, progress: (Int) -> Void
   ) throws -> DuplicateReport {
@@ -145,23 +165,21 @@ public struct DuplicateService: Sendable {
     for (_, sameSize) in bySize.sorted(by: { $0.key > $1.key }) where sameSize.count > 1 {
       try Task.checkCancellation()
       var bySample: [Data: [ScanEntry]] = [:]
-      for entry in sameSize.sorted(by: { $0.path < $1.path }) {
-        do {
-          bySample[try comparator.sample(entry, volumeID: volumeID), default: []].append(entry)
-        } catch is CancellationError { throw CancellationError() } catch { skipped += 1 }
+      let ordered = sameSize.sorted(by: { $0.path < $1.path })
+      let samples = try Self.parallel(ordered) { try comparator.sample($0, volumeID: volumeID) }
+      for (entry, sample) in zip(ordered, samples) {
+        if let sample { bySample[sample, default: []].append(entry) } else { skipped += 1 }
         compared += 1
-        progress(compared)
       }
+      progress(compared)
       for candidates in bySample.values where candidates.count > 1 {
         var byDigest: [Data: [ScanEntry]] = [:]
-        for entry in candidates {
-          try Task.checkCancellation()
-          do {
-            byDigest[try comparator.digest(entry, volumeID: volumeID), default: []].append(entry)
-          } catch is CancellationError { throw CancellationError() } catch { skipped += 1 }
+        let digests = try Self.parallel(candidates) { try comparator.digest($0, volumeID: volumeID) }
+        for (entry, digest) in zip(candidates, digests) {
+          if let digest { byDigest[digest, default: []].append(entry) } else { skipped += 1 }
           compared += 1
-          progress(compared)
         }
+        progress(compared)
         for matches in byDigest.values where matches.count > 1 {
           var clusters: [[ScanEntry]] = []
           for entry in matches {

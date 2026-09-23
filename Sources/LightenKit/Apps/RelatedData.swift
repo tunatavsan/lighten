@@ -5,6 +5,9 @@ public struct InstalledApplication: Sendable, Equatable {
   public let bundleID: String
   public let path: String
   public let version: String?
+  /// Set when `path` is a symbolic link; the app lives at this resolved location.
+  /// A linked app is identified read-only and never followed for an action.
+  public var linkTarget: String? = nil
 }
 
 public struct BundleInventory: Sendable {
@@ -29,7 +32,7 @@ public enum RelatedClassification: String, Sendable {
 public enum RelatedReason: String, Sendable {
   case candidateAreaUnreadable, recordUnsafe, protected, installed
   case incompleteInventory, recordUnavailable, historicallyVerified, nameOnly
-  case sharedGroup
+  case sharedGroup, installedElsewhere
 }
 
 public struct RelatedDataCandidate: Sendable, Identifiable {
@@ -86,15 +89,26 @@ public struct UnknownRunningApplicationSource: RunningApplicationSource {
 public struct RelatedDataService: Sendable {
   public let homeDirectory: String
   private let applicationRoots: [String]
+  /// Whether the system knows an app with this bundle ID anywhere outside the
+  /// Trash. A known app elsewhere keeps its data from being called a leftover.
+  private let installedElsewhere: @Sendable (String) -> Bool
 
-  public init(homeDirectory: String = NSHomeDirectory()) {
+  public init(
+    homeDirectory: String = NSHomeDirectory(),
+    installedElsewhere: @escaping @Sendable (String) -> Bool = { _ in false }
+  ) {
     self.homeDirectory = homeDirectory
     self.applicationRoots = ["/Applications", homeDirectory + "/Applications"]
+    self.installedElsewhere = installedElsewhere
   }
 
-  init(homeDirectory: String, applicationRoots: [String]) {
+  init(
+    homeDirectory: String, applicationRoots: [String],
+    installedElsewhere: @escaping @Sendable (String) -> Bool = { _ in false }
+  ) {
     self.homeDirectory = homeDirectory
     self.applicationRoots = applicationRoots
+    self.installedElsewhere = installedElsewhere
   }
 
   public func inventory() -> BundleInventory {
@@ -135,7 +149,12 @@ public struct RelatedDataService: Sendable {
           continue
         }
         if child.kind == .symbolicLink {
-          complete = false
+          // Resolve read-only: the link's target identifies an app, never an action path.
+          if let linked = Self.resolveLinkedApplication(at: path) {
+            apps.append(linked)
+          } else {
+            complete = false
+          }
           continue
         }
         guard child.kind == .directory else { continue }
@@ -186,6 +205,24 @@ public struct RelatedDataService: Sendable {
     return BundleInventory(
       applications: apps, unidentifiedPaths: unidentifiedPaths,
       complete: complete, observedAt: Date())
+  }
+
+  /// A link in an application folder counts only when it resolves, without
+  /// further links, to an `.app` whose own Info.plist names a valid bundle ID.
+  static func resolveLinkedApplication(at path: String) -> InstalledApplication? {
+    guard let resolved = realpath(path, nil) else { return nil }
+    defer { free(resolved) }
+    let target = String(cString: resolved)
+    guard target.lowercased(with: Locale(identifier: "en_US_POSIX")).hasSuffix(".app"),
+      let identity = try? DescriptorFileSystem.identity(at: target), identity.kind == .directory,
+      let data = try? SecureMetadataFile.read(
+        path: target + "/Contents/Info.plist", limit: 1024 * 1024, ownerOnly: false),
+      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+      let dictionary = plist as? [String: Any],
+      let bundleID = dictionary["CFBundleIdentifier"] as? String, validBundleID(bundleID)
+    else { return nil }
+    let version = (dictionary["CFBundleShortVersionString"] as? String) ?? (dictionary["CFBundleVersion"] as? String)
+    return InstalledApplication(bundleID: bundleID, path: path, version: version, linkTarget: target)
   }
 
   public func discover() async -> [RelatedDataCandidate] {
@@ -249,6 +286,9 @@ public struct RelatedDataService: Sendable {
         } else if !apps.complete || !receiptStoreHealthy {
           classification = .uncertain
           reason = !apps.complete ? .incompleteInventory : .recordUnavailable
+        } else if installedElsewhere(bundleID) {
+          classification = .uncertain
+          reason = .installedElsewhere
         } else if validReceipt {
           classification = .historicallyVerifiedAbsent
           reason = .historicallyVerified
@@ -483,7 +523,7 @@ public struct RelatedDataService: Sendable {
     return id
   }
 
-  private static func validBundleID(_ id: String) -> Bool {
+  static func validBundleID(_ id: String) -> Bool {
     let parts = id.split(separator: ".", omittingEmptySubsequences: false)
     return parts.count >= 2
       && parts.allSatisfy { part in

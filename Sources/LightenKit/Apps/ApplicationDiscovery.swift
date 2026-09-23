@@ -12,8 +12,8 @@ public struct ApplicationReport: Identifiable, Sendable {
   public let partial: Bool
   public let related: [RelatedDataCandidate]
   public let manualUninstallerSuggested: Bool
-  /// A best-effort size walk stopped at its time budget; metadata remains visible.
-  public var sizeLimitReached = false
+  /// Resolved location when the listed path is a symbolic link to an app.
+  public var linkTarget: String?
 
   public var id: String { path }
 }
@@ -54,56 +54,68 @@ public struct ApplicationDiscovery: Sendable {
 
   private func discover(_ emit: @Sendable (Event) -> Void) async -> (BundleInventory, [ApplicationReport]) {
     let inventory = related.inventory()
-    let known = inventory.applications.map { (path: $0.path, bundleID: Optional($0.bundleID), version: $0.version) }
+    let known = inventory.applications.map {
+      (path: $0.path, bundleID: Optional($0.bundleID), version: $0.version, link: $0.linkTarget)
+    }
     let unknown = inventory.unidentifiedPaths.map {
-      (path: $0, bundleID: Optional<String>.none, version: Optional<String>.none)
+      (path: $0, bundleID: Optional<String>.none, version: Optional<String>.none, link: Optional<String>.none)
     }
     let metadata = (known + unknown).map { app in
-      ApplicationReport(
+      var report = ApplicationReport(
         path: app.path, bundleID: app.bundleID, version: app.version,
         signerTeamID: nil,
         logical: ByteAggregate(knownLowerBound: 0, completeTotal: nil),
         allocated: ByteAggregate(knownLowerBound: 0, completeTotal: nil),
         knownItemCount: 0, partial: true, related: [],
         manualUninstallerSuggested: false)
+      report.linkTarget = app.link
+      return report
     }
     emit(.inventory(inventory, metadata))
     if Task.isCancelled { return (inventory, []) }
     var reports: [ApplicationReport] = []
-    var unpublished: [ApplicationReport] = []
-    var lastPublished = uptime()
-    let sizeStageStarted = uptime()
-    for app in known + unknown {
-      if Task.isCancelled { break }
-      let appStarted = uptime()
-      let globalLimitReached = appStarted - sizeStageStarted >= 20
-      let size =
-        globalLimitReached
-        ? Self.limitedUnknownSize()
-        : Self.measure(path: app.path, homeDirectory: related.homeDirectory) {
-          let current = uptime()
-          return current - appStarted >= 2 || current - sizeStageStarted >= 20
+    // Every package is measured completely by the parallel engine; a few
+    // packages at a time keep the total thread count bounded.
+    let apps = known + unknown
+    let homeDirectory = related.homeDirectory
+    await withTaskGroup(of: ApplicationReport.self) { group in
+      var next = 0
+      func enqueue() {
+        guard next < apps.count, !Task.isCancelled else { return }
+        let app = apps[next]
+        next += 1
+        group.addTask {
+          // A linked app is measured at its resolved location, read-only.
+          let size = await Self.measure(path: app.link ?? app.path, homeDirectory: homeDirectory)
+          var report = ApplicationReport(
+            path: app.path, bundleID: app.bundleID, version: app.version,
+            signerTeamID: nil,
+            logical: size.logical, allocated: size.allocated,
+            knownItemCount: size.count, partial: size.partial,
+            related: [],
+            manualUninstallerSuggested: (try? DescriptorFileSystem.identity(
+              at: app.path + "/Contents/Library/SystemExtensions")) != nil
+              || (try? DescriptorFileSystem.identity(at: app.path + "/Contents/Library/LaunchServices")) != nil)
+          report.linkTarget = app.link
+          return report
         }
-      var report = ApplicationReport(
-        path: app.path, bundleID: app.bundleID, version: app.version,
-        signerTeamID: nil,
-        logical: size.logical, allocated: size.allocated,
-        knownItemCount: size.count, partial: size.partial,
-        related: [],
-        manualUninstallerSuggested: (try? DescriptorFileSystem.identity(
-          at: app.path + "/Contents/Library/SystemExtensions")) != nil
-          || (try? DescriptorFileSystem.identity(at: app.path + "/Contents/Library/LaunchServices")) != nil)
-      report.sizeLimitReached = size.limited
-      reports.append(report)
-      unpublished.append(report)
-      let now = uptime()
-      if unpublished.count >= 8 || now - lastPublished >= 0.1 {
-        emit(.measured(unpublished))
-        unpublished.removeAll(keepingCapacity: true)
-        lastPublished = now
       }
+      for _ in 0..<min(Self.concurrentPackages, apps.count) { enqueue() }
+      var unpublished: [ApplicationReport] = []
+      var lastPublished = uptime()
+      while let report = await group.next() {
+        reports.append(report)
+        unpublished.append(report)
+        let now = uptime()
+        if unpublished.count >= 8 || now - lastPublished >= 0.1 {
+          emit(.measured(unpublished))
+          unpublished.removeAll(keepingCapacity: true)
+          lastPublished = now
+        }
+        enqueue()
+      }
+      if !Task.isCancelled && !unpublished.isEmpty { emit(.measured(unpublished)) }
     }
-    if !Task.isCancelled && !unpublished.isEmpty { emit(.measured(unpublished)) }
     if Task.isCancelled { return (inventory, reports) }
     let relatedCandidates = await related.discover()
     if Task.isCancelled { return (inventory, reports) }
@@ -135,7 +147,7 @@ public struct ApplicationDiscovery: Sendable {
         allocated: app.allocated, knownItemCount: app.knownItemCount,
         partial: app.partial, related: candidates,
         manualUninstallerSuggested: app.manualUninstallerSuggested)
-      enriched.sizeLimitReached = app.sizeLimitReached
+      enriched.linkTarget = app.linkTarget
       return enriched
     }
     reports.sort {
@@ -167,101 +179,31 @@ public struct ApplicationDiscovery: Sendable {
       snapshot: nil, receipt: nil)
   }
 
-  private static func limitedUnknownSize() -> (
-    logical: ByteAggregate, allocated: ByteAggregate, count: Int, partial: Bool, limited: Bool
-  ) {
-    (
-      ByteAggregate(knownLowerBound: 0, completeTotal: nil),
-      ByteAggregate(knownLowerBound: 0, completeTotal: nil), 0, true, true
-    )
-  }
+  static let concurrentPackages = 4
 
-  private static func measure(
-    path: String, homeDirectory: String, overBudget: () -> Bool
-  ) -> (
-    logical: ByteAggregate, allocated: ByteAggregate, count: Int, partial: Bool, limited: Bool
+  /// Complete package size from the parallel engine. Protected interiors are
+  /// summed from metadata; unreadable parts leave a lower bound.
+  static func measure(path: String, homeDirectory: String) async -> (
+    logical: ByteAggregate, allocated: ByteAggregate, count: Int, partial: Bool
   ) {
-    guard let root = try? DescriptorFileSystem.identity(at: path), root.kind == .directory,
-      let volume = try? DescriptorFileSystem.volumeID(at: path)
-    else {
+    let configuration = ScanConfiguration(workers: 4, homeDirectory: homeDirectory)
+    guard let run = try? ScanEngine(configuration: configuration).start(root: path) else {
       return (
         ByteAggregate(knownLowerBound: 0, completeTotal: nil),
-        ByteAggregate(knownLowerBound: 0, completeTotal: nil), 0, true, overBudget()
+        ByteAggregate(knownLowerBound: 0, completeTotal: nil), 0, true
       )
     }
-    var logical: Int64 = 0
-    var allocated: Int64 = 0
-    var count = 0
-    var partial = false
-    var limited = false
-    var stack: [(String, FileIdentity)] = [(path, root)]
-    while let (currentPath, identity) = stack.popLast() {
-      if overBudget() {
-        limited = true
-        partial = true
-        break
-      }
-      if Task.isCancelled || count >= 100_000 {
-        partial = true
-        break
-      }
-      count += 1
-      if currentPath != path && ProtectionPolicy.rule(for: currentPath, homeDirectory: homeDirectory) != nil {
-        partial = true
-        continue
-      }
-      guard identity.device == root.device,
-        (try? DescriptorFileSystem.identity(at: currentPath)) == identity,
-        identity.kind != .symbolicLink && identity.kind != .other,
-        identity.flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0,
-        (try? DescriptorFileSystem.volumeID(at: currentPath)) == volume
-      else {
-        partial = true
-        continue
-      }
-      let (newLogical, logicalOverflow) = logical.addingReportingOverflow(identity.logicalBytes)
-      let (newAllocated, allocatedOverflow) = allocated.addingReportingOverflow(identity.allocatedBytes)
-      if logicalOverflow || allocatedOverflow {
-        partial = true
-        break
-      }
-      logical = newLogical
-      allocated = newAllocated
-      if identity.kind == .directory {
-        guard let names = try? DescriptorFileSystem.children(at: currentPath, expected: identity)
-        else {
-          partial = true
-          continue
-        }
-        for name in names.reversed() {
-          if overBudget() {
-            limited = true
-            partial = true
-            break
-          }
-          if Task.isCancelled || stack.count + count >= 100_000 {
-            partial = true
-            break
-          }
-          let childPath = currentPath + "/" + name
-          guard let child = try? DescriptorFileSystem.identity(at: childPath) else {
-            partial = true
-            continue
-          }
-          stack.append((childPath, child))
-        }
-      }
+    await withTaskCancellationHandler {
+      await run.waitUntilFinished()
+    } onCancel: {
+      run.cancel()
     }
-    if overBudget() {
-      limited = true
-      partial = true
+    guard let root = run.tree.item(run.tree.rootID) else {
+      return (
+        ByteAggregate(knownLowerBound: 0, completeTotal: nil),
+        ByteAggregate(knownLowerBound: 0, completeTotal: nil), 0, true
+      )
     }
-    if (try? DescriptorFileSystem.identity(at: path)) != root { partial = true }
-    return (
-      ByteAggregate(knownLowerBound: logical, completeTotal: partial ? nil : logical),
-      ByteAggregate(knownLowerBound: allocated, completeTotal: partial ? nil : allocated),
-      count, partial, limited
-    )
+    return (root.logical, root.allocated, Int(root.itemCount), root.logical.completeTotal == nil)
   }
-
 }

@@ -1,3 +1,4 @@
+import AppKit
 import LightenKit
 import SwiftUI
 
@@ -75,15 +76,6 @@ struct AppsView: View {
             String(
               localized: "Application inventory is incomplete. Other locations and unreadable apps remain unknown."),
             systemImage: "exclamationmark.circle"
-          )
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-          .padding(.bottom, 10)
-        }
-        let limitedCount = store.reports.filter(\.sizeLimitReached).count
-        if limitedCount > 0 {
-          Label(
-            "\(limitedCount) \(String(localized: "app sizes reached the measurement time limit"))",
-            systemImage: "clock.badge.exclamationmark"
           )
           .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
           .padding(.bottom, 10)
@@ -213,18 +205,18 @@ struct AppsView: View {
         ? String(localized: "Scan again to review data")
         : store.busy
           ? String(localized: "Review is available after the scan")
-          : String(localized: "App data is reviewed separately")
+          : String(localized: "Select the app, its data, or both")
     )
     .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
   }
 
   private var reviewButton: some View {
-    Button(String(localized: "Review selected data")) {
+    Button(String(localized: "Review selected")) {
       Task { await store.prepareSelectedData(actions: actions) }
     }
     .buttonStyle(.borderedProminent)
     .disabled(
-      store.selectedDataPath == nil || store.busy || store.preparing
+      (store.selectedDataPath == nil && !store.packageSelected) || store.busy || store.preparing
         || store.needsRescan || actions.busy)
   }
 
@@ -252,10 +244,7 @@ struct AppsView: View {
         VStack(alignment: .trailing, spacing: 2) {
           Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
             .font(.system(size: 11, weight: .medium)).monospacedDigit()
-          if app.sizeLimitReached {
-            Text(String(localized: "Time limit"))
-              .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
-          } else if !store.measuringPaths.contains(app.path) && app.partial && app.logical.knownLowerBound > 0 {
+          if !store.measuringPaths.contains(app.path) && app.partial && app.logical.knownLowerBound > 0 {
             Text(String(localized: "At least"))
               .font(.system(size: 9)).foregroundStyle(LightenStyle.muted)
           }
@@ -272,7 +261,7 @@ struct AppsView: View {
     .buttonStyle(.plain)
     .disabled(store.needsRescan)
     .accessibilityLabel(
-      "\(app.path), \(app.sizeLimitReached ? String(localized: "Size measurement stopped at the time limit") : store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : app.partial ? String(localized: "Partial size") : String(localized: "Measured size"))"
+      "\(app.path), \(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : app.partial ? String(localized: "Partial size") : String(localized: "Measured size"))"
     )
   }
 
@@ -308,10 +297,6 @@ struct AppsView: View {
             localized: "Package size excludes protected or unreadable contents. Trash size is not freed disk space.")
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        if app.sizeLimitReached {
-          Label(String(localized: "Size measurement stopped at the time limit"), systemImage: "clock")
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-        }
         VStack(alignment: .leading, spacing: 5) {
           metadataRow(String(localized: "Bundle ID"), app.bundleID ?? String(localized: "Unknown"))
           metadataRow(String(localized: "Version"), app.version ?? String(localized: "Unknown"))
@@ -333,7 +318,7 @@ struct AppsView: View {
           )
           .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
         }
-        packageSelection()
+        packageSelection(app)
         relatedSection(app)
       }
       .padding(14)
@@ -349,16 +334,35 @@ struct AppsView: View {
     }
   }
 
-  private func packageSelection() -> some View {
-    VStack(alignment: .leading, spacing: 7) {
-      Label(String(localized: "Whole application package"), systemImage: "lock.square")
-        .font(.system(size: 13, weight: .medium))
-        .accessibilityLabel(String(localized: "Whole application package unavailable"))
-      Text(String(localized: "Package removal is unavailable while safety rules protect app contents."))
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-        .fixedSize(horizontal: false, vertical: true)
-      Text(String(localized: "No app package will be moved to Trash from this screen."))
-        .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+  private func packageSelection(_ app: ApplicationReport) -> some View {
+    let reason = store.packageUnavailableReason(app)
+    return VStack(alignment: .leading, spacing: 7) {
+      HStack(alignment: .top, spacing: 8) {
+        Button {
+          store.togglePackage(actions: actions)
+        } label: {
+          Image(systemName: store.packageSelected ? "checkmark.square.fill" : "square")
+        }
+        .buttonStyle(.plain).disabled(reason != nil)
+        .accessibilityLabel(String(localized: "Move the whole app to Trash"))
+        VStack(alignment: .leading, spacing: 3) {
+          Text(String(localized: "Move the whole app to Trash"))
+            .font(.system(size: 13, weight: .medium))
+          Text(
+            reason
+              ?? String(localized: "The app moves as one package. Its data below stays unless you select it too.")
+          )
+          .font(.system(size: 11)).foregroundStyle(reason == nil ? LightenStyle.muted : LightenStyle.warning)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+        Spacer(minLength: 0)
+      }
+      if reason != nil, app.linkTarget == nil {
+        Button(String(localized: "Show in Finder")) {
+          NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: app.path)])
+        }
+        .font(.system(size: 11))
+      }
     }
     .padding(12).frame(maxWidth: .infinity, alignment: .leading)
     .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
