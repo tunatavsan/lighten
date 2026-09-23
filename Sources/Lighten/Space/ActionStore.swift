@@ -186,14 +186,8 @@ final class ActionStore {
         for record in journalReadout.records where record.kind == .intent {
           guard let plan = record.plan else { continue }
           for item in plan.items {
-            let logical = item.inventory.reduce(Int64(0)) { sum, entry in
-              let (value, overflow) = sum.addingReportingOverflow(entry.identity?.logicalBytes ?? 0)
-              return overflow ? Int64.max : value
-            }
-            let allocated = item.inventory.reduce(Int64(0)) { sum, entry in
-              let (value, overflow) = sum.addingReportingOverflow(entry.identity?.allocatedBytes ?? 0)
-              return overflow ? Int64.max : value
-            }
+            // Same measure as Space and the confirmation: files and links, hard links once.
+            let (logical, allocated) = PlanItemSize.measure(item)
             result[item.id] = HistoryMetadata(
               path: item.sourcePath, logicalBytes: logical, allocatedBytes: allocated)
           }

@@ -136,7 +136,8 @@ struct HistoryView: View {
       Divider()
       ScrollView {
         LazyVStack(spacing: 0) {
-          ForEach(actions.history?.items ?? [], id: \.itemID) { item in
+          // Newest first: the action just taken, and its Undo, are at the top.
+          ForEach((actions.history?.items ?? []).reversed(), id: \.itemID) { item in
             VStack(alignment: .leading, spacing: 5) {
               HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
