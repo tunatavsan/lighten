@@ -33,6 +33,7 @@ struct OverviewView: View {
     .background(LightenStyle.canvas)
     .navigationTitle(String(localized: "Overview"))
     .task { await store.run(rootPath: space.selectedRoot.path) }
+    .onAppear { space.showCachedSummary() }
     .onDisappear { store.stop() }
   }
 
@@ -57,7 +58,11 @@ struct OverviewView: View {
       }
       HStack(alignment: .firstTextBaseline, spacing: 18) {
         VStack(alignment: .leading, spacing: 3) {
-          Text("\(String(localized: "Selected scan")): \(scanSize)")
+          Text(
+            "\(String(localized: "Selected scan")): \(scanSize)"
+              + (space.cachedAt.map {
+                " · \(String(localized: "Last scan")) \($0.formatted(date: .abbreviated, time: .shortened))"
+              } ?? ""))
           Text(
             "\(String(localized: "Scanned items")): \(space.tree.flatMap { $0.item($0.rootID) }.map { $0.itemCount.formatted() } ?? String(localized: "Not scanned"))"
           )

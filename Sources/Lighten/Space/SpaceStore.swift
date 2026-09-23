@@ -68,7 +68,24 @@ final class SpaceStore {
         includingResourceValuesForKeys: [.volumeNameKey], options: [.skipHiddenVolumes]
       ) ?? []
     measureVolume()
-    if tree == nil { showCachedAndRefresh() }
+    if tree == nil {
+      showCachedAndRefresh()
+    } else if cachedAt != nil, phase != .scanning {
+      startScan(keepingCache: true)
+    }
+  }
+
+  /// Shows the last finished scan without starting a new one (for Overview).
+  func showCachedSummary() {
+    guard tree == nil, let cache else { return }
+    let root = selectedRoot.path
+    Task {
+      let loaded = await Task.detached { cache.load(root: root) }.value
+      guard selectedRoot.path == root, tree == nil, let loaded else { return }
+      install(tree: loaded.tree)
+      cachedAt = loaded.savedAt
+      phase = .complete
+    }
   }
 
   func chooseFolder() {
