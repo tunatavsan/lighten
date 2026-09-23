@@ -74,9 +74,14 @@ struct CleanView: View {
       }
       Divider()
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 15) {
+        // Rows are direct children of one lazy stack so only visible rows are built,
+        // even when a cache area has thousands of entries.
+        let grouped = Dictionary(grouping: filteredCandidates, by: { $0.row.id })
+        LazyVStack(alignment: .leading, spacing: 0) {
           ForEach(store.rows) { row in
-            cacheSection(row)
+            cacheHeader(row)
+            ForEach(grouped[row.id] ?? []) { candidate in candidateRow(candidate) }
+            cacheFooter()
           }
           VStack(alignment: .leading, spacing: 5) {
             Text(String(localized: "Removed app data"))
@@ -171,9 +176,8 @@ struct CleanView: View {
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: actions.result?.planID)
   }
 
-  private func cacheSection(_ row: CatalogRow) -> some View {
+  private func cacheHeader(_ row: CatalogRow) -> some View {
     let turkish = Bundle.main.preferredLocalizations.first?.hasPrefix("tr") == true
-    let candidates = filteredCandidates.filter { $0.row.id == row.id }
     return VStack(alignment: .leading, spacing: 7) {
       HStack {
         Text(row.title(turkish: turkish)).font(.system(size: 16, weight: .semibold))
@@ -183,43 +187,55 @@ struct CleanView: View {
       }
       Text(row.reason(turkish: turkish) + " " + row.cost(turkish: turkish))
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-      LazyVStack(alignment: .leading, spacing: 0) {
-        ForEach(candidates) { candidate in
-          HStack(spacing: 8) {
-            Button {
-              if store.selected.contains(candidate.id) {
-                store.selected.remove(candidate.id)
-              } else {
-                store.selected.insert(candidate.id)
-              }
-            } label: {
-              Image(systemName: store.selected.contains(candidate.id) ? "checkmark.square.fill" : "square")
-            }
-            .buttonStyle(.plain).disabled(!candidate.canAct)
-            Text(URL(fileURLWithPath: candidate.entry.path).lastPathComponent)
-              .lineLimit(1)
-            Spacer()
-            Text(
-              candidate.node.logical.completeTotal.map {
-                ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
-              }
-                ?? String(localized: "Unknown")
-            )
-            .monospacedDigit()
-            if !candidate.canAct {
-              Text(String(localized: "Report only"))
-                .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
-            }
-          }
-          .font(.system(size: 12)).padding(.vertical, 3)
-          .accessibilityLabel(
-            "\(candidate.entry.path), \(candidate.canAct ? String(localized: "Selectable") : String(localized: "Report only"))"
-          )
+    }
+    .padding([.horizontal, .top], 13).padding(.bottom, 7)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      LightenStyle.surface, in: UnevenRoundedRectangle(topLeadingRadius: 9, topTrailingRadius: 9))
+  }
+
+  private func cacheFooter() -> some View {
+    VStack(spacing: 0) {
+      Color.clear.frame(height: 10)
+        .frame(maxWidth: .infinity)
+        .background(
+          LightenStyle.surface, in: UnevenRoundedRectangle(bottomLeadingRadius: 9, bottomTrailingRadius: 9))
+      Color.clear.frame(height: 15)
+    }
+  }
+
+  private func candidateRow(_ candidate: CleanCandidate) -> some View {
+    HStack(spacing: 8) {
+      Button {
+        if store.selected.contains(candidate.id) {
+          store.selected.remove(candidate.id)
+        } else {
+          store.selected.insert(candidate.id)
         }
+      } label: {
+        Image(systemName: store.selected.contains(candidate.id) ? "checkmark.square.fill" : "square")
+      }
+      .buttonStyle(.plain).disabled(!candidate.canAct)
+      Text(URL(fileURLWithPath: candidate.entry.path).lastPathComponent)
+        .lineLimit(1)
+      Spacer()
+      Text(
+        candidate.node.logical.completeTotal.map {
+          ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+        }
+          ?? String(localized: "Unknown")
+      )
+      .monospacedDigit()
+      if !candidate.canAct {
+        Text(String(localized: "Report only"))
+          .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
       }
     }
-    .padding(13).frame(maxWidth: .infinity, alignment: .leading)
-    .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
+    .font(.system(size: 12)).padding(.vertical, 3).padding(.horizontal, 13)
+    .background(LightenStyle.surface)
+    .accessibilityLabel(
+      "\(candidate.entry.path), \(candidate.canAct ? String(localized: "Selectable") : String(localized: "Report only"))"
+    )
   }
 
   private func rowStatus(_ value: CleanRowStatus?) -> String {
