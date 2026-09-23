@@ -4688,6 +4688,262 @@
           }
         }
       }
+    },
+    "A related tool was running or its activity could not be checked, so nothing was changed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A related tool was running or its activity could not be checked, so nothing was changed."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlgili bir araç çalışıyordu ya da etkinliği kontrol edilemedi; hiçbir şey değiştirilmedi."
+          }
+        }
+      }
+    },
+    "An app that may own this data is installed, so it was left in place.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An app that may own this data is installed, so it was left in place."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu verinin sahibi olabilecek bir uygulama kurulu; yerinde bırakıldı."
+          }
+        }
+      }
+    },
+    "Another action is still running.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another action is still running."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka bir işlem hâlâ sürüyor."
+          }
+        }
+      }
+    },
+    "Another item now uses the original name, so both were kept.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another item now uses the original name, so both were kept."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Özgün adı artık başka bir öğe kullanıyor; ikisi de korundu."
+          }
+        }
+      }
+    },
+    "The action did not complete.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The action did not complete."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşlem tamamlanmadı."
+          }
+        }
+      }
+    },
+    "The action history needs attention. Review History before another action.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The action history needs attention. Review History before another action."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşlem geçmişi ilgi bekliyor. Yeni bir işlemden önce Geçmiş'i inceleyin."
+          }
+        }
+      }
+    },
+    "The app inventory was incomplete, so nothing was changed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app inventory was incomplete, so nothing was changed."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama envanteri eksikti; hiçbir şey değiştirilmedi."
+          }
+        }
+      }
+    },
+    "The app was running or its state could not be checked, so it was left in place.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app was running or its state could not be checked, so it was left in place."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama çalışıyordu ya da durumu kontrol edilemedi; yerinde bırakıldı."
+          }
+        }
+      }
+    },
+    "The chosen item is not a folder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The chosen item is not a folder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen öğe bir klasör değil."
+          }
+        }
+      }
+    },
+    "The copies no longer match exactly, so nothing was moved. Scan again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The copies no longer match exactly, so nothing was moved. Scan again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyalar artık birebir eşleşmiyor; hiçbir şey taşınmadı. Yeniden tarayın."
+          }
+        }
+      }
+    },
+    "The folder is not available. It may have moved or you may not have access.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The folder is not available. It may have moved or you may not have access."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Klasöre ulaşılamıyor. Taşınmış olabilir ya da erişiminiz olmayabilir."
+          }
+        }
+      }
+    },
+    "The item changed after it was checked, so it was left in place. Scan again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The item changed after it was checked, so it was left in place. Scan again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öğe kontrol edildikten sonra değişti; yerinde bırakıldı. Yeniden tarayın."
+          }
+        }
+      }
+    },
+    "The item no longer meets the conditions for a safe move, so it was left in place.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The item no longer meets the conditions for a safe move, so it was left in place."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öğe artık güvenli taşıma koşullarını karşılamıyor; yerinde bırakıldı."
+          }
+        }
+      }
+    },
+    "The original location could not be verified, so the item stays in the Trash.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The original location could not be verified, so the item stays in the Trash."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Özgün konum doğrulanamadı; öğe Çöp Sepeti'nde kalıyor."
+          }
+        }
+      }
+    },
+    "The prepared action is no longer valid. Scan again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The prepared action is no longer valid. Scan again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hazırlanan işlem artık geçerli değil. Yeniden tarayın."
+          }
+        }
+      }
+    },
+    "macOS refused the operation. Check permissions and try again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS refused the operation. Check permissions and try again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS işlemi reddetti. İzinleri kontrol edip yeniden deneyin."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

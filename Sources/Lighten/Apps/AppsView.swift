@@ -473,7 +473,7 @@ struct AppsView: View {
       let count = result.items.filter { $0.outcome == outcome }.count
       return count > 0 ? "\(count) \(label)" : nil
     }
-    let details = result.items.compactMap(\.detail)
+    let details = result.items.compactMap(\.detail).map(FailureText.describe)
     return (counts + details).joined(separator: " · ")
   }
 

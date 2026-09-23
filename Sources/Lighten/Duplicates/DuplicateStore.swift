@@ -74,7 +74,7 @@ final class DuplicateStore {
       } catch is CancellationError {
         if scanGeneration == generation { cancelled = true }
       } catch {
-        if scanGeneration == generation { message = String(describing: error) }
+        if scanGeneration == generation { message = FailureText.describe(error) }
       }
       if scanGeneration == generation { busy = false }
     }

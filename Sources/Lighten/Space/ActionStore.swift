@@ -172,7 +172,7 @@ final class ActionStore {
       basket = [:]
       message = nil
     } catch {
-      message = String(describing: error)
+      message = FailureText.describe(error)
     }
     await reloadHistory()
   }
@@ -197,7 +197,7 @@ final class ActionStore {
       history = readout
       historyMetadata = metadata
     } catch {
-      message = String(describing: error)
+      message = FailureText.describe(error)
     }
   }
 
@@ -208,7 +208,7 @@ final class ActionStore {
       try await historyService.undo(planID: item.planID, itemID: item.itemID)
       message = nil
     } catch {
-      message = String(describing: error)
+      message = FailureText.describe(error)
     }
     await reloadHistory()
   }

@@ -143,7 +143,7 @@ final class CleanStore {
     } catch {
       message =
         String(localized: "Could not prepare related data for Trash. Scan again.")
-        + " " + String(describing: error)
+        + " " + FailureText.describe(error)
     }
   }
 
@@ -184,7 +184,7 @@ final class CleanStore {
     } catch {
       message =
         String(localized: "Could not prepare a safe plan. Scan again or inspect the item.")
-        + " " + String(describing: error)
+        + " " + FailureText.describe(error)
     }
   }
 }

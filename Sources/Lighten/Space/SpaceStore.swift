@@ -119,7 +119,7 @@ final class SpaceStore {
     let root = selectedRoot.path
     let started: ScanRun
     do { started = try engine.start(root: root) } catch {
-      phase = .error(String(describing: error))
+      phase = .error(FailureText.describe(error))
       return
     }
     run = started

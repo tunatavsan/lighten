@@ -337,7 +337,7 @@ final class AppsStore {
       }
     } catch {
       if preparationGeneration == id {
-        message = String(localized: "Could not prepare app data. Scan again.") + " " + String(describing: error)
+        message = String(localized: "Could not prepare app data. Scan again.") + " " + FailureText.describe(error)
       }
     }
   }

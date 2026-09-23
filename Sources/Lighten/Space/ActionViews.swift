@@ -156,7 +156,8 @@ struct HistoryView: View {
                     Text(String(localized: "Undo unavailable — permanently cleaned"))
                       .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
                   } else if let detail = item.detail {
-                    Text(detail).font(.system(size: 11)).foregroundStyle(LightenStyle.muted).lineLimit(2)
+                    Text(FailureText.describe(detail)).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+                      .lineLimit(2)
                   }
                   if item.deletedCount > 0 {
                     Text(
