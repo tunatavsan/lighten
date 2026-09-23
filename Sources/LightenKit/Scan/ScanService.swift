@@ -60,6 +60,10 @@ public struct ScanService: Sendable {
     rootPath: String, immediateChild: String?,
     progress: (@Sendable (Int, String) -> Void)?
   ) async throws -> ScanSnapshot {
+    if attributes is DescriptorAttributeSource {
+      return try DescriptorScan(homeDirectory: homeDirectory).run(
+        rootPath: rootPath, immediateChild: immediateChild, progress: progress)
+    }
     let rootIdentity = try await attributes.inspect(at: rootPath).identity
     guard rootIdentity.kind == .directory else { throw ScanFailure.rootNotDirectory }
     let volumeID = try? await attributes.volumeID(at: rootPath)
@@ -117,6 +121,13 @@ public struct ScanService: Sendable {
     }
 
     try await visit(rootPath, parentID: nil)
+    return Self.snapshot(
+      rootPath: rootPath, rootDevice: rootIdentity.device, volumeID: volumeID, entries: entries)
+  }
+
+  static func snapshot(
+    rootPath: String, rootDevice: UInt64, volumeID: UUID?, entries: [ScanEntry]
+  ) -> ScanSnapshot {
     var childrenByParent: [UUID: [UUID]] = [:]
     for entry in entries {
       if let parent = entry.parentID { childrenByParent[parent, default: []].append(entry.id) }
@@ -141,11 +152,22 @@ public struct ScanService: Sendable {
       )
     }
     return ScanSnapshot(
-      rootPath: rootPath, volumeDevice: rootIdentity.device, volumeID: volumeID,
+      rootPath: rootPath, volumeDevice: rootDevice, volumeID: volumeID,
       entries: entries,
       nodes: entries.compactMap { nodesByID[$0.id] }
     )
   }
+
+  /// The extension part of `isPackage`, for entries that are not directories.
+  static func isPackageName(_ path: String) -> Bool {
+    let name = (path as NSString).lastPathComponent.lowercased()
+    return packageSuffixes.contains { name.hasSuffix($0) }
+  }
+
+  static let packageSuffixes = [
+    ".app", ".bundle", ".framework", ".photoslibrary", ".pkg", ".pvm", ".vmwarevm", ".sparsebundle", ".rtfd",
+    ".playground", ".xcworkspace", ".xcodeproj", ".pages", ".numbers", ".key",
+  ]
 
   static func isPackage(_ path: String) -> Bool {
     let name = (path as NSString).lastPathComponent.lowercased()

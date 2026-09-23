@@ -8,6 +8,7 @@ let package = Package(
   products: [
     .library(name: "LightenKit", targets: ["LightenKit"]),
     .executable(name: "Lighten", targets: ["Lighten"]),
+    .executable(name: "lighten-bench", targets: ["LightenBench"]),
   ],
   dependencies: [],
   targets: [
@@ -15,6 +16,7 @@ let package = Package(
       cSettings: [.unsafeFlags(["-Wall", "-Wextra", "-Werror"])]),
     .target(
       name: "LightenKit",
+      dependencies: ["CLightenPlatform"],
       path: "Sources/LightenKit",
       resources: [.process("Clean/Resources")]
     ),
@@ -27,6 +29,11 @@ let package = Package(
         .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
         .enableUpcomingFeature("InferIsolatedConformances"),
       ]
+    ),
+    .executableTarget(
+      name: "LightenBench",
+      dependencies: ["LightenKit"],
+      path: "Sources/LightenBench"
     ),
     .testTarget(
       name: "LightenKitTests",
