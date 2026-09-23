@@ -253,6 +253,7 @@ struct SpaceView: View {
         Text(String(localized: "Allocated")).tag(SpaceMetric.allocated)
       }
       .pickerStyle(.segmented)
+      .labelsHidden()
       .frame(width: 220)
     }
     .padding(.horizontal, 20).padding(.vertical, 9)
@@ -382,6 +383,7 @@ struct SpaceView: View {
           Text(String(localized: "List")).tag(CompactSurface.list)
         }
         .pickerStyle(.segmented)
+        .labelsHidden()
         .frame(width: 200)
         Spacer(minLength: 0)
         if let item = store.selected {
