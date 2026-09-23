@@ -89,8 +89,8 @@ final class DuplicateStore {
   }
 
   func deactivate(actions: ActionStore) {
+    // Leaving the screen keeps a running scan going; only prepared plans expire.
     observeResult(actions: actions)
-    cancelScan()
     let awaitingResult = actions.busy && actions.pending?.id != presentedPlanID
     invalidatePreparation(actions: actions, keepPresentedPlanID: awaitingResult || needsRescan)
   }

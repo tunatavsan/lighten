@@ -60,7 +60,15 @@ private struct LightenRootView: View {
   var body: some View {
     NavigationSplitView {
       List(LightenSection.allCases, selection: $section) { item in
-        Label(item.title, systemImage: item.icon).tag(item)
+        HStack(spacing: 6) {
+          Label(item.title, systemImage: item.icon)
+          Spacer(minLength: 4)
+          if isWorking(item) {
+            ProgressView().controlSize(.mini)
+              .accessibilityLabel(String(localized: "Working in the background"))
+          }
+        }
+        .tag(item)
       }
       .listStyle(.sidebar)
       .navigationSplitViewColumnWidth(min: 170, ideal: 195, max: 250)
@@ -106,4 +114,16 @@ private struct LightenRootView: View {
     .tint(LightenStyle.accent)
     .task { await actions.reloadHistory() }
   }
+
+  /// Scans keep running when their screen is not shown; the sidebar says so.
+  private func isWorking(_ item: LightenSection) -> Bool {
+    switch item {
+    case .space: space.phase == .scanning
+    case .clean: clean.busy
+    case .duplicates: duplicates.busy
+    case .apps: apps.busy
+    case .overview, .history, .settings: false
+    }
+  }
+
 }

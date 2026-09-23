@@ -3,6 +3,7 @@ import SwiftUI
 
 struct LightenSettingsView: View {
   @State private var settingsOpenFailed = false
+  @State private var access: FullDiskAccessState?
   var retrySpace: (() -> Void)?
   var retryClean: (() -> Void)?
   var retryDuplicates: (() -> Void)?
@@ -35,10 +36,14 @@ struct LightenSettingsView: View {
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         .fixedSize(horizontal: false, vertical: true)
-        Button(String(localized: "Open Full Disk Access settings")) {
-          settingsOpenFailed = !NSWorkspace.shared.open(fullDiskAccessURL)
+        accessStatus
+        HStack(spacing: 10) {
+          Button(String(localized: "Open Full Disk Access settings")) {
+            settingsOpenFailed = !NSWorkspace.shared.open(fullDiskAccessURL)
+          }
+          .buttonStyle(.borderedProminent)
+          Button(String(localized: "Check again")) { refreshAccess() }
         }
-        .buttonStyle(.borderedProminent)
         if settingsOpenFailed {
           Text(
             String(localized: "Could not open Settings. Go to System Settings → Privacy & Security → Full Disk Access.")
@@ -71,6 +76,41 @@ struct LightenSettingsView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
     .navigationTitle(String(localized: "Settings"))
+    .task { refreshAccess() }
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+      refreshAccess()
+    }
+  }
+
+  private func refreshAccess() {
+    Task {
+      access = await Task.detached { FullDiskAccess.check() }.value
+    }
+  }
+
+  @ViewBuilder private var accessStatus: some View {
+    switch access {
+    case .granted:
+      Label(String(localized: "Full Disk Access: granted"), systemImage: "checkmark.seal.fill")
+        .font(.system(size: 13, weight: .medium)).foregroundStyle(.green)
+    case .notGranted:
+      VStack(alignment: .leading, spacing: 4) {
+        Label(String(localized: "Full Disk Access: not granted"), systemImage: "exclamationmark.triangle.fill")
+          .font(.system(size: 13, weight: .medium)).foregroundStyle(LightenStyle.warning)
+        Text(
+          String(
+            localized:
+              "If you just turned it on, macOS may ask you to quit and reopen Lighten before the permission applies.")
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+    case .unknown:
+      Label(String(localized: "Full Disk Access: could not be determined"), systemImage: "questionmark.circle")
+        .font(.system(size: 13, weight: .medium)).foregroundStyle(LightenStyle.muted)
+    case nil:
+      ProgressView().controlSize(.small)
+    }
   }
 
   @ViewBuilder private var retryButtons: some View {

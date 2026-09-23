@@ -4592,6 +4592,102 @@
           }
         }
       }
+    },
+    "Check again": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check again"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeniden kontrol et"
+          }
+        }
+      }
+    },
+    "Full Disk Access: could not be determined": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access: could not be determined"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tam Disk Erişimi: belirlenemedi"
+          }
+        }
+      }
+    },
+    "Full Disk Access: granted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access: granted"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tam Disk Erişimi: verildi"
+          }
+        }
+      }
+    },
+    "Full Disk Access: not granted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access: not granted"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tam Disk Erişimi: verilmedi"
+          }
+        }
+      }
+    },
+    "If you just turned it on, macOS may ask you to quit and reopen Lighten before the permission applies.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If you just turned it on, macOS may ask you to quit and reopen Lighten before the permission applies."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeni açtıysanız, izin geçerli olmadan önce macOS Lighten'ı kapatıp yeniden açmanızı isteyebilir."
+          }
+        }
+      }
+    },
+    "Working in the background": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working in the background"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arka planda çalışıyor"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

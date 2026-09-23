@@ -169,7 +169,6 @@ struct CleanView: View {
     }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.selected)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: actions.result?.planID)
-    .onDisappear { store.cancelScan() }
   }
 
   private func cacheSection(_ row: CatalogRow) -> some View {

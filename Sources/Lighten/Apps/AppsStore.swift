@@ -210,8 +210,8 @@ final class AppsStore {
     selectedDataPath = selectedDataPath == path ? nil : path
   }
 
+  /// Leaving the screen keeps a running scan going; only prepared plans expire.
   func deactivate(actions: ActionStore) {
-    cancelScan()
     invalidatePreparation(actions: actions, keepPresentedPlanID: actions.busy)
   }
 
