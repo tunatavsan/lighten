@@ -142,7 +142,8 @@ struct DuplicateView: View {
           .padding(.top, 5)
       }
     }
-    .padding(18)
+    .padding(20)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
     .navigationTitle(String(localized: "Duplicates"))
     .sheet(item: $actions.pending) { presentation in

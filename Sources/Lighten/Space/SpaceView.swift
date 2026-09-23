@@ -67,6 +67,7 @@ struct SpaceView: View {
       Divider()
       basketDock
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
     .tint(LightenStyle.accent)
     .navigationTitle(String(localized: "Space"))
@@ -106,7 +107,7 @@ struct SpaceView: View {
       HStack(alignment: .top, spacing: 16) {
         VStack(alignment: .leading, spacing: 3) {
           Text(store.selectedRoot.lastPathComponent)
-            .font(.system(size: 21, weight: .semibold))
+            .font(.system(size: 24, weight: .semibold))
             .lineLimit(1)
           HStack(spacing: 8) {
             Text(store.selectedRoot.path)
@@ -193,7 +194,7 @@ struct SpaceView: View {
         Text(detail).font(.system(size: 12)).foregroundStyle(.red).lineLimit(2)
       }
     }
-    .padding(.horizontal, 18).padding(.vertical, 14)
+    .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 14)
   }
 
   private func metricValue(_ title: String, _ value: Int64?) -> some View {
@@ -245,7 +246,7 @@ struct SpaceView: View {
       .pickerStyle(.segmented)
       .frame(width: 220)
     }
-    .padding(.horizontal, 16).padding(.vertical, 9)
+    .padding(.horizontal, 20).padding(.vertical, 9)
     .onChange(of: store.metric) { _, _ in
       store.layout = nil
       if let id = store.currentID { store.navigate(to: id) }
@@ -567,7 +568,7 @@ struct SpaceView: View {
           .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
       }
     }
-    .padding(.horizontal, 16).padding(.vertical, 10)
+    .padding(.horizontal, 20).padding(.vertical, 10)
     .background(LightenStyle.canvas)
     .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: actions.result?.planID)
   }

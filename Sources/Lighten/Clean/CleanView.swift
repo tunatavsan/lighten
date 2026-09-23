@@ -160,7 +160,8 @@ struct CleanView: View {
           .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       }
     }
-    .padding(18)
+    .padding(20)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
     .navigationTitle(String(localized: "Clean"))
     .sheet(item: $actions.pending) { presentation in

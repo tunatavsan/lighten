@@ -13,7 +13,7 @@ struct OverviewView: View {
       VStack(alignment: .leading, spacing: 22) {
         HStack(alignment: .firstTextBaseline) {
           Text(String(localized: "Overview"))
-            .font(.system(size: 25, weight: .semibold))
+            .font(.system(size: 24, weight: .semibold))
           Spacer()
           if let date = store.system?.observedAt {
             Text("\(String(localized: "System checked")) \(date.formatted(date: .omitted, time: .shortened))")
@@ -26,10 +26,10 @@ struct OverviewView: View {
         Divider()
         processSection
       }
-      .padding(22)
-      .frame(maxWidth: 860, alignment: .leading)
-      .frame(maxWidth: .infinity, alignment: .top)
+      .padding(20)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
     .navigationTitle(String(localized: "Overview"))
     .task { await store.run(rootPath: space.selectedRoot.path) }

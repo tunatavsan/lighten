@@ -94,7 +94,7 @@ struct HistoryView: View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .top) {
         VStack(alignment: .leading, spacing: 4) {
-          Text(String(localized: "History")).font(.system(size: 21, weight: .semibold))
+          Text(String(localized: "History")).font(.system(size: 24, weight: .semibold))
           Text(String(localized: "History shows actions taken in Lighten."))
             .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
         }
@@ -208,7 +208,8 @@ struct HistoryView: View {
         .padding(.top, 8)
       }
     }
-    .padding(18)
+    .padding(20)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
     .tint(LightenStyle.accent)
     .navigationTitle(String(localized: "History"))

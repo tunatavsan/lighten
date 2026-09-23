@@ -5,6 +5,7 @@ struct AppsView: View {
   @Bindable var store: AppsStore
   @Bindable var actions: ActionStore
   @State private var searchText = ""
+  @State private var showingCompactDetail = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var filtered: [ApplicationReport] {
@@ -17,140 +18,163 @@ struct AppsView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      HStack(alignment: .top, spacing: 14) {
-        VStack(alignment: .leading, spacing: 4) {
-          Text(String(localized: "Apps"))
-            .font(.system(size: 24, weight: .semibold))
-          Text(String(localized: "Installed applications and their related data"))
-            .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+    GeometryReader { geometry in
+      let compact = geometry.size.width < 800
+      VStack(alignment: .leading, spacing: 0) {
+        HStack(alignment: .top, spacing: 14) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(String(localized: "Apps"))
+              .font(.system(size: 24, weight: .semibold))
+            Text(String(localized: "Installed applications and their related data"))
+              .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+          }
+          Spacer()
+          Button(store.busy ? String(localized: "Cancel scan") : String(localized: "Scan")) {
+            if store.busy { store.cancelScan() } else { store.startScan(actions: actions) }
+          }
         }
-        Spacer()
-        Button(store.busy ? String(localized: "Cancel scan") : String(localized: "Scan")) {
-          if store.busy { store.cancelScan() } else { store.startScan(actions: actions) }
-        }
-      }
-      .padding(.bottom, 14)
-      HStack(spacing: 12) {
-        TextField(String(localized: "Search by name or path"), text: $searchText)
-          .textFieldStyle(.roundedBorder)
-          .frame(maxWidth: 340)
-        Text("\(filtered.count) / \(store.reports.count)")
-          .font(.system(size: 11)).monospacedDigit().foregroundStyle(LightenStyle.muted)
-        Spacer()
-        if let date = store.scannedAt {
-          Text(date, style: .time).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        }
-      }
-      .padding(.bottom, 10)
-      if store.busy {
-        HStack(spacing: 8) {
-          ProgressView().controlSize(.small)
-          Text("\(store.measuredCount) \(String(localized: "applications measured"))")
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          if !store.reports.isEmpty {
-            Text(
-              store.measuringPaths.isEmpty
-                ? String(localized: "Reviewing related data")
-                : String(localized: "Remaining sizes are being measured")
-            )
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        .padding(.bottom, 14)
+        HStack(spacing: 12) {
+          TextField(String(localized: "Search by name or path"), text: $searchText)
+            .textFieldStyle(.roundedBorder)
+            .frame(maxWidth: 340)
+          Text("\(filtered.count) / \(store.reports.count)")
+            .font(.system(size: 11)).monospacedDigit().foregroundStyle(LightenStyle.muted)
+          Spacer()
+          if let date = store.scannedAt {
+            Text(date, style: .time).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
           }
         }
         .padding(.bottom, 10)
-      }
-      if store.needsRescan {
-        Label(
-          String(localized: "This list needs a new scan before actions are available."),
-          systemImage: "arrow.clockwise.circle"
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-        .padding(.bottom, 10)
-      }
-      if store.scannedAt != nil && !store.inventoryComplete {
-        Label(
-          String(localized: "Application inventory is incomplete. Other locations and unreadable apps remain unknown."),
-          systemImage: "exclamationmark.circle"
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-        .padding(.bottom, 10)
-      }
-      let limitedCount = store.reports.filter(\.sizeLimitReached).count
-      if limitedCount > 0 {
-        Label(
-          "\(limitedCount) \(String(localized: "app sizes reached the measurement time limit"))",
-          systemImage: "clock.badge.exclamationmark"
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-        .padding(.bottom, 10)
-      }
-      Divider()
-      if store.reports.isEmpty && !store.busy {
-        ContentUnavailableView(
-          String(localized: "Scan installed apps"), systemImage: "app.dashed",
-          description: Text(String(localized: "Inspect applications in /Applications and your Applications folder.")))
-      } else if store.busy && store.reports.isEmpty {
-        VStack(spacing: 10) {
-          ProgressView()
-          Text(String(localized: "Scanning applications"))
-            .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+        if store.busy {
+          HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("\(store.measuredCount) \(String(localized: "applications measured"))")
+              .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+            if !store.reports.isEmpty {
+              Text(
+                store.measuringPaths.isEmpty
+                  ? String(localized: "Reviewing related data")
+                  : String(localized: "Remaining sizes are being measured")
+              )
+              .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+            }
+          }
+          .padding(.bottom, 10)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else {
-        HStack(spacing: 0) {
-          ScrollView {
-            LazyVStack(spacing: 5) {
-              ForEach(filtered) { app in
-                appRow(app)
+        if store.needsRescan {
+          Label(
+            String(localized: "This list needs a new scan before actions are available."),
+            systemImage: "arrow.clockwise.circle"
+          )
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+          .padding(.bottom, 10)
+        }
+        if store.scannedAt != nil && !store.inventoryComplete {
+          Label(
+            String(
+              localized: "Application inventory is incomplete. Other locations and unreadable apps remain unknown."),
+            systemImage: "exclamationmark.circle"
+          )
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+          .padding(.bottom, 10)
+        }
+        let limitedCount = store.reports.filter(\.sizeLimitReached).count
+        if limitedCount > 0 {
+          Label(
+            "\(limitedCount) \(String(localized: "app sizes reached the measurement time limit"))",
+            systemImage: "clock.badge.exclamationmark"
+          )
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+          .padding(.bottom, 10)
+        }
+        Divider()
+        if store.reports.isEmpty && !store.busy {
+          ContentUnavailableView(
+            store.scannedAt == nil
+              ? String(localized: "Scan installed apps") : String(localized: "No applications found"),
+            systemImage: "app.dashed",
+            description: Text(String(localized: "Inspect applications in /Applications and your Applications folder."))
+          )
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if store.busy && store.reports.isEmpty {
+          VStack(spacing: 10) {
+            ProgressView()
+            Text(String(localized: "Scanning applications"))
+              .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if compact {
+          if showingCompactDetail, let app = store.selectedReport {
+            VStack(spacing: 0) {
+              HStack {
+                Button {
+                  withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+                    showingCompactDetail = false
+                  }
+                } label: {
+                  Label(String(localized: "All apps"), systemImage: "chevron.left")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LightenStyle.accent)
+                Spacer()
+              }
+              .padding(.vertical, 10)
+              detail(app)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+          } else {
+            applicationList
+          }
+        } else {
+          HStack(spacing: 0) {
+            applicationList
+              .frame(width: min(420, (geometry.size.width - 40) * 0.34))
+            Divider()
+            if let app = store.selectedReport {
+              detail(app)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+              ContentUnavailableView(
+                String(localized: "Select an application"), systemImage: "app.dashed"
+              )
+              .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+          }
+        }
+        if store.selectedReport != nil && (!compact || showingCompactDetail) {
+          Divider()
+          if compact {
+            VStack(alignment: .leading, spacing: 8) {
+              reviewExplanation
+              HStack {
+                Spacer()
+                reviewButton
               }
             }
-            .padding(.vertical, 10)
-          }
-          .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
-          Divider()
-          if let app = store.selectedReport {
-            detail(app)
-              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.top, 10)
           } else {
-            ContentUnavailableView(
-              String(localized: "Select an application"), systemImage: "app.dashed"
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            HStack {
+              reviewExplanation
+              Spacer()
+              reviewButton
+            }
+            .padding(.top, 10)
           }
         }
-      }
-      if store.selectedReport != nil {
-        Divider()
-        HStack {
-          Text(
-            store.needsRescan
-              ? String(localized: "Scan again to review data")
-              : store.busy
-                ? String(localized: "Review is available after the scan")
-                : String(localized: "App data is reviewed separately")
-          )
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          Spacer()
-          Button(String(localized: "Review selected data")) {
-            Task { await store.prepareSelectedData(actions: actions) }
-          }
-          .buttonStyle(.borderedProminent)
-          .disabled(
-            store.selectedDataPath == nil || store.busy || store.preparing
-              || store.needsRescan || actions.busy)
+        if let message = store.message {
+          Divider()
+          Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning).padding(.top, 9)
         }
-        .padding(.top, 10)
+        if let result = actions.result, result.planID == store.presentedPlanID {
+          Text(resultLine(result))
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted).padding(.top, 7)
+        }
       }
-      if let message = store.message {
-        Divider()
-        Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning).padding(.top, 9)
-      }
-      if let result = actions.result, result.planID == store.presentedPlanID {
-        Text(resultLine(result))
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted).padding(.top, 7)
-      }
+      .padding(20)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-    .padding(18)
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
     .navigationTitle(String(localized: "Apps"))
     .sheet(item: $actions.pending) { presentation in
@@ -158,15 +182,57 @@ struct AppsView: View {
     }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: store.selectedPath)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: store.selectedDataPath)
+    .onChange(of: store.selectedPath) { _, path in
+      if path == nil { showingCompactDetail = false }
+    }
     .onChange(of: actions.result?.planID) { _, _ in store.observeResult(actions: actions) }
     .onAppear { store.observeResult(actions: actions) }
     .onDisappear { store.deactivate(actions: actions) }
+  }
+
+  private var applicationList: some View {
+    Group {
+      if filtered.isEmpty {
+        ContentUnavailableView(String(localized: "No matching applications"), systemImage: "magnifyingglass")
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ScrollView {
+          LazyVStack(spacing: 5) {
+            ForEach(filtered) { app in appRow(app) }
+          }
+          .padding(.vertical, 10)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      }
+    }
+  }
+
+  private var reviewExplanation: some View {
+    Text(
+      store.needsRescan
+        ? String(localized: "Scan again to review data")
+        : store.busy
+          ? String(localized: "Review is available after the scan")
+          : String(localized: "App data is reviewed separately")
+    )
+    .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+  }
+
+  private var reviewButton: some View {
+    Button(String(localized: "Review selected data")) {
+      Task { await store.prepareSelectedData(actions: actions) }
+    }
+    .buttonStyle(.borderedProminent)
+    .disabled(
+      store.selectedDataPath == nil || store.busy || store.preparing
+        || store.needsRescan || actions.busy)
   }
 
   private func appRow(_ app: ApplicationReport) -> some View {
     let selected = store.selectedPath == app.path
     return Button {
       store.select(app.path, actions: actions)
+      showingCompactDetail = true
     } label: {
       HStack(spacing: 10) {
         Image(systemName: "app.fill")
@@ -176,10 +242,12 @@ struct AppsView: View {
           .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 7))
         VStack(alignment: .leading, spacing: 3) {
           Text(URL(fileURLWithPath: app.path).deletingPathExtension().lastPathComponent)
-            .font(.system(size: 12, weight: .medium)).lineLimit(1)
+            .font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
           Text(app.bundleID ?? String(localized: "Identity unavailable"))
-            .font(.system(size: 10)).foregroundStyle(LightenStyle.muted).lineLimit(1)
+            .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+            .lineLimit(1).truncationMode(.middle)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         Spacer(minLength: 4)
         VStack(alignment: .trailing, spacing: 2) {
           Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
@@ -192,6 +260,7 @@ struct AppsView: View {
               .font(.system(size: 9)).foregroundStyle(LightenStyle.muted)
           }
         }
+        .fixedSize(horizontal: true, vertical: false)
       }
       .padding(.horizontal, 9).padding(.vertical, 8)
       .background(
@@ -217,10 +286,11 @@ struct AppsView: View {
             .background(LightenStyle.fileTile, in: RoundedRectangle(cornerRadius: 11))
           VStack(alignment: .leading, spacing: 3) {
             Text(URL(fileURLWithPath: app.path).deletingPathExtension().lastPathComponent)
-              .font(.system(size: 19, weight: .semibold)).lineLimit(2)
+              .font(.system(size: 19, weight: .semibold)).lineLimit(2).truncationMode(.middle)
             Text(app.path).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
               .lineLimit(2).truncationMode(.middle).help(app.path)
           }
+          .frame(maxWidth: .infinity, alignment: .leading)
         }
         HStack(alignment: .firstTextBaseline) {
           Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
@@ -275,6 +345,7 @@ struct AppsView: View {
       Text(title).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         .frame(width: 75, alignment: .leading)
       Text(value).font(.system(size: 11)).textSelection(.enabled)
+        .lineLimit(2).truncationMode(.middle).help(value)
     }
   }
 
@@ -340,12 +411,14 @@ struct AppsView: View {
       )
       VStack(alignment: .leading, spacing: 2) {
         Text(URL(fileURLWithPath: candidate.path).lastPathComponent)
-          .font(.system(size: 11, weight: .medium))
+          .font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
         Text(candidate.path).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
           .lineLimit(1).truncationMode(.middle).help(candidate.path)
         Text(relatedReason(candidate, eligible: eligible))
           .font(.system(size: 10)).foregroundStyle(eligible ? LightenStyle.muted : LightenStyle.warning)
+          .fixedSize(horizontal: false, vertical: true)
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
       Spacer(minLength: 3)
       if let node = candidate.snapshot?.nodes.first(where: { $0.parentID != nil }) {
         Text(format(node.logical.completeTotal ?? node.logical.knownLowerBound))

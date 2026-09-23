@@ -15,7 +15,7 @@ struct LightenSettingsView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
         Text(String(localized: "Settings"))
-          .font(.system(size: 25, weight: .semibold))
+          .font(.system(size: 24, weight: .semibold))
         Label(String(localized: "File access"), systemImage: "hand.raised")
           .font(.system(size: 16, weight: .semibold))
           .foregroundStyle(LightenStyle.accent)
@@ -65,10 +65,10 @@ struct LightenSettingsView: View {
           }
         }
       }
-      .padding(22)
-      .frame(maxWidth: 650, alignment: .leading)
-      .frame(maxWidth: .infinity, alignment: .top)
+      .padding(20)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
     .navigationTitle(String(localized: "Settings"))
   }
