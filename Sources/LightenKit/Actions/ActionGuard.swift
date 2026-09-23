@@ -21,13 +21,17 @@ public struct ActionGuard: Sendable {
         !ExactInventory(homeDirectory: homeDirectory).isBulkRoot(item.sourcePath)
       else { throw GuardFailure.unsupportedItem }
     }
-    let rootIsPackage = ScanService.isPackage(item.sourcePath)
+    // Strict items keep the original extension check; tree policies judge a
+    // package root only when it really is a directory.
+    let rootIsDirectory = item.inventory.first?.identity?.kind == .directory
+    let rootIsPackage = ScanService.isPackage(item.sourcePath) && (policy == nil || rootIsDirectory)
+    let rootIsApplication = rootIsDirectory && ExactInventory.isApplicationName(item.sourcePath)
     guard let root = item.inventory.first, root.id == item.id,
       root.path == item.sourcePath,
       root.identity?.kind == .regular || root.identity?.kind == .directory,
       !PlanService.isBulkRoot(item.sourcePath, homeDirectory: homeDirectory),
-      !rootIsPackage || (policy == .wholeBundle && root.identity?.kind == .directory),
-      policy != .wholeBundle || rootIsPackage,
+      !rootIsPackage || policy != nil,
+      policy != .wholeBundle || (rootIsApplication && item.applicationBundleID != nil),
       !ScanService.isInsidePackage(item.sourcePath),
       let volumeID = item.volumeID,
       (try? DescriptorFileSystem.volumeID(at: item.sourcePath)) == volumeID
@@ -86,7 +90,7 @@ public struct ActionGuard: Sendable {
         throw GuardFailure.unsupportedItem
       }
       // Case-folded matching covers ProtectionPolicy's exact and alias checks.
-      let rules = automaton.matches(state)
+      let rules = automaton.matches(state, path: entry.path, homeDirectory: homeDirectory)
       if !rules.isEmpty {
         // Whole-bundle exception: only beneath a package that is itself the operation root.
         let exempt =

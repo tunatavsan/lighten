@@ -210,7 +210,6 @@ final class ParallelWalker: Sendable {
     var entryErrors = false
     let limit = ScanTree.filesPerDirectory
     let isCancelled = { [queue] in queue.cancelled.load(ordering: .relaxed) }
-    let checkHome = job.path.hasPrefix(homeDirectory)
 
     do {
       try reader.read(path: job.path, expected: (job.device, job.inode), isCancelled: isCancelled) { entry in
@@ -223,9 +222,10 @@ final class ParallelWalker: Sendable {
           allocated &+= entry.allocated
           let childPath = job.path == "/" ? "/" + entry.name : job.path + "/" + entry.name
           if job.mode == .interior {
-            if entry.device != job.device {
+            if entry.device != job.device || entry.flags & UInt32(SF_DATALESS) != 0 {
+              // Another volume or cloud-only contents: the owner's total is a lower bound.
               entryErrors = true
-            } else if entry.flags & UInt32(SF_DATALESS) == 0 {
+            } else {
               interiorJobs.append(
                 WalkJob(
                   owner: job.owner, path: childPath, device: entry.device, inode: entry.inode, mode: .interior,
@@ -246,9 +246,8 @@ final class ParallelWalker: Sendable {
         allocated &+= entry.allocated
         guard job.mode == .node else { return }
         var protectedRule: String?
-        if checkHome || job.path.hasPrefix("/Volumes") {
-          let folded = entry.name.lowercased()
-          if fileRuleSuffixes.contains(where: { folded.hasSuffix($0) }),
+        do {
+          if fileRuleSuffixes.contains(where: { Self.hasASCIISuffix(entry.name, $0) }),
             let state = job.protection, let rule = automaton.match(automaton.step(state, entry.name))
           {
             protectedRule = rule.id
@@ -311,6 +310,18 @@ final class ParallelWalker: Sendable {
           depth: job.depth + 1, protection: child.protection))
     }
     return jobs
+  }
+
+  /// Case-insensitive ASCII suffix test without allocating a folded copy.
+  static func hasASCIISuffix(_ name: String, _ suffix: String) -> Bool {
+    let nameBytes = name.utf8
+    let suffixBytes = suffix.utf8
+    guard nameBytes.count >= suffixBytes.count else { return false }
+    for (left, right) in zip(nameBytes.suffix(suffixBytes.count), suffixBytes) {
+      let folded = left >= 65 && left <= 90 ? left + 32 : left
+      if folded != right { return false }
+    }
+    return true
   }
 
   func classify(_ entry: RawEntry, parent: WalkJob) -> Child {

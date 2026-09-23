@@ -136,7 +136,7 @@ private func rejection(_ path: String, home: String) -> PlanRejection? {
   let asFolder = PlanItem(
     id: item.id, sourcePath: item.sourcePath, volumeID: item.volumeID, inventory: item.inventory,
     ancestors: item.ancestors, policy: .spaceTrash)
-  #expect(throws: GuardFailure.unsupportedItem) { try ActionGuard(homeDirectory: home).validate(asFolder) }
+  #expect(throws: GuardFailure.protectedItem) { try ActionGuard(homeDirectory: home).validate(asFolder) }
 
   // The same app beneath a selected folder keeps its application rules.
   let parentPath = home + "/Apps"
@@ -229,4 +229,38 @@ private func rejection(_ path: String, home: String) -> PlanRejection? {
   let decoded = try JSONDecoder().decode(PlanItem.self, from: JSONSerialization.data(withJSONObject: object))
   #expect(decoded.policy == nil)
   #expect(decoded.applicationBundleID == nil)
+}
+
+@Test func onlyApplicationsUseTheWholeBundlePolicy() throws {
+  let home = try inventoryRoot()
+  defer { try? FileManager.default.removeItem(atPath: home) }
+  try put(home + "/Frameworks/Kit.framework/Resources/en.lproj/Localizable.strings")
+  let framework = rejection(home + "/Frameworks/Kit.framework", home: home)
+  #expect(framework?.reason == .containsProtectedItem)
+  #expect(framework?.ruleID == "localization-bundles")
+
+  try put(home + "/Frameworks/Plain.bundle/Contents/Resources/data")
+  let bundle = try #require(try plan(home + "/Frameworks/Plain.bundle", home: home).items.first)
+  #expect(bundle.policy == .spaceTrash)
+  try ActionGuard(homeDirectory: home).validate(bundle)
+
+  try put(home + "/Docs/Report.pages", "single file document")
+  let document = try #require(try plan(home + "/Docs/Report.pages", home: home).items.first)
+  #expect(document.policy == .spaceTrash)
+  try ActionGuard(homeDirectory: home).validate(document)
+}
+
+@Test func nestedApplicationsAreRecordedAndLightenIsNeverRemoved() throws {
+  let home = try inventoryRoot()
+  defer { try? FileManager.default.removeItem(atPath: home) }
+  try makeApp(home + "/Apps/Suite.app", bundleID: "qa.lighten.suite")
+  try makeApp(home + "/Apps/Suite.app/Contents/Helpers/Agent.app", bundleID: "qa.lighten.agent")
+  let item = try #require(try plan(home + "/Apps/Suite.app", home: home).items.first)
+  #expect(item.applicationBundleID == "qa.lighten.suite")
+  #expect(item.nestedApplicationIDs == ["qa.lighten.agent"])
+  try ActionGuard(homeDirectory: home).validate(item)
+
+  try makeApp(home + "/Apps/Carrier.app", bundleID: "qa.lighten.carrier")
+  try makeApp(home + "/Apps/Carrier.app/Contents/Helpers/Lighten.app", bundleID: LightenIdentity.bundleIdentifier)
+  #expect(rejection(home + "/Apps/Carrier.app", home: home)?.reason == .lightenItself)
 }

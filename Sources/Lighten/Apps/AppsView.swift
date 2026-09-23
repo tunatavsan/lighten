@@ -294,7 +294,7 @@ struct AppsView: View {
         }
         Text(
           String(
-            localized: "Package size excludes protected or unreadable contents. Trash size is not freed disk space.")
+            localized: "Protected package contents are measured from metadata. Trash size is not freed disk space.")
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         VStack(alignment: .leading, spacing: 5) {

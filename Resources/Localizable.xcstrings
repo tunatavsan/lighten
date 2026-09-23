@@ -2705,22 +2705,6 @@
         }
       }
     },
-    "Package size excludes protected or unreadable contents. Trash size is not freed disk space.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Package size excludes protected or unreadable contents. Trash size is not freed disk space."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Paket boyutuna korunan veya okunamayan içerik dahil değildir. Çöp Sepeti boyutu açılan disk alanı değildir."
-          }
-        }
-      }
-    },
     "Partial size": {
       "localizations": {
         "en": {
@@ -4685,6 +4669,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Arka planda çalışıyor"
+          }
+        }
+      }
+    },
+    "Protected package contents are measured from metadata. Trash size is not freed disk space.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protected package contents are measured from metadata. Trash size is not freed disk space."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Korunan paket içeriği dosya bilgilerinden ölçülür. Çöp Sepeti'ndeki boyut boşalmış disk alanı değildir."
           }
         }
       }

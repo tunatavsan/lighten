@@ -35,7 +35,7 @@ public struct ActionResult: Codable, Sendable {
 }
 
 public enum ExecutionFailure: Error, Sendable {
-  case catalogDeleteDenied, invalidPlan, corruptHistory, alreadyRunning, planAlreadyUsed
+  case catalogDeleteDenied, invalidPlan, corruptHistory, alreadyRunning, planAlreadyUsed, selfRemoval
 }
 
 public struct IrreversibleConfirmation: Sendable, Equatable {
@@ -283,13 +283,17 @@ public actor ActionExecutor {
   /// A whole application leaves only while it is not running and still carries
   /// the identity recorded in the plan. Lighten never removes itself.
   private func validateApplication(_ item: PlanItem) async throws {
-    let isApplication = item.sourcePath.lowercased(with: Locale(identifier: "en_US_POSIX")).hasSuffix(".app")
-    guard item.policy == .wholeBundle, isApplication || item.applicationBundleID != nil else { return }
+    guard item.policy == .wholeBundle else { return }
     guard let expected = item.applicationBundleID,
-      ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath) == expected,
-      expected.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame,
-      await runningApplications.isRunning(bundleID: expected) == false
-    else { throw RelatedFailure.runningOrUnknown }
+      ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath) == expected
+    else { throw RelatedFailure.changedItem }
+    let everyID = [expected] + (item.nestedApplicationIDs ?? [])
+    if everyID.contains(where: { $0.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame }) {
+      throw ExecutionFailure.selfRemoval
+    }
+    for id in everyID where await runningApplications.isRunning(bundleID: id) != false {
+      throw RelatedFailure.runningOrUnknown
+    }
   }
 
   private func validateDuplicatePlan(_ plan: ActionPlan) throws {

@@ -45,9 +45,11 @@ int lighten_bulk_read(int dirfd, void *buffer, size_t size, LightenDirEntry *out
     LightenDirEntry *entry = &out[index];
     memset(entry, 0, sizeof(*entry));
     uint32_t length = 0;
-    if (cursor + sizeof(length) > end) goto malformed;
+    // Bounds are compared as sizes so no pointer past the buffer is ever formed.
+    size_t remaining = (size_t)(end - cursor);
+    if (remaining < sizeof(length)) goto malformed;
     memcpy(&length, cursor, sizeof(length));
-    if (length < sizeof(uint32_t) + sizeof(attribute_set_t) || cursor + length > end) goto malformed;
+    if (length < sizeof(uint32_t) + sizeof(attribute_set_t) || length > remaining) goto malformed;
     const char *record_end = cursor + length;
     const char *field = cursor + sizeof(uint32_t);
     attribute_set_t returned;
@@ -56,7 +58,7 @@ int lighten_bulk_read(int dirfd, void *buffer, size_t size, LightenDirEntry *out
 
 #define LIGHTEN_TAKE(target)                                                                       \
   do {                                                                                             \
-    if (field + sizeof(target) > record_end) goto malformed;                                       \
+    if ((size_t)(record_end - field) < sizeof(target)) goto malformed;                             \
     memcpy(&(target), field, sizeof(target));                                                      \
     field += sizeof(target);                                                                       \
   } while (0)
@@ -70,10 +72,12 @@ int lighten_bulk_read(int dirfd, void *buffer, size_t size, LightenDirEntry *out
       const char *reference_start = field;
       attrreference_t reference;
       LIGHTEN_TAKE(reference);
-      const char *name = reference_start + reference.attr_dataoffset;
-      if (reference.attr_length == 0 || name < reference_start ||
-          name + reference.attr_length > record_end)
+      size_t available = (size_t)(record_end - reference_start);
+      if (reference.attr_length == 0 || reference.attr_dataoffset < 0 ||
+          (size_t)reference.attr_dataoffset > available ||
+          (size_t)reference.attr_length > available - (size_t)reference.attr_dataoffset)
         goto malformed;
+      const char *name = reference_start + reference.attr_dataoffset;
       entry->name_offset = (uint32_t)(name - (const char *)buffer);
       // attr_length includes the terminating NUL.
       entry->name_length = reference.attr_length - 1;

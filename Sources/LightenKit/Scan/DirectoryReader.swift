@@ -82,6 +82,7 @@ public final class DirectoryReader {
       throw .changed
     }
     counters.directories.add(1, ordering: .relaxed)
+    var batches = 0
     while true {
       if isCancelled() { throw .cancelled }
       let count = lighten_bulk_read(fd, buffer, bufferSize, entries, Int32(capacity))
@@ -89,12 +90,14 @@ public final class DirectoryReader {
       if count == 0 { return }
       if count < 0 {
         let code = errno
-        if code == ENOTSUP || code == EINVAL {
+        // Fall back only before any batch was delivered, so no entry is visited twice.
+        if batches == 0 && (code == ENOTSUP || code == EINVAL) {
           try readWithStat(fd: fd, isCancelled: isCancelled, visit: visit)
           return
         }
         throw .read(code)
       }
+      batches += 1
       counters.entries.add(Int(count), ordering: .relaxed)
       for index in 0..<Int(count) {
         let raw = entries[index]
@@ -103,9 +106,13 @@ public final class DirectoryReader {
             start: buffer.advanced(by: Int(raw.name_offset)), count: Int(raw.name_length)),
           as: UTF8.self)
         if name == "." || name == ".." { continue }
+        // Missing flags could hide a dataless folder; a file without sizes or a
+        // link count cannot be summed or deduplicated. Either is an entry error.
+        let common = UInt32(LIGHTEN_HAS_KIND | LIGHTEN_HAS_FILE_ID | LIGHTEN_HAS_DEVICE | LIGHTEN_HAS_FLAGS)
+        let sized = UInt32(LIGHTEN_HAS_LOGICAL | LIGHTEN_HAS_ALLOCATED | LIGHTEN_HAS_LINK_COUNT)
+        let isDirectory = Int(raw.kind) == Int(LIGHTEN_OBJ_DIRECTORY)
         let complete =
-          raw.returned & UInt32(LIGHTEN_HAS_KIND) != 0 && raw.returned & UInt32(LIGHTEN_HAS_FILE_ID) != 0
-          && raw.returned & UInt32(LIGHTEN_HAS_DEVICE) != 0
+          raw.returned & common == common && (isDirectory || raw.returned & sized == sized)
         visit(
           RawEntry(
             name: name, kind: Self.kind(raw.kind), device: UInt64(raw.device), inode: raw.file_id,

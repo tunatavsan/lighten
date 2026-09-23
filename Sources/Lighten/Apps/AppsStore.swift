@@ -300,17 +300,23 @@ final class AppsStore {
         selectedDataPath == dataPath, packageSelected == includePackage, !task.isCancelled,
         !actions.busy
       else { return }
-      if includePackage, let bundleID = report.bundleID, await running.isRunning(bundleID: bundleID) != false {
-        message = String(localized: "The app is running. Quit it first.")
-        return
+      if includePackage {
+        guard let appItem = plan.items.first(where: { $0.policy == .wholeBundle }),
+          let bundleID = appItem.applicationBundleID, bundleID == report.bundleID
+        else {
+          message = SpaceText.rejection(PlanRejection(.changedSinceScan, path: report.path))
+          return
+        }
+        for id in [bundleID] + (appItem.nestedApplicationIDs ?? [])
+        where await running.isRunning(bundleID: id) != false {
+          message = String(localized: "The app is running. Quit it first.")
+          return
+        }
       }
       let summaries = plan.items.map { item -> ActionItemSummary in
         let isPackage = item.policy == .wholeBundle
         let node = candidate?.snapshot?.nodes.first { $0.id == item.id }
-        var logical: Int64 = 0
-        for entry in item.inventory where entry.identity?.kind != .directory {
-          logical &+= entry.identity?.logicalBytes ?? 0
-        }
+        let logical = PlanItemSize.measure(item).logical
         return ActionItemSummary(
           id: item.id,
           label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,

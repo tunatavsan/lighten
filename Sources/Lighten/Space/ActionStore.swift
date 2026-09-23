@@ -16,7 +16,7 @@ struct BasketEntry: Sendable, Equatable {
   let label: String
   let device: UInt64
   let inode: UInt64
-  let logicalBytes: Int64
+  let logical: ByteAggregate
 }
 
 struct ActionPresentation: Identifiable, Sendable {
@@ -62,15 +62,23 @@ final class ActionStore {
   func add(_ item: SpaceItem) {
     guard item.canSelect else { return }
     basket[item.path] = BasketEntry(
-      path: item.path, label: item.name, device: item.device, inode: item.inode,
-      logicalBytes: item.logical.completeTotal ?? item.logical.knownLowerBound)
+      path: item.path, label: item.name, device: item.device, inode: item.inode, logical: item.logical)
   }
 
   func remove(_ path: String) { basket.removeValue(forKey: path) }
   func clearBasket() { basket = [:] }
 
-  var basketLogicalBytes: Int64 {
-    basket.values.reduce(0) { $0 + $1.logicalBytes }
+  /// Items inside another basket item are counted once, through their ancestor;
+  /// any incomplete size makes the total a known minimum.
+  var basketLogical: ByteAggregate {
+    let entries = basket.values
+    var total: Int64 = 0
+    var complete = true
+    for entry in entries where !entries.contains(where: { entry.path.hasPrefix($0.path + "/") }) {
+      total &+= entry.logical.completeTotal ?? entry.logical.knownLowerBound
+      complete = complete && entry.logical.completeTotal != nil
+    }
+    return ByteAggregate(knownLowerBound: total, completeTotal: complete ? total : nil)
   }
 
   var pendingTrashLogicalBytes: Int64 {
@@ -96,12 +104,7 @@ final class ActionStore {
         let plan = try PlanService().makeSpacePlan(
           selections: selections, scanRootPath: scanRoot, runID: runID ?? UUID())
         let summary = plan.items.map { item in
-          var logical: Int64 = 0
-          var allocated: Int64 = 0
-          for entry in item.inventory where entry.identity?.kind != .directory {
-            logical &+= entry.identity?.logicalBytes ?? 0
-            allocated &+= entry.identity?.allocatedBytes ?? 0
-          }
+          let (logical, allocated) = PlanItemSize.measure(item)
           return ActionItemSummary(
             id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
             path: item.sourcePath, reason: reason, logicalBytes: logical, allocatedBytes: allocated)
@@ -116,8 +119,10 @@ final class ActionStore {
       var running: [PlanRejection] = []
       for item in plan.items {
         guard let bundleID = item.applicationBundleID else { continue }
-        if await MacOSRunningApplicationSource().isRunning(bundleID: bundleID) != false {
+        for id in [bundleID] + (item.nestedApplicationIDs ?? [])
+        where await MacOSRunningApplicationSource().isRunning(bundleID: id) != false {
           running.append(PlanRejection(.applicationRunning, path: item.sourcePath))
+          break
         }
       }
       guard running.isEmpty else {

@@ -336,3 +336,49 @@ func identifierlessAndWrappedApps() throws {
   try FileManager.default.createDirectory(atPath: fixture.appRoot + "/Empty.app", withIntermediateDirectories: true)
   #expect(!fixture.service.inventory().complete)
 }
+
+private struct SelectiveRunning: RunningApplicationSource {
+  let running: Set<String>
+  func isRunning(bundleID: String) async -> Bool? { running.contains(bundleID) }
+}
+
+@Test("A whole app moves only when it and every nested app are closed, then Undo restores it")
+func wholeApplicationMovesWhenClosed() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let helper = fixture.app + "/Contents/Helpers/Agent.app/Contents"
+  try FileManager.default.createDirectory(atPath: helper, withIntermediateDirectories: true)
+  try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": "com.example.agent"], format: .xml, options: 0
+  )
+  .write(to: URL(fileURLWithPath: helper + "/Info.plist"))
+  let identity = try DescriptorFileSystem.identity(at: fixture.app)
+  func plan() throws -> ActionPlan {
+    try PlanService(homeDirectory: fixture.home).makeSpacePlan(
+      selections: [PlanService.Selection(path: fixture.app, device: identity.device, inode: identity.inode)],
+      scanRootPath: fixture.appRoot, runID: UUID())
+  }
+  let first = try plan()
+  #expect(first.items.first?.nestedApplicationIDs == ["com.example.agent"])
+  let journal = JSONLActionJournal(path: fixture.home + "/Journal/actions.jsonl")
+  let blocked = try await ActionExecutor(
+    journal: journal, trash: AppsTrash(destination: fixture.trash),
+    guardService: ActionGuard(homeDirectory: fixture.home), related: fixture.service,
+    runningApplications: SelectiveRunning(running: ["com.example.agent"])
+  ).execute(first)
+  #expect(blocked.items.first?.outcome == .skipped)
+  #expect(FileManager.default.fileExists(atPath: fixture.app))
+
+  let second = try plan()
+  let moved = try await ActionExecutor(
+    journal: journal, trash: AppsTrash(destination: fixture.trash),
+    guardService: ActionGuard(homeDirectory: fixture.home), related: fixture.service,
+    runningApplications: SelectiveRunning(running: [])
+  ).execute(second)
+  #expect(moved.items.first?.outcome == .applied)
+  #expect(!FileManager.default.fileExists(atPath: fixture.app))
+  let history = ActionHistory(journal: journal)
+  let item = try #require(try await history.reconcile().items.first { $0.planID == second.id })
+  try await history.undo(planID: item.planID, itemID: item.itemID)
+  #expect(FileManager.default.fileExists(atPath: fixture.app + "/Contents/Info.plist"))
+}

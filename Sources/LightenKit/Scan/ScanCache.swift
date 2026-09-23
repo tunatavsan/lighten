@@ -109,7 +109,8 @@ public struct ScanCache: Sendable {
         let kindRaw = reader.u8(), let kind = NodeKind(rawValue: kindRaw), let rule = reader.optionalString(),
         let reasonRaw = reader.u8(), let partialDescendant = reader.u8(), let device = reader.u64(),
         let inode = reader.u64(), let logical = reader.i64(), let allocated = reader.i64(), let items = reader.i64(),
-        let childCount = reader.u32(), Int(parent) < Int(count)
+        let childCount = reader.u32(),
+        storage.nodes.isEmpty ? parent == -1 : (parent >= 0 && Int(parent) < storage.nodes.count)
       else { return nil }
       var node = ScanTree.Node(name: name, parent: parent, kind: kind, device: device, inode: inode)
       node.pathOverride = override
@@ -121,7 +122,8 @@ public struct ScanCache: Sendable {
       node.allocated = allocated
       node.items = items
       for _ in 0..<childCount {
-        guard let child = reader.i32(), child > 0, Int(child) < Int(count) else { return nil }
+        // Children always come after their parent, so the tree cannot contain a cycle.
+        guard let child = reader.i32(), Int(child) > storage.nodes.count, Int(child) < Int(count) else { return nil }
         node.childNodes.append(child)
       }
       guard let fileCount = reader.u32(), fileCount <= UInt32(ScanTree.filesPerDirectory) else { return nil }

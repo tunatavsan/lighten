@@ -18,12 +18,15 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   public let policy: TreePolicy?
   /// Bundle identifier of a whole application moved to the Trash; it must not be running.
   public let applicationBundleID: String?
+  /// Applications nested inside that application; none of them may be running either.
+  public let nestedApplicationIDs: [String]?
 
   public init(
     id: UUID, sourcePath: String, volumeID: UUID? = nil,
     inventory: [ScanEntry], ancestors: [PathIdentity], catalogProof: CatalogProof? = nil,
     relatedProof: RelatedProof? = nil, installedRelatedProof: InstalledRelatedProof? = nil,
-    duplicateProof: DuplicateProof? = nil, policy: TreePolicy? = nil, applicationBundleID: String? = nil
+    duplicateProof: DuplicateProof? = nil, policy: TreePolicy? = nil, applicationBundleID: String? = nil,
+    nestedApplicationIDs: [String]? = nil
   ) {
     self.id = id
     self.sourcePath = sourcePath
@@ -36,6 +39,7 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     self.duplicateProof = duplicateProof
     self.policy = policy
     self.applicationBundleID = applicationBundleID
+    self.nestedApplicationIDs = nestedApplicationIDs
   }
 }
 
@@ -181,17 +185,21 @@ public struct PlanService: Sendable {
         let result = try inventory.collect(
           rootPath: root.path, expected: (root.device, root.inode), isCancelled: isCancelled)
         var bundleID: String?
-        if result.policy == .wholeBundle, root.path.lowercased().hasSuffix(".app") {
+        if result.policy == .wholeBundle {
           bundleID = ApplicationIdentity.bundleIdentifier(ofApplicationAt: root.path)
           guard let bundleID else { throw PlanRejection(.missingMetadata, path: root.path) }
-          if bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame {
+          let identifiers = [bundleID] + result.nestedApplicationIDs
+          if identifiers.contains(where: {
+            $0.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
+          }) {
             throw PlanRejection(.lightenItself, path: root.path)
           }
         }
         items.append(
           PlanItem(
             id: result.entries[0].id, sourcePath: root.path, volumeID: result.volumeID, inventory: result.entries,
-            ancestors: result.ancestors, policy: result.policy, applicationBundleID: bundleID))
+            ancestors: result.ancestors, policy: result.policy, applicationBundleID: bundleID,
+            nestedApplicationIDs: result.policy == .wholeBundle ? result.nestedApplicationIDs : nil))
       } catch {
         rejections.append(error)
       }

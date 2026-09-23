@@ -15,6 +15,8 @@ public struct ProtectionAutomaton: Sendable {
   }
 
   private let rules: [Rule]
+  /// Rules the automaton cannot compile; callers with a path check them directly.
+  public let uncompiled: [NeverRule]
   public let initial: State
 
   public init(rules: [NeverRule] = NeverRule.all, homeDirectory: String) {
@@ -36,6 +38,7 @@ public struct ProtectionAutomaton: Sendable {
       return Rule(rule: rule, components: parts)
     }
     self.rules = compiled
+    self.uncompiled = rules.filter { rule in !compiled.contains { $0.rule.id == rule.id } }
     self.initial = State(positions: compiled.map { Self.closure(1, $0.components) })
   }
 
@@ -85,6 +88,15 @@ public struct ProtectionAutomaton: Sendable {
       let accept: UInt64 = 1 << UInt64(rules[index].components.count)
       return state.positions[index] & accept != 0 ? rules[index].rule : nil
     }
+  }
+
+  /// `matches` plus any uncompiled rule matching `path`, so no rule fails open.
+  public func matches(_ state: State, path: String, homeDirectory: String) -> [NeverRule] {
+    var result = matches(state)
+    for rule in uncompiled where ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory)?.id == rule.id {
+      result.append(rule)
+    }
+    return result
   }
 
   /// True when no rule can accept this state or any descendant state.

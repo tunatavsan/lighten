@@ -532,7 +532,7 @@ struct SpaceView: View {
         Image(systemName: "basket").foregroundStyle(LightenStyle.accent)
         Text("\(String(localized: "Basket")): \(actions.basket.count)")
           .font(.system(size: 13, weight: .semibold))
-        Text(format(actions.basketLogicalBytes))
+        Text(sizeLabel(actions.basketLogical))
           .font(.system(size: 13, weight: .medium)).monospacedDigit()
         if actions.busy { ProgressView().controlSize(.small) }
         Spacer()

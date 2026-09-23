@@ -69,6 +69,12 @@ public struct ExactInventory: Sendable {
     public let policy: TreePolicy
     public let volumeID: UUID
     public let ancestors: [PathIdentity]
+    /// Identifiers of applications nested inside a whole application root.
+    public let nestedApplicationIDs: [String]
+  }
+
+  static func isApplicationName(_ path: String) -> Bool {
+    path.lowercased(with: Locale(identifier: "en_US_POSIX")).hasSuffix(".app")
   }
 
   /// Home folders whose removal would take whole categories of user data.
@@ -118,8 +124,10 @@ public struct ExactInventory: Sendable {
     do { ancestors = try DescriptorFileSystem.ancestorIdentities(of: rootPath) } catch {
       throw PlanRejection(.changedSinceScan, path: rootPath)
     }
-    let wholeBundle = root.kind == .directory && ScanService.isPackage(rootPath)
+    // Only a whole application skips the application-slice and localization rules.
+    let wholeBundle = root.kind == .directory && Self.isApplicationName(rootPath)
     let policy: TreePolicy = wholeBundle ? .wholeBundle : .spaceTrash
+    var nested: [String] = []
     let rootEntry = ScanEntry(parentID: nil, path: rootPath, identity: root, issues: [], readable: true)
     var entries = [rootEntry]
     if root.kind == .directory {
@@ -127,15 +135,16 @@ public struct ExactInventory: Sendable {
       try walk(
         path: rootPath, parentID: rootEntry.id, identity: root, rootDevice: root.device,
         rootPath: rootPath, policy: policy, automaton: automaton,
-        state: automaton.state(forPath: rootPath), entries: &entries, isCancelled: isCancelled)
+        state: automaton.state(forPath: rootPath), entries: &entries, nested: &nested, isCancelled: isCancelled)
     }
-    return Result(entries: entries, policy: policy, volumeID: volumeID, ancestors: ancestors)
+    return Result(
+      entries: entries, policy: policy, volumeID: volumeID, ancestors: ancestors, nestedApplicationIDs: nested)
   }
 
   private func walk(
     path: String, parentID: UUID, identity: FileIdentity, rootDevice: UInt64, rootPath: String,
     policy: TreePolicy, automaton: ProtectionAutomaton, state: ProtectionAutomaton.State,
-    entries: inout [ScanEntry], isCancelled: @Sendable () -> Bool
+    entries: inout [ScanEntry], nested: inout [String], isCancelled: @Sendable () -> Bool
   ) throws(PlanRejection) {
     if isCancelled() { throw PlanRejection(.unavailable, path: path) }
     let names: [String]
@@ -155,14 +164,15 @@ public struct ExactInventory: Sendable {
       }
       let child = DescriptorFileSystem.identity(from: details)
       let childState = automaton.step(state, name)
-      let rules = automaton.matches(childState)
+      let rules = automaton.matches(childState, path: childPath, homeDirectory: homeDirectory)
       if let rule = rules.first,
         !(policy == .wholeBundle && rules.allSatisfy { Self.applicationRules.contains($0.id) })
       {
-        let reason: RejectionReason =
-          Self.applicationRules.contains(rule.id) ? .containsApplication : .containsProtectedItem
-        let culprit = reason == .containsApplication ? Self.enclosingPackage(of: childPath, below: rootPath) : childPath
-        throw PlanRejection(reason, path: culprit, ruleID: rule.id)
+        let package = Self.enclosingPackage(of: childPath, below: rootPath)
+        let inApplication = Self.applicationRules.contains(rule.id) && Self.isApplicationName(package)
+        throw PlanRejection(
+          inApplication ? .containsApplication : .containsProtectedItem,
+          path: inApplication ? package : childPath, ruleID: rule.id)
       }
       if child.device != rootDevice { throw PlanRejection(.mountPoint, path: childPath) }
       if child.flags & UInt32(SF_DATALESS | UF_DATAVAULT) != 0 { throw PlanRejection(.cloudItem, path: childPath) }
@@ -174,9 +184,17 @@ public struct ExactInventory: Sendable {
       case .other: throw PlanRejection(.specialFile, path: childPath)
       case .symbolicLink, .regular: continue
       case .directory:
+        if policy == .wholeBundle, Self.isApplicationName(name) {
+          // A nested app (a helper or bundled tool) must also be closed before the move.
+          guard let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: childPath) else {
+            throw PlanRejection(.missingMetadata, path: childPath)
+          }
+          nested.append(id)
+        }
         try walk(
           path: childPath, parentID: entry.id, identity: child, rootDevice: rootDevice, rootPath: rootPath,
-          policy: policy, automaton: automaton, state: childState, entries: &entries, isCancelled: isCancelled)
+          policy: policy, automaton: automaton, state: childState, entries: &entries, nested: &nested,
+          isCancelled: isCancelled)
       }
     }
   }
