@@ -79,6 +79,14 @@ public struct ProtectionAutomaton: Sendable {
     return nil
   }
 
+  /// Every rule accepting this exact state, in `NeverRule.all` order.
+  public func matches(_ state: State) -> [NeverRule] {
+    rules.indices.compactMap { index in
+      let accept: UInt64 = 1 << UInt64(rules[index].components.count)
+      return state.positions[index] & accept != 0 ? rules[index].rule : nil
+    }
+  }
+
   /// True when no rule can accept this state or any descendant state.
   public func isInert(_ state: State) -> Bool {
     state.positions.allSatisfy { $0 == 0 }

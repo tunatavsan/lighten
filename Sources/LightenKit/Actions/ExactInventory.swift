@@ -155,9 +155,9 @@ public struct ExactInventory: Sendable {
       }
       let child = DescriptorFileSystem.identity(from: details)
       let childState = automaton.step(state, name)
-      if let rule = automaton.match(childState),
-        !(policy == .wholeBundle && Self.applicationRules.contains(rule.id)
-          && ActionGuard.onlyApplicationRules(childPath, homeDirectory: homeDirectory))
+      let rules = automaton.matches(childState)
+      if let rule = rules.first,
+        !(policy == .wholeBundle && rules.allSatisfy { Self.applicationRules.contains($0.id) })
       {
         let reason: RejectionReason =
           Self.applicationRules.contains(rule.id) ? .containsApplication : .containsProtectedItem

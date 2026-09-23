@@ -39,8 +39,8 @@ struct DescriptorScan {
       state: ProtectionAutomaton.State, open: () -> Int32
     ) throws {
       try Task.checkCancellation()
-      let protected =
-        automaton.match(state) != nil || ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory) != nil
+      // The automaton matches the same rules case-folded, a superset of ProtectionPolicy.
+      let protected = automaton.match(state) != nil
       let found = issues(path: path, identity: identity, readable: readable, protected: protected)
       let id = UUID()
       entries.append(

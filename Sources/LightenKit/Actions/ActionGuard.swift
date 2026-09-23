@@ -64,7 +64,17 @@ public struct ActionGuard: Sendable {
       knownPaths.count == item.inventory.count,
       entriesByID.count == item.inventory.count
     else { throw GuardFailure.changedInventory }
+    // Protection states follow the inventory's parent chain, one name at a time.
+    let automaton = ProtectionAutomaton(homeDirectory: homeDirectory)
+    var states: [UUID: ProtectionAutomaton.State] = [:]
     for entry in item.inventory {
+      let state: ProtectionAutomaton.State
+      if let parentID = entry.parentID, entry.id != item.id, let parentState = states[parentID] {
+        state = automaton.step(parentState, (entry.path as NSString).lastPathComponent)
+      } else {
+        state = automaton.state(forPath: entry.path)
+      }
+      states[entry.id] = state
       if let parentID = entry.parentID, entry.id != item.id {
         guard let parent = entriesByID[parentID],
           entry.path == parent.path + "/" + (entry.path as NSString).lastPathComponent
@@ -75,12 +85,13 @@ public struct ActionGuard: Sendable {
       else {
         throw GuardFailure.unsupportedItem
       }
-      if let rule = ProtectionPolicy.rule(for: entry.path, homeDirectory: homeDirectory) {
+      // Case-folded matching covers ProtectionPolicy's exact and alias checks.
+      let rules = automaton.matches(state)
+      if !rules.isEmpty {
         // Whole-bundle exception: only beneath a package that is itself the operation root.
         let exempt =
           policy == .wholeBundle && entry.id != item.id && entry.path.hasPrefix(item.sourcePath + "/")
-          && ExactInventory.applicationRules.contains(rule.id)
-          && Self.onlyApplicationRules(entry.path, homeDirectory: homeDirectory)
+          && rules.allSatisfy { ExactInventory.applicationRules.contains($0.id) }
         if !exempt { throw GuardFailure.protectedItem }
       }
       // Tree policies move symlinks as leaves (never followed) and packages as contents.
@@ -105,20 +116,6 @@ public struct ActionGuard: Sendable {
         let planned = (childrenByParent[entry.id] ?? []).map(\.1).sorted()
         guard names == planned else { throw GuardFailure.changedInventory }
       }
-    }
-  }
-}
-
-extension ActionGuard {
-  /// True when every NeverRule matching `path` is one of the application-bundle rules.
-  static func onlyApplicationRules(_ path: String, homeDirectory: String) -> Bool {
-    let locale = Locale(identifier: "en_US_POSIX")
-    let folded = path.lowercased(with: locale)
-    let home = homeDirectory.lowercased(with: locale)
-    return NeverRule.all.allSatisfy { rule in
-      ExactInventory.applicationRules.contains(rule.id)
-        || (!PathPattern(rule.pattern, homeDirectory: homeDirectory).matches(path)
-          && !PathPattern(rule.pattern.lowercased(with: locale), homeDirectory: home).matches(folded))
     }
   }
 }
