@@ -101,13 +101,19 @@ public actor ActionExecutor {
     guard !busy else { throw ExecutionFailure.alreadyRunning }
     busy = true
     defer { busy = false }
+    // Signature and entitlement reads happen before the journal is leased.
+    // Inside the lease only these exact selected-owner identities can be used.
+    let related = self.related
+    let preparedOwners = await Task.detached(priority: .utility) {
+      related.prepareInstalledOwners(plan: plan)
+    }.value
     return try await journal.withMutationLease {
-      try await self.executeLeased(plan, confirmation: confirmation)
+      try await self.executeLeased(plan, confirmation: confirmation, preparedOwners: preparedOwners)
     }
   }
 
   private func executeLeased(
-    _ plan: ActionPlan, confirmation: IrreversibleConfirmation?
+    _ plan: ActionPlan, confirmation: IrreversibleConfirmation?, preparedOwners: InstalledOwnerPreparation
   ) async throws -> ActionResult {
     guard plan.schema == 1, !plan.items.isEmpty,
       Set(plan.items.map(\.id)).count == plan.items.count,
@@ -156,7 +162,7 @@ public actor ActionExecutor {
         $0.kind == .intent && $0.planID == plan.id
       })
     else { throw ExecutionFailure.planAlreadyUsed }
-    var preparationFailures: [UUID: String] = [:]
+    var preparationFailures = preparedOwners.failures
     var ownerFailures: [String: String] = [:]
     var ownerPackages: [String: PlanItem] = [:]
     let installedItems = plan.items.filter { $0.installedRelatedProof != nil }
@@ -205,7 +211,11 @@ public actor ActionExecutor {
           throw SpaceValidationFailure(detail: detail)
         }
         if let detail = ownerFailures[item.sourcePath] { throw SpaceValidationFailure(detail: detail) }
-        if item.installedRelatedProof != nil { try related.validateInstalled(item, plan: plan) }
+        if item.installedRelatedProof != nil {
+          if let failure = preparedOwners.failures[item.id] { throw SpaceValidationFailure(detail: failure) }
+          guard let prepared = preparedOwners.owners[item.id] else { throw RelatedFailure.changedItem }
+          try guardService.validate(item, plan: plan, preparedOwner: prepared)
+        }
         if item.policy == .spaceTrash || item.policy == .wholeBundle {
           let refreshed = try guardService.refreshedSpaceItem(item)
           try await validateApplication(refreshed)
@@ -245,7 +255,8 @@ public actor ActionExecutor {
         }
         if let proof = item.installedRelatedProof {
           if let detail = ownerFailures[proof.appPath] { throw SpaceValidationFailure(detail: detail) }
-          try await validateInstalledData(item, plan: executionPlan, packages: ownerPackages, moved: movedOwners)
+          try await validateInstalledData(
+            item, plan: executionPlan, packages: ownerPackages, moved: movedOwners, preparedOwners: preparedOwners)
         }
         if let proof = item.orphanRelatedProof {
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
@@ -257,8 +268,9 @@ public actor ActionExecutor {
         }
         try await validateApplication(item)
         try await validateSpaceActivity(item)
-        if let owner = item.installedRelatedProof.flatMap({ movedOwners[$0.appPath] }) {
-          try guardService.validate(item, planID: plan.id, movedOwner: owner)
+        if let proof = item.installedRelatedProof {
+          guard let prepared = preparedOwners.owners[item.id] else { throw RelatedFailure.changedItem }
+          try guardService.validate(item, plan: plan, preparedOwner: prepared, movedOwner: movedOwners[proof.appPath])
         } else {
           try guardService.validate(item)
         }
@@ -272,7 +284,8 @@ public actor ActionExecutor {
         }
         if let proof = item.installedRelatedProof {
           if let detail = ownerFailures[proof.appPath] { throw SpaceValidationFailure(detail: detail) }
-          try await validateInstalledData(item, plan: executionPlan, packages: ownerPackages, moved: movedOwners)
+          try await validateInstalledData(
+            item, plan: executionPlan, packages: ownerPackages, moved: movedOwners, preparedOwners: preparedOwners)
         }
         if let proof = item.orphanRelatedProof {
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
@@ -284,8 +297,9 @@ public actor ActionExecutor {
         }
         try await validateApplication(item)
         try await validateSpaceActivity(item)
-        if let owner = item.installedRelatedProof.flatMap({ movedOwners[$0.appPath] }) {
-          try guardService.validate(item, planID: plan.id, movedOwner: owner)
+        if let proof = item.installedRelatedProof {
+          guard let prepared = preparedOwners.owners[item.id] else { throw RelatedFailure.changedItem }
+          try guardService.validate(item, plan: plan, preparedOwner: prepared, movedOwner: movedOwners[proof.appPath])
         } else {
           try guardService.validate(item)
         }
@@ -436,27 +450,27 @@ public actor ActionExecutor {
   }
 
   private func validateInstalledData(
-    _ item: PlanItem, plan: ActionPlan, packages: [String: PlanItem], moved: [String: MovedApplicationOwner]
+    _ item: PlanItem, plan: ActionPlan, packages: [String: PlanItem], moved: [String: MovedApplicationOwner],
+    preparedOwners: InstalledOwnerPreparation
   ) async throws {
-    guard let proof = item.installedRelatedProof, let package = packages[proof.appPath] else {
+    guard let proof = item.installedRelatedProof, let package = packages[proof.appPath],
+      let prepared = preparedOwners.owners[item.id]
+    else {
       throw RelatedFailure.changedItem
     }
     guard await runningApplications.isRunning(bundleID: proof.bundleID) == false else {
       throw RelatedFailure.runningOrUnknown
     }
     if let owner = moved[proof.appPath] {
-      let mapped = try owner.mapped(item, planID: plan.id)
       try await validateApplication(owner.movedPackage)
-      try related.validateInstalled(mapped, plan: plan)
-      try guardService.validate(item, planID: plan.id, movedOwner: owner)
+      try guardService.validate(item, plan: plan, preparedOwner: prepared, movedOwner: owner)
     } else {
       // Related-data-only selections still require a fresh, movable package.
       try guardService.validate(package)
-      let app = InstalledApplication(bundleID: proof.bundleID, path: proof.appPath, version: nil)
-      _ = try related.packagePlan(app: app)
+      guard RelatedDataService.currentUserOwns(package.sourcePath) else { throw RelatedFailure.changedItem }
       try await validateApplication(package)
       try await validateSpaceActivity(package)
-      try related.validateInstalled(item, plan: plan)
+      try guardService.validate(item, plan: plan, preparedOwner: prepared)
     }
   }
 

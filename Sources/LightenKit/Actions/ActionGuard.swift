@@ -18,7 +18,21 @@ public struct ActionGuard: Sendable {
     try validate(mapped)
   }
 
+  func validate(
+    _ item: PlanItem, plan: ActionPlan, preparedOwner: PreparedInstalledOwner,
+    movedOwner: MovedApplicationOwner? = nil
+  ) throws {
+    try preparedOwner.validate(item, plan: plan, movedOwner: movedOwner)
+    if let movedOwner { try validate(movedOwner.movedPackage) }
+    let mapped = try movedOwner?.mapped(item, planID: plan.id) ?? item
+    try validate(mapped, installedScopePrepared: true)
+  }
+
   public func validate(_ item: PlanItem) throws {
+    try validate(item, installedScopePrepared: false)
+  }
+
+  private func validate(_ item: PlanItem, installedScopePrepared: Bool) throws {
     let policy = item.policy
     let relatedPolicy = policy == .relatedTrash || policy == .relatedContainer || policy == .relatedGroupContainer
     if relatedPolicy {
@@ -26,12 +40,16 @@ public struct ActionGuard: Sendable {
         [item.relatedProof != nil, item.installedRelatedProof != nil, item.orphanRelatedProof != nil]
           .filter({ $0 }).count == 1
       else { throw GuardFailure.unsupportedItem }
-      let related = RelatedDataService(homeDirectory: homeDirectory, writeVerifiedReceipts: false)
-      let run =
-        item.snapshotRunID ?? item.installedRelatedProof?.snapshotRunID
-        ?? item.relatedProof?.snapshotRunID ?? item.orphanRelatedProof?.snapshotRunID ?? UUID()
-      let plan = ActionPlan(snapshotRunID: run, kind: .trash, items: [item])
-      do { try related.validateScope(item, plan: plan) } catch { throw GuardFailure.unsupportedItem }
+      if !installedScopePrepared {
+        let related = RelatedDataService(homeDirectory: homeDirectory, writeVerifiedReceipts: false)
+        let run =
+          item.snapshotRunID ?? item.installedRelatedProof?.snapshotRunID
+          ?? item.relatedProof?.snapshotRunID ?? item.orphanRelatedProof?.snapshotRunID ?? UUID()
+        let plan = ActionPlan(snapshotRunID: run, kind: .trash, items: [item])
+        do { try related.validateScope(item, plan: plan) } catch { throw GuardFailure.unsupportedItem }
+      } else {
+        guard item.installedRelatedProof != nil else { throw GuardFailure.unsupportedItem }
+      }
       guard let (location, _) = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory),
         policy
           == (location == .containers

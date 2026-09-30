@@ -33,8 +33,7 @@ public enum RelatedClassification: String, Sendable {
 public enum RelatedReason: String, Sendable {
   case candidateAreaUnreadable, recordUnsafe, protected, installed
   case incompleteInventory, recordUnavailable, historicallyVerified, nameOnly
-  case sharedGroup, installedElsewhere, orphanVerified, foreignOwner, mediumMatch,
-    ownershipUnavailable
+  case sharedGroup, installedElsewhere, orphanVerified, foreignOwner, mediumMatch, ownershipUnavailable
 }
 
 public struct RelatedDataCandidate: Sendable, Identifiable {
@@ -120,7 +119,10 @@ public struct RelatedDataService: Sendable {
   /// Trash. A known app elsewhere keeps its data from being called a leftover.
   private let installedElsewhere: @Sendable (String) -> Bool
   private let packageActivity: @Sendable (String) -> ApplicationActivity
-  private let signingMetadata: @Sendable (String) -> ApplicationSigningMetadata?
+  private let signatureCache: ApplicationSignatureCache
+  private func signingMetadata(_ path: String) -> ApplicationSigningMetadata? {
+    signatureCache.metadata(at: path)
+  }
 
   /// Disable receipt writes for read-only observations. Existing receipts are
   /// still read and validated; this option does not change action authority.
@@ -131,11 +133,10 @@ public struct RelatedDataService: Sendable {
   ) {
     self.homeDirectory = homeDirectory
     self.applicationRoots = ["/Applications", homeDirectory + "/Applications"]
-    self.ownershipRoots =
-      self.applicationRoots + ["/System/Applications", "/System/Library/CoreServices"]
+    self.ownershipRoots = self.applicationRoots + ["/System/Applications", "/System/Library/CoreServices"]
     self.writeVerifiedReceipts = writeVerifiedReceipts
     self.installedElsewhere = installedElsewhere ?? ApplicationRegistration.isInstalled
-    self.signingMetadata = ApplicationSigningMetadata.read
+    self.signatureCache = .native
     self.packageActivity = NativeApplicationActivitySource.observe
   }
 
@@ -143,17 +144,15 @@ public struct RelatedDataService: Sendable {
     homeDirectory: String, applicationRoots: [String], ownershipApplicationRoots: [String]? = nil,
     writeVerifiedReceipts: Bool = true,
     installedElsewhere: @escaping @Sendable (String) -> Bool = { _ in false },
-    signingMetadata: @escaping @Sendable (String) -> ApplicationSigningMetadata? =
-      ApplicationSigningMetadata.read,
-    packageActivity: @escaping @Sendable (String) -> ApplicationActivity =
-      NativeApplicationActivitySource.observe
+    signingMetadata: @escaping @Sendable (String) -> ApplicationSigningMetadata? = ApplicationSigningMetadata.read,
+    packageActivity: @escaping @Sendable (String) -> ApplicationActivity = NativeApplicationActivitySource.observe
   ) {
     self.homeDirectory = homeDirectory
     self.applicationRoots = applicationRoots
     self.ownershipRoots = ownershipApplicationRoots ?? applicationRoots
     self.writeVerifiedReceipts = writeVerifiedReceipts
     self.installedElsewhere = installedElsewhere
-    self.signingMetadata = signingMetadata
+    self.signatureCache = ApplicationSignatureCache(reader: signingMetadata)
     self.packageActivity = packageActivity
   }
 
@@ -220,8 +219,7 @@ public struct RelatedDataService: Sendable {
             unidentifiedPaths.append(path)
             continue
           }
-          guard let bundleID = dict["CFBundleIdentifier"] as? String, Self.validBundleID(bundleID)
-          else {
+          guard let bundleID = dict["CFBundleIdentifier"] as? String, Self.validBundleID(bundleID) else {
             // A readable bundle that declares no identifier cannot own a data
             // folder named by one, and receipts come only from identified apps,
             // so it is listed without making the inventory incomplete.
@@ -244,9 +242,7 @@ public struct RelatedDataService: Sendable {
     }
     for root in applicationRoots {
       let rootIdentity: FileIdentity
-      do {
-        rootIdentity = try DescriptorFileSystem.identity(at: root)
-      } catch FileSystemFailure.systemCall(_, let code)
+      do { rootIdentity = try DescriptorFileSystem.identity(at: root) } catch FileSystemFailure.systemCall(_, let code)
         where code == ENOENT
       {
         continue
@@ -265,8 +261,7 @@ public struct RelatedDataService: Sendable {
     let owners = ApplicationOwnershipInventory.collect(roots: ownershipRoots, applications: apps)
     return BundleInventory(
       applications: apps, unidentifiedPaths: unidentifiedPaths,
-      complete: complete && owners.complete, observedAt: Date(),
-      ownershipCandidates: owners.candidates)
+      complete: complete && owners.complete, observedAt: Date(), ownershipCandidates: owners.candidates)
   }
 
   /// A link resolving to a regular file (a document or script) cannot be an app.
@@ -281,17 +276,12 @@ public struct RelatedDataService: Sendable {
   /// Info.plist of a Mac bundle, or of the single app inside an iOS wrapper.
   static func infoPlistPath(ofBundleAt path: String) -> String {
     let mac = path + "/Contents/Info.plist"
-    if (try? DescriptorFileSystem.identity(at: path + "/Contents"))?.kind == .directory {
-      return mac
-    }
+    if (try? DescriptorFileSystem.identity(at: path + "/Contents"))?.kind == .directory { return mac }
     let wrapper = path + "/Wrapper"
-    guard let identity = try? DescriptorFileSystem.identity(at: wrapper),
-      identity.kind == .directory,
+    guard let identity = try? DescriptorFileSystem.identity(at: wrapper), identity.kind == .directory,
       let names = try? DescriptorFileSystem.children(at: wrapper, expected: identity)
     else { return mac }
-    let apps = names.filter {
-      $0.lowercased(with: Locale(identifier: "en_US_POSIX")).hasSuffix(".app")
-    }
+    let apps = names.filter { $0.lowercased(with: Locale(identifier: "en_US_POSIX")).hasSuffix(".app") }
     guard apps.count == 1 else { return mac }
     return wrapper + "/" + apps[0] + "/Info.plist"
   }
@@ -310,11 +300,8 @@ public struct RelatedDataService: Sendable {
       let dictionary = plist as? [String: Any],
       let bundleID = dictionary["CFBundleIdentifier"] as? String, validBundleID(bundleID)
     else { return nil }
-    let version =
-      (dictionary["CFBundleShortVersionString"] as? String)
-      ?? (dictionary["CFBundleVersion"] as? String)
-    return InstalledApplication(
-      bundleID: bundleID, path: path, version: version, linkTarget: target)
+    let version = (dictionary["CFBundleShortVersionString"] as? String) ?? (dictionary["CFBundleVersion"] as? String)
+    return InstalledApplication(bundleID: bundleID, path: path, version: version, linkTarget: target)
   }
 
   public func discover() async -> [RelatedDataCandidate] {
@@ -343,8 +330,7 @@ public struct RelatedDataService: Sendable {
     let hasGroupData =
       signatures.values.flatMap(\.groupIdentifiers).contains { domain in
         (try? DescriptorFileSystem.identity(
-          at: RelatedLocation.groupContainers.path(domain: domain, homeDirectory: homeDirectory)))
-          != nil
+          at: RelatedLocation.groupContainers.path(domain: domain, homeDirectory: homeDirectory))) != nil
       }
     if hasGroupData {
       for owner in apps.ownershipCandidates where owner.path != (app.linkTarget ?? app.path) {
@@ -365,8 +351,7 @@ public struct RelatedDataService: Sendable {
       let identity = try? DescriptorFileSystem.identity(at: path), identity.kind == .directory
     else { return nil }
     let infoPath = Self.infoPlistPath(ofBundleAt: path)
-    guard let infoIdentity = try? DescriptorFileSystem.identity(at: infoPath),
-      infoIdentity.kind == .regular,
+    guard let infoIdentity = try? DescriptorFileSystem.identity(at: infoPath), infoIdentity.kind == .regular,
       let data = try? SecureMetadataFile.read(path: infoPath, limit: 1024 * 1024, ownerOnly: false),
       let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
       let dictionary = plist as? [String: Any],
@@ -376,12 +361,11 @@ public struct RelatedDataService: Sendable {
     else { return nil }
     return InstalledApplication(
       bundleID: id, path: path,
-      version: (dictionary["CFBundleShortVersionString"] as? String)
-        ?? (dictionary["CFBundleVersion"] as? String))
+      version: (dictionary["CFBundleShortVersionString"] as? String) ?? (dictionary["CFBundleVersion"] as? String))
   }
 
-  private func inventory(including app: InstalledApplication) -> BundleInventory {
-    let current = inventory()
+  private func inventory(including app: InstalledApplication, base: BundleInventory? = nil) -> BundleInventory {
+    let current = base ?? inventory()
     guard !current.applications.contains(where: { $0.path == app.path }),
       app.linkTarget == nil, ExactInventory.isApplicationName(app.path),
       (try? DescriptorFileSystem.identity(at: app.path))?.kind == .directory,
@@ -435,16 +419,12 @@ public struct RelatedDataService: Sendable {
         }
         for domain in domains {
           let path = location.path(domain: domain, homeDirectory: homeDirectory)
-          if (try? DescriptorFileSystem.identity(at: path)) != nil {
-            paths.append((location, domain, path))
-          }
+          if (try? DescriptorFileSystem.identity(at: path)) != nil { paths.append((location, domain, path)) }
         }
         continue
       }
       let parentIdentity: FileIdentity
-      do {
-        parentIdentity = try DescriptorFileSystem.identity(at: parent)
-      } catch FileSystemFailure.systemCall(
+      do { parentIdentity = try DescriptorFileSystem.identity(at: parent) } catch FileSystemFailure.systemCall(
         _, let code) where code == ENOENT
       { continue } catch {
         candidates.append(
@@ -476,14 +456,12 @@ public struct RelatedDataService: Sendable {
           signatures[$0.path]?.groupIdentifiers.contains(domain) == true
         }.map(\.packagePath))
       let groupOwners = apps.applications.filter { claimingPackages.contains($0.path) }
-      let ownershipVerified =
-        apps.complete && apps.ownershipCandidates.allSatisfy { signatures[$0.path] != nil }
+      let ownershipVerified = apps.complete && apps.ownershipCandidates.allSatisfy { signatures[$0.path] != nil }
       let exactOwners = apps.applications.filter { foldedAppID($0.bundleID) == foldedAppID(domain) }
       let prefixOwners = apps.applications.filter { owner in
         guard let team = signatures[owner.path]?.teamID else { return false }
         return domain.hasPrefix(team + "." + owner.bundleID)
-          && (domain == team + "." + owner.bundleID
-            || domain.hasPrefix(team + "." + owner.bundleID + "."))
+          && (domain == team + "." + owner.bundleID || domain.hasPrefix(team + "." + owner.bundleID + "."))
       }
       let weakOwners =
         (location == .applicationSupport || location == .logs)
@@ -502,8 +480,7 @@ public struct RelatedDataService: Sendable {
       let focusedOwner = app.flatMap { selected in
         owners.contains(where: { $0.path == selected.path }) ? selected.bundleID : nil
       }
-      let bundleID =
-        focusedOwner ?? owners.first?.bundleID ?? (Self.validBundleID(domain) ? domain : nil)
+      let bundleID = focusedOwner ?? owners.first?.bundleID ?? (Self.validBundleID(domain) ? domain : nil)
       guard let bundleID else { continue }
       if let app, bundleID != app.bundleID { continue }
       let receipt = receipts.first { $0.relatedPath == path && $0.bundleID == bundleID }
@@ -515,17 +492,13 @@ public struct RelatedDataService: Sendable {
       let protection = ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory)
       let classification: RelatedClassification
       let reason: RelatedReason
-      if location == .groupContainers
-        && (!ownershipVerified || domain.lowercased().hasPrefix("group.com.apple."))
-      {
+      if location == .groupContainers && (!ownershipVerified || domain.lowercased().hasPrefix("group.com.apple.")) {
         classification = .shared
         reason = ownershipVerified ? .sharedGroup : .ownershipUnavailable
       } else if location == .groupContainers && (claimingPackages.count != 1 || owners.count != 1) {
         classification = .shared
         reason = .sharedGroup
-      } else if protection != nil
-        && !(location == .groupContainers && protection?.id == "group-containers")
-      {
+      } else if protection != nil && !(location == .groupContainers && protection?.id == "group-containers") {
         classification = .protected
         reason = .protected
       } else if identity?.kind == .symbolicLink || identity?.kind == .other {
@@ -547,9 +520,7 @@ public struct RelatedDataService: Sendable {
         || apps.applications.contains(where: {
           domain.hasPrefix($0.bundleID + "-") || domain.hasPrefix($0.bundleID + ".")
         })
-        || receipts.contains(where: {
-          domain.hasPrefix($0.bundleID + "-") || domain.hasPrefix($0.bundleID + ".")
-        })
+        || receipts.contains(where: { domain.hasPrefix($0.bundleID + "-") || domain.hasPrefix($0.bundleID + ".") })
       {
         classification = .uncertain
         reason = Self.currentUserOwns(path) ? .nameOnly : .foreignOwner
@@ -565,9 +536,7 @@ public struct RelatedDataService: Sendable {
         snapshot: nil, receipt: receipt)
       candidate.bundleID = bundleID
       candidate.matchStrength = strength
-      candidate.modifiedAt = identity?.modificationSeconds.map {
-        Date(timeIntervalSince1970: TimeInterval($0))
-      }
+      candidate.modifiedAt = identity?.modificationSeconds.map { Date(timeIntervalSince1970: TimeInterval($0)) }
       pending.append(candidate)
     }
     let measured = await withTaskGroup(of: (Int, RelatedDataCandidate).self) { group in
@@ -580,37 +549,29 @@ public struct RelatedDataService: Sendable {
         next += 1
         group.addTask {
           var result = candidate
-          let measurement = await ApplicationDiscovery.measure(
-            path: candidate.path, homeDirectory: homeDirectory)
+          let measurement = await ApplicationDiscovery.measure(path: candidate.path, homeDirectory: homeDirectory)
           result.observation = RelatedDataObservation(
             logical: measurement.logical, allocated: measurement.allocated,
             knownItemCount: measurement.count, partial: measurement.partial)
           // A metadata-only compatibility snapshot is an observation, never an inventory grant.
           if apps.complete && receiptStoreHealthy && candidate.matchStrength != .weak,
-            candidate.classification == .installed
-              || candidate.classification == .historicallyVerifiedAbsent
+            candidate.classification == .installed || candidate.classification == .historicallyVerifiedAbsent
               || candidate.classification == .orphanVerified,
-            let identity = try? DescriptorFileSystem.identity(at: candidate.path),
-            identity.hasStableTrashProof,
+            let identity = try? DescriptorFileSystem.identity(at: candidate.path), identity.hasStableTrashProof,
             let volumeID = try? DescriptorFileSystem.volumeID(at: candidate.path)
           {
-            let entry = ScanEntry(
-              parentID: nil, path: candidate.path, identity: identity, issues: [], readable: true)
+            let entry = ScanEntry(parentID: nil, path: candidate.path, identity: identity, issues: [], readable: true)
             let node = ScanNode(
-              id: entry.id, parentID: nil, logical: measurement.logical,
-              allocated: measurement.allocated,
-              knownItemCount: measurement.count,
-              completeItemCount: measurement.partial ? nil : measurement.count,
+              id: entry.id, parentID: nil, logical: measurement.logical, allocated: measurement.allocated,
+              knownItemCount: measurement.count, completeItemCount: measurement.partial ? nil : measurement.count,
               partial: measurement.partial, protected: false, skipped: false)
             result = RelatedDataCandidate(
               id: candidate.id, path: candidate.path, classification: candidate.classification,
               reason: candidate.reason,
               snapshot: ScanSnapshot(
                 rootPath: candidate.path, volumeDevice: identity.device, volumeID: volumeID,
-                observedAt: apps.observedAt, entries: [entry], nodes: [node]),
-              receipt: candidate.receipt,
-              bundleID: candidate.bundleID, matchStrength: candidate.matchStrength,
-              observation: result.observation,
+                observedAt: apps.observedAt, entries: [entry], nodes: [node]), receipt: candidate.receipt,
+              bundleID: candidate.bundleID, matchStrength: candidate.matchStrength, observation: result.observation,
               modifiedAt: candidate.modifiedAt)
           }
           return (index, result)
@@ -631,9 +592,7 @@ public struct RelatedDataService: Sendable {
           id: groupRoot, path: groupRoot, classification: .shared,
           reason: .sharedGroup, snapshot: nil, receipt: nil))
     }
-    if app == nil && writeVerifiedReceipts && !Task.isCancelled && apps.complete
-      && receiptStoreHealthy
-    {
+    if app == nil && writeVerifiedReceipts && !Task.isCancelled && apps.complete && receiptStoreHealthy {
       do { try saveVerifiedReceipts(apps: apps, candidates: candidates, existing: receipts) } catch {
         candidates.append(
           RelatedDataCandidate(
@@ -645,13 +604,10 @@ public struct RelatedDataService: Sendable {
   }
 
   public func plan(candidate: RelatedDataCandidate) throws -> ActionPlan {
-    guard
-      candidate.classification == .historicallyVerifiedAbsent
-        || candidate.classification == .orphanVerified,
+    guard candidate.classification == .historicallyVerifiedAbsent || candidate.classification == .orphanVerified,
       candidate.canSelect, let bundleID = candidate.bundleID ?? candidate.receipt?.bundleID,
       let observation = candidate.snapshot, let expected = observation.entries.first?.identity,
-      let location = RelatedLocation.matching(path: candidate.path, homeDirectory: homeDirectory)?
-        .0,
+      let location = RelatedLocation.matching(path: candidate.path, homeDirectory: homeDirectory)?.0,
       location != .groupContainers,
       Self.standardPath(bundleID: bundleID, homeDirectory: homeDirectory).contains(candidate.path)
     else { throw RelatedFailure.invalidReceipt }
@@ -674,37 +630,31 @@ public struct RelatedDataService: Sendable {
         observedAt: Date(), snapshotRunID: observation.runID)
     }
     let item = PlanItem(
-      id: root.id, sourcePath: candidate.path, volumeID: current.volumeID,
-      inventory: current.entries,
+      id: root.id, sourcePath: candidate.path, volumeID: current.volumeID, inventory: current.entries,
       ancestors: current.ancestors, relatedProof: relatedProof, policy: policy,
       nestedApplicationIDs: current.nestedApplicationIDs, snapshotRunID: observation.runID,
       orphanRelatedProof: orphanProof)
     let plan = ActionPlan(snapshotRunID: observation.runID, kind: .trash, items: [item])
-    if relatedProof != nil {
-      try validate(item, plan: plan)
-    } else {
-      try validateOrphan(item, plan: plan)
-    }
+    if relatedProof != nil { try validate(item, plan: plan) } else { try validateOrphan(item, plan: plan) }
     return plan
   }
 
-  public func planInstalled(app: InstalledApplication, candidate: RelatedDataCandidate) throws
-    -> ActionPlan
-  {
-    guard app.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame
-    else {
+  public func planInstalled(app: InstalledApplication, candidate: RelatedDataCandidate) throws -> ActionPlan {
+    guard app.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame else {
       throw PlanRejection(.lightenItself, path: app.path)
     }
     _ = try packagePlan(app: app)
-    let apps = inventory(including: app)
+    return try planInstalled(app: app, candidate: candidate, inventory: inventory(including: app))
+  }
+
+  private func planInstalled(
+    app: InstalledApplication, candidate: RelatedDataCandidate, inventory apps: BundleInventory
+  ) throws -> ActionPlan {
     guard apps.complete else { throw RelatedFailure.incompleteInventory }
-    guard
-      apps.applications.filter({ foldedAppID($0.bundleID) == foldedAppID(app.bundleID) }).count
-        == 1,
+    guard apps.applications.filter({ foldedAppID($0.bundleID) == foldedAppID(app.bundleID) }).count == 1,
       apps.applications.contains(app), candidate.classification == .installed, candidate.canSelect,
       let observation = candidate.snapshot, let expected = observation.entries.first?.identity,
-      let appIdentity = try? DescriptorFileSystem.identity(at: app.path),
-      appIdentity.kind == .directory,
+      let appIdentity = try? DescriptorFileSystem.identity(at: app.path), appIdentity.kind == .directory,
       let infoIdentity = try? DescriptorFileSystem.identity(at: app.path + "/Contents/Info.plist"),
       infoIdentity.kind == .regular,
       Self.bundleID(at: app.path) == app.bundleID,
@@ -719,21 +669,17 @@ public struct RelatedDataService: Sendable {
       infoIdentity: infoIdentity, relatedPath: candidate.path, relatedIdentity: root.identity!,
       snapshotRunID: observation.runID)
     let item = PlanItem(
-      id: root.id, sourcePath: candidate.path, volumeID: current.volumeID,
-      inventory: current.entries,
+      id: root.id, sourcePath: candidate.path, volumeID: current.volumeID, inventory: current.entries,
       ancestors: current.ancestors, installedRelatedProof: proof, policy: policy,
       nestedApplicationIDs: current.nestedApplicationIDs, snapshotRunID: observation.runID)
     let plan = ActionPlan(snapshotRunID: observation.runID, kind: .trash, items: [item])
-    try validateInstalled(item, plan: plan)
+    try validateInstalled(item, plan: plan, inventory: apps)
     return plan
   }
 
   /// One action and one grouped Undo for an application and explicitly selected data.
-  public func planUninstall(app: InstalledApplication, selectedRelated: [RelatedDataCandidate])
-    throws -> ActionPlan
-  {
-    guard app.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame
-    else {
+  public func planUninstall(app: InstalledApplication, selectedRelated: [RelatedDataCandidate]) throws -> ActionPlan {
+    guard app.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame else {
       throw PlanRejection(.lightenItself, path: app.path)
     }
     let package = try packagePlan(app: app)
@@ -742,15 +688,11 @@ public struct RelatedDataService: Sendable {
       items += try planInstalled(app: app, candidate: candidate).items
     }
     items += package.items
-    return ActionPlan(
-      snapshotRunID: items.first?.snapshotRunID ?? package.snapshotRunID, kind: .trash, items: items
-    )
+    return ActionPlan(snapshotRunID: items.first?.snapshotRunID ?? package.snapshotRunID, kind: .trash, items: items)
   }
 
   func packagePlan(app: InstalledApplication) throws -> ActionPlan {
-    guard Self.currentUserOwns(app.path) else {
-      throw PlanRejection(.needsAdministrator, path: app.path)
-    }
+    guard Self.currentUserOwns(app.path) else { throw PlanRejection(.needsAdministrator, path: app.path) }
     let observation = packageActivity(app.path)
     switch observation.state {
     case .clearObservedProcesses: break
@@ -759,29 +701,18 @@ public struct RelatedDataService: Sendable {
     }
     let identity = try DescriptorFileSystem.identity(at: app.path)
     let package = try PlanService(homeDirectory: homeDirectory).makeSpacePlan(
-      selections: [
-        PlanService.Selection(path: app.path, device: identity.device, inode: identity.inode)
-      ],
+      selections: [PlanService.Selection(path: app.path, device: identity.device, inode: identity.inode)],
       scanRootPath: (app.path as NSString).deletingLastPathComponent, runID: UUID())
-    guard package.items.first?.applicationBundleID == app.bundleID else {
-      throw RelatedFailure.changedItem
-    }
+    guard package.items.first?.applicationBundleID == app.bundleID else { throw RelatedFailure.changedItem }
     return package
   }
 
-  func installedPolicy(app: InstalledApplication, relatedPath: String, inventory: BundleInventory)
-    -> TreePolicy?
-  {
-    guard
-      let (location, domain) = RelatedLocation.matching(
-        path: relatedPath, homeDirectory: homeDirectory)
-    else {
+  func installedPolicy(app: InstalledApplication, relatedPath: String, inventory: BundleInventory) -> TreePolicy? {
+    guard let (location, domain) = RelatedLocation.matching(path: relatedPath, homeDirectory: homeDirectory) else {
       return nil
     }
     if location == .groupContainers {
-      guard inventory.complete, !domain.lowercased().hasPrefix("group.com.apple.") else {
-        return nil
-      }
+      guard inventory.complete, !domain.lowercased().hasPrefix("group.com.apple.") else { return nil }
       var owners: Set<String> = []
       for candidate in inventory.ownershipCandidates {
         guard let signature = signingMetadata(candidate.path) else { return nil }
@@ -797,30 +728,70 @@ public struct RelatedDataService: Sendable {
     return location == .containers ? .relatedContainer : .relatedTrash
   }
 
+  func prepareInstalledOwners(plan: ActionPlan) -> InstalledOwnerPreparation {
+    let items = plan.items.filter { $0.installedRelatedProof != nil }
+    guard !items.isEmpty else { return InstalledOwnerPreparation() }
+    var apps = inventory()
+    for item in items {
+      guard let proof = item.installedRelatedProof else { continue }
+      let app = InstalledApplication(bundleID: proof.bundleID, path: proof.appPath, version: nil)
+      apps = inventory(including: app, base: apps)
+    }
+    var result = InstalledOwnerPreparation()
+    for item in items {
+      do {
+        try validateInstalled(item, plan: plan, inventory: apps)
+        guard let proof = item.installedRelatedProof,
+          let (location, domain) = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory)
+        else { throw RelatedFailure.unsupportedInstalledData }
+        var identities = [try ApplicationSignatureIdentity.capture(proof.appPath)]
+        if location == .groupContainers {
+          let selected = apps.ownershipCandidates.filter { $0.packagePath == proof.appPath }
+          guard !selected.isEmpty else { throw RelatedFailure.ambiguousOwner }
+          for owner in selected {
+            guard let observation = signatureCache.observation(at: owner.path), observation.metadata != nil else {
+              throw RelatedFailure.unsupportedInstalledData
+            }
+            identities.append(observation.identity)
+          }
+        } else if domain != proof.bundleID {
+          guard let observation = signatureCache.observation(at: proof.appPath), observation.metadata != nil else {
+            throw RelatedFailure.unsupportedInstalledData
+          }
+          identities.append(observation.identity)
+        }
+        for identity in identities { try identity.validate() }
+        result.owners[item.id] = PreparedInstalledOwner(planID: plan.id, item: item, signatures: identities)
+      } catch { result.failures[item.id] = String(describing: error) }
+    }
+    return result
+  }
+
   public func validateInstalled(_ item: PlanItem, plan: ActionPlan) throws {
+    guard let proof = item.installedRelatedProof else { throw RelatedFailure.unsupportedInstalledData }
+    let app = InstalledApplication(bundleID: proof.bundleID, path: proof.appPath, version: nil)
+    try validateInstalled(item, plan: plan, inventory: inventory(including: app))
+  }
+
+  private func validateInstalled(_ item: PlanItem, plan: ActionPlan, inventory apps: BundleInventory) throws {
     try validateScope(item, plan: plan)
     guard plan.kind == .trash, let proof = item.installedRelatedProof,
       proof.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame,
-      proof.snapshotRunID == (item.snapshotRunID ?? plan.snapshotRunID),
-      proof.relatedPath == item.sourcePath,
+      proof.snapshotRunID == (item.snapshotRunID ?? plan.snapshotRunID), proof.relatedPath == item.sourcePath,
       item.inventory.first?.identity == proof.relatedIdentity,
       (try? DescriptorFileSystem.validatedComponents(proof.appPath)) != nil,
       ProtectionPolicy.rule(for: proof.appPath, homeDirectory: homeDirectory) == nil,
       (try? DescriptorFileSystem.identity(at: proof.appPath)) == proof.appIdentity,
-      (try? DescriptorFileSystem.identity(at: proof.appPath + "/Contents/Info.plist"))
-        == proof.infoIdentity,
+      (try? DescriptorFileSystem.identity(at: proof.appPath + "/Contents/Info.plist")) == proof.infoIdentity,
       Self.bundleID(at: proof.appPath) == proof.bundleID,
       (try? DescriptorFileSystem.identity(at: item.sourcePath)) == proof.relatedIdentity,
       Self.currentUserOwns(item.sourcePath)
     else { throw RelatedFailure.unsupportedInstalledData }
-    let apps = inventory(
-      including: InstalledApplication(bundleID: proof.bundleID, path: proof.appPath, version: nil))
     guard apps.complete else { throw RelatedFailure.incompleteInventory }
     guard
-      apps.applications.filter({ foldedAppID($0.bundleID) == foldedAppID(proof.bundleID) }).map(
-        \.path) == [
-          proof.appPath
-        ],
+      apps.applications.filter({ foldedAppID($0.bundleID) == foldedAppID(proof.bundleID) }).map(\.path) == [
+        proof.appPath
+      ],
       let app = apps.applications.first(where: { $0.path == proof.appPath }),
       let policy = installedPolicy(app: app, relatedPath: item.sourcePath, inventory: apps),
       item.policy == nil || item.policy == policy
@@ -830,17 +801,13 @@ public struct RelatedDataService: Sendable {
   public func validateOrphan(_ item: PlanItem, plan: ActionPlan) throws {
     try validateScope(item, plan: plan)
     guard plan.kind == .trash, let proof = item.orphanRelatedProof,
-      proof.snapshotRunID == (item.snapshotRunID ?? plan.snapshotRunID),
-      proof.relatedPath == item.sourcePath,
+      proof.snapshotRunID == (item.snapshotRunID ?? plan.snapshotRunID), proof.relatedPath == item.sourcePath,
       item.inventory.first?.identity == proof.identity,
-      Self.standardPath(bundleID: proof.bundleID, homeDirectory: homeDirectory).contains(
-        item.sourcePath),
+      Self.standardPath(bundleID: proof.bundleID, homeDirectory: homeDirectory).contains(item.sourcePath),
       !proof.bundleID.lowercased().hasPrefix("com.apple."), Self.currentUserOwns(item.sourcePath),
       (try? DescriptorFileSystem.identity(at: item.sourcePath)) == proof.identity,
-      let location = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory)?
-        .0,
-      location != .groupContainers,
-      item.policy == (location == .containers ? .relatedContainer : .relatedTrash)
+      let location = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory)?.0,
+      location != .groupContainers, item.policy == (location == .containers ? .relatedContainer : .relatedTrash)
     else { throw RelatedFailure.invalidReceipt }
     let apps = inventory()
     guard apps.complete else { throw RelatedFailure.incompleteInventory }
@@ -854,24 +821,18 @@ public struct RelatedDataService: Sendable {
   public func validate(_ item: PlanItem, plan: ActionPlan) throws {
     try validateScope(item, plan: plan)
     guard plan.kind == .trash, let proof = item.relatedProof,
-      proof.snapshotRunID == (item.snapshotRunID ?? plan.snapshotRunID),
-      proof.relatedPath == item.sourcePath,
-      Self.standardPath(bundleID: proof.bundleID, homeDirectory: homeDirectory).contains(
-        item.sourcePath),
+      proof.snapshotRunID == (item.snapshotRunID ?? plan.snapshotRunID), proof.relatedPath == item.sourcePath,
+      Self.standardPath(bundleID: proof.bundleID, homeDirectory: homeDirectory).contains(item.sourcePath),
       let receipt = (try? loadReceipts())?.first(where: {
-        $0.bundleID == proof.bundleID && $0.relatedPath == proof.relatedPath
-          && $0.observedAt == proof.receiptObservedAt
-      }), receipt.schema == 1, receipt.ruleSource == "exact-standard-domain-v1",
-      receipt.identity == proof.identity,
+        $0.bundleID == proof.bundleID && $0.relatedPath == proof.relatedPath && $0.observedAt == proof.receiptObservedAt
+      }), receipt.schema == 1, receipt.ruleSource == "exact-standard-domain-v1", receipt.identity == proof.identity,
       let current = try? DescriptorFileSystem.identity(at: item.sourcePath),
       receipt.identity.matchesStableTrashIdentity(current), Self.currentUserOwns(item.sourcePath),
       ProtectionPolicy.rule(for: item.sourcePath, homeDirectory: homeDirectory) == nil
     else { throw RelatedFailure.invalidReceipt }
     let apps = inventory()
     guard apps.complete else { throw RelatedFailure.incompleteInventory }
-    guard !apps.contains(proof.bundleID), !installedElsewhere(proof.bundleID) else {
-      throw RelatedFailure.ownerPresent
-    }
+    guard !apps.contains(proof.bundleID), !installedElsewhere(proof.bundleID) else { throw RelatedFailure.ownerPresent }
   }
 
   static func currentUserOwns(_ path: String) -> Bool {
@@ -883,8 +844,7 @@ public struct RelatedDataService: Sendable {
   /// separately rechecks complete ownership inventory and registered apps.
   func validateScope(_ item: PlanItem, plan: ActionPlan) throws {
     guard plan.kind == .trash,
-      let (location, domain) = RelatedLocation.matching(
-        path: item.sourcePath, homeDirectory: homeDirectory),
+      let (location, domain) = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory),
       item.policy == nil
         || item.policy
           == (location == .containers
@@ -899,8 +859,7 @@ public struct RelatedDataService: Sendable {
         proof.relatedIdentity == item.inventory.first?.identity,
         (try? DescriptorFileSystem.identity(at: item.sourcePath)) == proof.relatedIdentity,
         (try? DescriptorFileSystem.identity(at: proof.appPath)) == proof.appIdentity,
-        (try? DescriptorFileSystem.identity(at: proof.appPath + "/Contents/Info.plist"))
-          == proof.infoIdentity,
+        (try? DescriptorFileSystem.identity(at: proof.appPath + "/Contents/Info.plist")) == proof.infoIdentity,
         Self.bundleID(at: proof.appPath) == proof.bundleID
       else { throw RelatedFailure.unsupportedInstalledData }
       if location == .groupContainers {
@@ -911,18 +870,13 @@ public struct RelatedDataService: Sendable {
         }
         var claimed = false
         for owner in owners.candidates {
-          guard let signature = signingMetadata(owner.path) else {
-            throw RelatedFailure.unsupportedInstalledData
-          }
-          claimed =
-            claimed
-            || (owner.packagePath == app.path && signature.groupIdentifiers.contains(domain))
+          guard let signature = signingMetadata(owner.path) else { throw RelatedFailure.unsupportedInstalledData }
+          claimed = claimed || (owner.packagePath == app.path && signature.groupIdentifiers.contains(domain))
         }
         guard claimed else { throw RelatedFailure.unsupportedInstalledData }
       } else if domain != proof.bundleID {
         guard let team = signingMetadata(proof.appPath)?.teamID,
-          domain == team + "." + proof.bundleID
-            || domain.hasPrefix(team + "." + proof.bundleID + ".")
+          domain == team + "." + proof.bundleID || domain.hasPrefix(team + "." + proof.bundleID + ".")
         else { throw RelatedFailure.unsupportedInstalledData }
       }
     } else if let proof = item.orphanRelatedProof {
@@ -955,8 +909,7 @@ public struct RelatedDataService: Sendable {
         let app = apps.applications.first(where: { $0.bundleID == bundleID }),
         apps.applications.filter({ foldedAppID($0.bundleID) == foldedAppID(bundleID) }).count == 1,
         candidate.snapshot != nil, candidate.matchStrength == .strong,
-        Self.standardPath(bundleID: bundleID, homeDirectory: homeDirectory).contains(
-          candidate.path),
+        Self.standardPath(bundleID: bundleID, homeDirectory: homeDirectory).contains(candidate.path),
         let identity = try? DescriptorFileSystem.identity(at: candidate.path),
         identity.hasStableTrashProof,
         ProtectionPolicy.rule(for: candidate.path, homeDirectory: homeDirectory) == nil
@@ -1018,10 +971,8 @@ public struct RelatedDataService: Sendable {
       && parts.allSatisfy { part in
         !part.isEmpty && part.count <= 63
           && part.unicodeScalars.allSatisfy {
-            CharacterSet(
-              charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
-            )
-            .contains($0)
+            CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-")
+              .contains($0)
           }
       }
   }

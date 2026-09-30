@@ -374,7 +374,7 @@ func focusedReportIsReadOnlyWithoutGroupData(existingReceipts: Bool) async throw
   #expect(report.signerTeamID == "TEAM123456")
   #expect(report.related.count == 8)
   #expect(report.related.allSatisfy { $0.bundleID == fixture.bundleID && $0.defaultSelected })
-  #expect(calls.withLock { $0 } == [fixture.app: 1])
+  #expect(calls.withLock { $0 } == (existingReceipts ? [:] : [fixture.app: 1]))
   #expect((try? Data(contentsOf: URL(fileURLWithPath: receiptPath))) == beforeData)
   #expect((try? DescriptorFileSystem.identity(at: receiptPath)) == beforeIdentity)
   #expect((try? DescriptorFileSystem.identity(at: parent)) == beforeParent)
