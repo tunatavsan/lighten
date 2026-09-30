@@ -5,15 +5,24 @@ import Observation
 
 @MainActor @Observable
 final class AppsStore {
+  struct PictureOpeningTiming: Sendable {
+    let requestedAt: ContinuousClock.Instant
+    let loadStartedAt: ContinuousClock.Instant
+    let loadFinishedAt: ContinuousClock.Instant
+    let publishedAt: ContinuousClock.Instant
+  }
+
+  @ObservationIgnored private(set) var pictureOpeningTiming: PictureOpeningTiming?
   @ObservationIgnored private let events: @Sendable () -> AsyncStream<ApplicationDiscovery.Event>
-  @ObservationIgnored private let planBuilder:
-    @Sendable (ApplicationReport, RelatedDataCandidate) async throws -> ActionPlan
   @ObservationIgnored private var scanTask: Task<Void, Never>?
   @ObservationIgnored private var generation = UUID()
   @ObservationIgnored private var preparationTask: Task<ActionPlan, Error>?
   @ObservationIgnored private var preparationGeneration = UUID()
   @ObservationIgnored private let running: any RunningApplicationSource
-  @ObservationIgnored private let appPlanBuilder: @Sendable (String) async -> Result<ActionPlan, PlanRejections>
+  @ObservationIgnored private let pictures: ResultPictureStore
+  @ObservationIgnored private var opened = false
+  var pictureRows: [AppsPicture.Row] = []
+  var pictureObservedAt: Date?
   var reports: [ApplicationReport] = []
   var measuringPaths: Set<String> = []
   var measuredCount = 0
@@ -24,40 +33,55 @@ final class AppsStore {
   var needsRescan = false
   var selectedPath: String?
   var packageSelected = false
-  var selectedDataPath: String?
+  var selectedDataPaths: Set<String> = []
+  var selectedDataPath: String? {
+    get { selectedDataPaths.sorted().first }
+    set { selectedDataPaths = newValue.map { [$0] } ?? [] }
+  }
   var runningIDs: Set<String> = []
   var runningUnknownIDs: Set<String> = []
   var runningCheckedIDs: Set<String> = []
   var message: String?
   var presentedPlanID: UUID?
+  var orphanCandidates: [RelatedDataCandidate] = []
+  var selectedOrphanPaths: Set<String> = []
+  var dropping = false
+  @ObservationIgnored private var dropGeneration = UUID()
+  @ObservationIgnored private var reviewedDropPath: String?
+  @ObservationIgnored private var presentedPaths: [UUID: String] = [:]
+  @ObservationIgnored private var observedResultID: UUID?
+  @ObservationIgnored private let uninstallPlanBuilder:
+    @Sendable (ApplicationReport, [RelatedDataCandidate], Bool) async throws -> ActionPlan
+  @ObservationIgnored private let orphanPlanBuilder: @Sendable ([RelatedDataCandidate]) async throws -> ActionPlan
+  @ObservationIgnored private let droppedReport: @Sendable (String) async -> ApplicationReport?
 
   init(
+    pictures: ResultPictureStore = ResultPictureStore(),
+    uninstallPlanBuilder: (@Sendable (ApplicationReport, [RelatedDataCandidate], Bool) async throws -> ActionPlan)? =
+      nil,
+    orphanPlanBuilder: @escaping @Sendable ([RelatedDataCandidate]) async throws -> ActionPlan = { candidates in
+      let service = RelatedDataService.system
+      let plans = try candidates.map { try service.plan(candidate: $0) }
+      guard let first = plans.first else { throw PlanFailure.emptySelection }
+      return ActionPlan(snapshotRunID: first.snapshotRunID, kind: .trash, items: plans.flatMap(\.items))
+    },
+    droppedReport: @escaping @Sendable (String) async -> ApplicationReport? = {
+      await ApplicationDiscovery(related: .system).report(path: $0)
+    },
     running: any RunningApplicationSource = MacOSRunningApplicationSource(),
     events: @escaping @Sendable () -> AsyncStream<ApplicationDiscovery.Event> = {
       ApplicationDiscovery(related: .system).events()
     },
-    planBuilder:
-      @escaping @Sendable (ApplicationReport, RelatedDataCandidate) async throws -> ActionPlan = {
-        report, candidate in
-        guard let bundleID = report.bundleID,
-          let app = RelatedDataService.system.inventory().applications.first(where: {
-            $0.path == report.path && $0.bundleID == bundleID
-          })
-        else { throw RelatedFailure.ambiguousOwner }
-        return try RelatedDataService.system.planInstalled(app: app, candidate: candidate)
-      },
-    appPlanBuilder: @escaping @Sendable (String) async -> Result<ActionPlan, PlanRejections> = {
-      path in
-      await Task.detached { () -> Result<ActionPlan, PlanRejections> in
+    planBuilder: (@Sendable (ApplicationReport, RelatedDataCandidate) async throws -> ActionPlan)? = nil,
+    appPlanBuilder: @escaping @Sendable (String) async -> Result<ActionPlan, PlanRejections> = { path in
+      await Task.detached(priority: .userInitiated) { () -> Result<ActionPlan, PlanRejections> in
         do throws(PlanRejections) {
           guard let identity = try? DescriptorFileSystem.identity(at: path) else {
             throw PlanRejections(rejections: [PlanRejection(.unavailable, path: path)])
           }
           return .success(
             try PlanService().makeSpacePlan(
-              selections: [
-                PlanService.Selection(path: path, device: identity.device, inode: identity.inode)
-              ],
+              selections: [PlanService.Selection(path: path, device: identity.device, inode: identity.inode)],
               scanRootPath: "", runID: UUID()))
         } catch {
           return .failure(error)
@@ -65,27 +89,89 @@ final class AppsStore {
       }.value
     }
   ) {
+    self.pictures = pictures
     self.running = running
-    self.appPlanBuilder = appPlanBuilder
     self.events = events
-    self.planBuilder = planBuilder
+    self.orphanPlanBuilder = orphanPlanBuilder
+    self.droppedReport = droppedReport
+    self.uninstallPlanBuilder =
+      uninstallPlanBuilder ?? { report, candidates, includePackage in
+        if let planBuilder {
+          let plans = try await candidates.asyncPlans(report: report, builder: planBuilder)
+          if plans.count == 1 && !includePackage { return plans[0] }
+          var items = plans.flatMap(\.items)
+          if includePackage {
+            switch await appPlanBuilder(report.path) {
+            case .success(let plan): items += plan.items
+            case .failure(let refused): throw refused
+            }
+          }
+          return ActionPlan(snapshotRunID: plans.first?.snapshotRunID ?? UUID(), kind: .trash, items: items)
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+          DispatchQueue.global(qos: .userInitiated).async {
+            do {
+              let service = RelatedDataService.system
+              guard let id = report.bundleID,
+                let app = service.application(at: report.path), app.bundleID == id
+              else { throw RelatedFailure.ambiguousOwner }
+              if includePackage {
+                continuation.resume(returning: try service.planUninstall(app: app, selectedRelated: candidates))
+                return
+              }
+              let plans = try candidates.map { try service.planInstalled(app: app, candidate: $0) }
+              guard let first = plans.first else { throw PlanFailure.emptySelection }
+              continuation.resume(
+                returning: ActionPlan(snapshotRunID: first.snapshotRunID, kind: .trash, items: plans.flatMap(\.items)))
+            } catch { continuation.resume(throwing: error) }
+          }
+        }
+      }
   }
 
   var selectedReport: ApplicationReport? { reports.first { $0.path == selectedPath } }
 
+  /// Restore display fields first, then obtain independent fresh scan authority.
+  func open(actions: ActionStore) {
+    guard !opened else { return }
+    opened = true
+    let requestedAt = ContinuousClock.now
+    let openingGeneration = generation
+    let pictures = self.pictures
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      let loadStartedAt = ContinuousClock.now
+      let picture = pictures.load(AppsPicture.self, named: "apps")
+      let loadFinishedAt = ContinuousClock.now
+      Task(priority: .userInitiated) { @MainActor [weak self] in
+        guard let self, self.generation == openingGeneration else { return }
+        if self.reports.isEmpty, !self.busy, let picture {
+          self.pictureRows = picture.content.rows
+          self.pictureObservedAt = picture.observedAt
+          self.needsRescan = true
+          self.pictureOpeningTiming = PictureOpeningTiming(
+            requestedAt: requestedAt, loadStartedAt: loadStartedAt, loadFinishedAt: loadFinishedAt, publishedAt: .now)
+        }
+        if self.scannedAt == nil, !self.busy { self.startScan(actions: actions) }
+      }
+    }
+  }
+
   func startScan(actions: ActionStore) {
     guard !busy else { return }
     invalidatePreparation(actions: actions)
+    reviewedDropPath = nil
     let id = UUID()
     generation = id
     busy = true
     reports = []
+    orphanCandidates = []
+    selectedOrphanPaths = []
     measuringPaths = []
     measuredCount = 0
     inventoryComplete = false
     selectedPath = nil
     packageSelected = false
-    selectedDataPath = nil
+    selectedDataPaths = []
     runningIDs = []
     runningUnknownIDs = []
     runningCheckedIDs = []
@@ -93,7 +179,7 @@ final class AppsStore {
     message = nil
     needsRescan = false
     let events = self.events
-    scanTask = Task { @concurrent in
+    scanTask = Task(priority: .userInitiated) { @concurrent in
       var finishedInventory: BundleInventory?
       for await event in events() {
         if Task.isCancelled { return }
@@ -111,13 +197,16 @@ final class AppsStore {
                 self.measuredCount += 1
               }
             }
-          case .orphans: break
+          case .orphans(let candidates):
+            self.orphanCandidates = candidates
           case .completed(let inventory, let reports):
             self.reports = reports
             self.measuringPaths = []
             self.measuredCount = reports.count
             self.inventoryComplete = inventory.complete
             self.scannedAt = Date()
+            self.pictureRows = []
+            self.pictureObservedAt = nil
             finishedInventory = inventory
           }
         }
@@ -143,8 +232,16 @@ final class AppsStore {
           self.runningCheckedIDs.insert(app.bundleID)
         }
       }
+      let picture = await MainActor.run {
+        ResultPicture(
+          observedAt: self.scannedAt ?? Date(),
+          content: AppsPicture(
+            reports: self.reports, inventoryComplete: self.inventoryComplete))
+      }
+      guard !Task.isCancelled else { return }
+      try? self.pictures.save(picture, named: "apps")
       await MainActor.run {
-        guard self.generation == id else { return }
+        guard self.generation == id, !Task.isCancelled else { return }
         self.busy = false
         self.scanTask = nil
       }
@@ -160,15 +257,15 @@ final class AppsStore {
     measuringPaths = []
     needsRescan = true
     packageSelected = false
-    selectedDataPath = nil
+    selectedDataPaths = []
     message = String(localized: "Scan cancelled")
   }
 
   func select(_ path: String) {
-    guard !needsRescan else { return }
+    guard !needsRescan, pictureRows.isEmpty, !dropping else { return }
     selectedPath = path
     packageSelected = false
-    selectedDataPath = nil
+    selectedDataPaths = []
     message = nil
   }
 
@@ -184,6 +281,10 @@ final class AppsStore {
       return
     }
     packageSelected.toggle()
+    if packageSelected {
+      selectedDataPaths.formUnion(
+        report.related.filter { $0.defaultSelected && canSelect($0, app: report) }.map(\.path))
+    }
   }
 
   /// Why the whole app cannot be moved to the Trash, or nil when it can be selected.
@@ -194,22 +295,19 @@ final class AppsStore {
       return
         "\(String(localized: "This is a link to an app stored elsewhere. It is shown for identification only.")) \(target)"
     }
-    guard let bundleID = report.bundleID else {
-      return String(localized: "App identity unavailable")
-    }
+    guard let bundleID = report.bundleID else { return String(localized: "App identity unavailable") }
     if bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame {
       return String(localized: "Lighten does not remove itself.")
     }
-    if runningIDs.contains(bundleID) {
-      return String(localized: "The app is running. Quit it first.")
-    }
+    if runningIDs.contains(bundleID) { return String(localized: "The app is running. Quit it first.") }
     if runningUnknownIDs.contains(bundleID) || !runningCheckedIDs.contains(bundleID) {
       return String(localized: "Whether the app is running is unknown.")
     }
     let parent = (report.path as NSString).deletingLastPathComponent
-    if Darwin.access(parent, W_OK) != 0 || Darwin.access(report.path, W_OK) != 0 {
-      return String(
-        localized: "Administrator permission is needed. Use Show in Finder to remove it there.")
+    var metadata = stat()
+    let foreignOwner = Darwin.lstat(report.path, &metadata) == 0 && metadata.st_uid != geteuid()
+    if foreignOwner || Darwin.access(parent, W_OK) != 0 || Darwin.access(report.path, W_OK) != 0 {
+      return String(localized: "Administrator permission is needed. Use Show in Finder to remove it there.")
     }
     return nil
   }
@@ -217,23 +315,127 @@ final class AppsStore {
   func toggleData(_ path: String, actions: ActionStore) {
     guard !busy, !needsRescan else { return }
     invalidatePreparation(actions: actions)
-    selectedDataPath = selectedDataPath == path ? nil : path
+    guard let app = selectedReport, let candidate = app.related.first(where: { $0.path == path }),
+      canSelect(candidate, app: app)
+    else { return }
+    if selectedDataPaths.contains(path) { selectedDataPaths.remove(path) } else { selectedDataPaths.insert(path) }
   }
 
   /// Leaving the screen keeps a running scan going; only prepared plans expire.
   func deactivate(actions: ActionStore) {
+    dropGeneration = UUID()
+    dropping = false
     invalidatePreparation(actions: actions, keepPresentedPlanID: actions.busy)
   }
 
   func observeResult(actions: ActionStore) {
-    guard let presentedPlanID, actions.result?.planID == presentedPlanID,
-      !needsRescan
+    guard let presentedPlanID, let result = actions.result, result.planID == presentedPlanID,
+      observedResultID != result.planID
     else { return }
+    observedResultID = result.planID
     invalidatePreparation(actions: actions, keepPresentedPlanID: true)
+    let moved = Set(result.items.filter { $0.outcome == .applied }.compactMap { presentedPaths[$0.itemID] })
+    let retainedData = reports.filter { moved.contains($0.path) }.flatMap { report in
+      report.related.filter { !moved.contains($0.path) }
+    }
+    orphanCandidates += retainedData.filter { candidate in !orphanCandidates.contains { $0.path == candidate.path } }
+    reports = reports.filter { !moved.contains($0.path) }.map { report in
+      var refreshed = report
+      refreshed.related.removeAll { moved.contains($0.path) }
+      return refreshed
+    }
+    orphanCandidates.removeAll { moved.contains($0.path) }
+    selectedDataPaths = []
+    selectedOrphanPaths = []
     packageSelected = false
-    selectedDataPath = nil
-    needsRescan = true
-    message = String(localized: "Action finished. Scan again before another choice.")
+    if let selectedPath, moved.contains(selectedPath) { self.selectedPath = nil }
+    message = nil
+  }
+
+  func canSelect(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> Bool {
+    guard candidate.canSelect, candidate.classification == .installed,
+      inventoryComplete || reviewedDropPath == app.path, !busy, !needsRescan, pictureRows.isEmpty,
+      let id = app.bundleID,
+      reports.filter({ $0.bundleID?.caseInsensitiveCompare(id) == .orderedSame }).count == 1,
+      id.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame,
+      runningCheckedIDs.contains(id), !runningIDs.contains(id), !runningUnknownIDs.contains(id)
+    else { return false }
+    return true
+  }
+
+  func toggleOrphan(_ path: String, actions: ActionStore) {
+    guard !busy, !needsRescan, !dropping, pictureRows.isEmpty,
+      orphanCandidates.contains(where: { $0.path == path && $0.canSelect && $0.classification != .installed })
+    else { return }
+    invalidatePreparation(actions: actions)
+    if selectedOrphanPaths.contains(path) { selectedOrphanPaths.remove(path) } else { selectedOrphanPaths.insert(path) }
+  }
+
+  func prepareOrphans(actions: ActionStore) async {
+    guard !busy, !preparing, !needsRescan, !actions.busy, pictureRows.isEmpty else { return }
+    let candidates = orphanCandidates.filter {
+      selectedOrphanPaths.contains($0.path) && $0.canSelect && $0.classification != .installed
+    }
+    guard !candidates.isEmpty else { return }
+    let paths = selectedOrphanPaths
+    let builder = orphanPlanBuilder
+    await prepare(
+      actions: actions, stillSelected: { self.selectedOrphanPaths == paths },
+      builder: {
+        try await builder(candidates)
+      })
+  }
+
+  func acceptDrop(_ urls: [URL], actions: ActionStore) async {
+    guard urls.count == 1, let url = urls.first, url.isFileURL,
+      url.pathExtension.caseInsensitiveCompare("app") == .orderedSame
+    else {
+      message = String(localized: "Drop one application (.app) to review removal.")
+      return
+    }
+    guard !preparing, !dropping, !actions.busy else {
+      message = String(localized: "Wait for the current review or scan to finish.")
+      return
+    }
+    if busy { cancelScan() }
+    invalidatePreparation(actions: actions)
+    let id = UUID()
+    dropGeneration = id
+    dropping = true
+    defer { if dropGeneration == id { dropping = false } }
+    let discovered = await droppedReport(url.path)
+    guard dropGeneration == id else { return }
+    guard let report = discovered else {
+      message = String(localized: "This application could not be identified safely.")
+      return
+    }
+    if let index = reports.firstIndex(where: { $0.path == report.path }) {
+      reports[index] = report
+    } else {
+      reports.append(report)
+    }
+    pictureRows = []
+    pictureObservedAt = nil
+    needsRescan = false
+    selectedPath = report.path
+    reviewedDropPath = report.path
+    selectedDataPaths = []
+    packageSelected = false
+    guard let bundleID = report.bundleID else { return }
+    let status = await running.isRunning(bundleID: bundleID)
+    guard dropGeneration == id else { return }
+    runningCheckedIDs.insert(bundleID)
+    runningIDs.remove(bundleID)
+    runningUnknownIDs.remove(bundleID)
+    if status == true { runningIDs.insert(bundleID) }
+    if status == nil { runningUnknownIDs.insert(bundleID) }
+    guard let reason = packageUnavailableReason(report) else {
+      packageSelected = true
+      selectedDataPaths = Set(report.related.filter { $0.defaultSelected }.map(\.path))
+      await prepareSelectedData(actions: actions)
+      return
+    }
+    message = reason
   }
 
   private func invalidatePreparation(
@@ -249,35 +451,47 @@ final class AppsStore {
   }
 
   func prepareSelectedData(actions: ActionStore) async {
-    guard !busy, !preparing, !needsRescan, !actions.busy, let report = selectedReport,
-      packageSelected || selectedDataPath != nil
+    guard !busy, !preparing, !needsRescan, !actions.busy, pictureRows.isEmpty, let report = selectedReport,
+      packageSelected || !selectedDataPaths.isEmpty
     else {
-      message = String(localized: "Select one eligible data item")
+      message = String(localized: "Select the app or eligible related data")
       return
     }
-    var candidate: RelatedDataCandidate?
-    if let dataPath = selectedDataPath {
-      guard let bundleID = report.bundleID,
-        let found = report.related.first(where: { $0.path == dataPath }),
-        found.classification == .installed, found.snapshot != nil,
-        inventoryComplete, runningCheckedIDs.contains(bundleID),
-        !runningIDs.contains(bundleID), !runningUnknownIDs.contains(bundleID),
-        reports.filter({
-          $0.bundleID?.lowercased(with: Locale(identifier: "en_US_POSIX"))
-            == bundleID.lowercased(with: Locale(identifier: "en_US_POSIX"))
-        }).count == 1
-      else {
-        message = String(localized: "Select one eligible data item")
-        return
-      }
-      candidate = found
+    let candidates = report.related.filter { selectedDataPaths.contains($0.path) }
+    guard candidates.count == selectedDataPaths.count,
+      candidates.allSatisfy({ canSelect($0, app: report) })
+    else {
+      message = String(localized: "Some selected data is unavailable. Review the reasons before continuing.")
+      return
     }
     if packageSelected, let reason = packageUnavailableReason(report) {
       message = reason
       return
     }
     let includePackage = packageSelected
-    let dataPath = selectedDataPath
+    let dataPaths = selectedDataPaths
+    let builder = uninstallPlanBuilder
+    await prepare(
+      actions: actions,
+      stillSelected: {
+        self.selectedPath == report.path && self.selectedDataPaths == dataPaths
+          && self.packageSelected == includePackage
+      },
+      builder: {
+        let plan = try await builder(report, candidates, includePackage)
+        if includePackage {
+          guard let package = plan.items.first(where: { $0.sourcePath == report.path && $0.policy == .wholeBundle }),
+            package.applicationBundleID == report.bundleID
+          else { throw PlanRejections(rejections: [PlanRejection(.changedSinceScan, path: report.path)]) }
+        }
+        return plan
+      })
+  }
+
+  private func prepare(
+    actions: ActionStore, stillSelected: @escaping @MainActor () -> Bool,
+    builder: @escaping @Sendable () async throws -> ActionPlan
+  ) async {
     let id = UUID()
     preparationGeneration = id
     preparing = true
@@ -288,72 +502,54 @@ final class AppsStore {
       }
     }
     do {
-      let planBuilder = self.planBuilder
-      let appPlanBuilder = self.appPlanBuilder
-      let chosen = candidate
-      let task = Task { @concurrent () throws -> ActionPlan in
-        // Data first: its proof requires the owner app to still be installed.
-        var plans: [ActionPlan] = []
-        if let chosen { plans.append(try await planBuilder(report, chosen)) }
-        if includePackage {
-          switch await appPlanBuilder(report.path) {
-          case .success(let appPlan): plans.append(appPlan)
-          case .failure(let refused): throw refused
-          }
-        }
-        if plans.count == 1 { return plans[0] }
-        return ActionPlan(
-          snapshotRunID: plans[0].snapshotRunID, kind: .trash, items: plans.flatMap(\.items))
-      }
+      let task = Task(priority: .userInitiated) { @concurrent () throws -> ActionPlan in try await builder() }
       preparationTask = task
       let plan = try await task.value
-      guard preparationGeneration == id, selectedPath == report.path,
-        selectedDataPath == dataPath, packageSelected == includePackage, !task.isCancelled,
-        !actions.busy
-      else { return }
-      if includePackage {
-        guard let appItem = plan.items.first(where: { $0.policy == .wholeBundle }),
-          let bundleID = appItem.applicationBundleID, bundleID == report.bundleID
-        else {
-          message = SpaceText.rejection(PlanRejection(.changedSinceScan, path: report.path))
-          return
-        }
-        for id in [bundleID] + (appItem.nestedApplicationIDs ?? [])
-        where await running.isRunning(bundleID: id) != false {
+      guard preparationGeneration == id, stillSelected(), !task.isCancelled, !actions.busy else { return }
+      for item in plan.items where item.policy == .wholeBundle {
+        guard let bundleID = item.applicationBundleID else { throw PlanFailure.unsafeSelection }
+        for bundle in [bundleID] + (item.nestedApplicationIDs ?? [])
+        where await running.isRunning(bundleID: bundle) != false {
+          guard preparationGeneration == id, stillSelected() else { return }
           message = String(localized: "The app is running. Quit it first.")
           return
         }
       }
-      let summaries = plan.items.map { item -> ActionItemSummary in
-        let isPackage = item.policy == .wholeBundle
-        let node = candidate?.snapshot?.nodes.first { $0.id == item.id }
-        let logical = PlanItemSize.measure(item).logical
+      guard preparationGeneration == id, stillSelected(), !actions.busy else { return }
+      let summaries = plan.items.map { item in
+        let size = PlanItemSize.measure(item)
         return ActionItemSummary(
-          id: item.id,
-          label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
+          id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
           path: item.sourcePath,
-          reason: isPackage
+          reason: item.policy == .wholeBundle
             ? String(localized: "Whole application package")
             : String(
-              localized:
-                "Selected app data. Preferences and support files may contain personal settings or documents."
-            ),
-          logicalBytes: isPackage ? logical : node?.logical.completeTotal ?? logical,
-          allocatedBytes: node?.allocated.completeTotal)
+              localized: "Selected app data. Preferences and support files may contain personal settings or documents."),
+          logicalBytes: size.logical, allocatedBytes: size.allocated)
       }
       actions.present(plan: plan, items: summaries)
+      guard actions.pending?.id == plan.id else { return }
+      presentedPaths = Dictionary(uniqueKeysWithValues: plan.items.map { ($0.id, $0.sourcePath) })
       presentedPlanID = plan.id
+      observedResultID = nil
       message = nil
     } catch let refused as PlanRejections {
-      if preparationGeneration == id {
-        message = refused.rejections.map(SpaceText.rejection).joined(separator: "\n")
-      }
+      if preparationGeneration == id { message = refused.rejections.map(SpaceText.rejection).joined(separator: "\n") }
     } catch {
       if preparationGeneration == id {
-        message =
-          String(localized: "Could not prepare app data. Scan again.") + " "
-          + FailureText.describe(error)
+        message = String(localized: "Could not prepare app data. Scan again.") + " " + FailureText.describe(error)
       }
     }
+  }
+}
+
+extension Array where Element == RelatedDataCandidate {
+  fileprivate nonisolated func asyncPlans(
+    report: ApplicationReport,
+    builder: @Sendable (ApplicationReport, RelatedDataCandidate) async throws -> ActionPlan
+  ) async throws -> [ActionPlan] {
+    var plans: [ActionPlan] = []
+    for candidate in self { plans.append(try await builder(report, candidate)) }
+    return plans
   }
 }

@@ -33,7 +33,7 @@ jobs:
         run: swift build
 
       - name: Test
-        run: swift test
+        run: swift test --no-parallel
 
       - name: Lint Swift formatting
         run: swift format lint --strict -r Sources Tests

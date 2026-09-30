@@ -11,6 +11,25 @@ private struct ClosedAppSource: RunningApplicationSource {
   func isRunning(bundleID: String) async -> Bool? { false }
 }
 
+@Test("Apps leaves identification visible but closes action choices after cancellation")
+@MainActor func appsCancelledSelectionHasNoAuthority() {
+  let path = "/Applications/LightenQA-characterization.app"
+  let store = AppsStore(
+    pictures: disabledAppsPictures(), running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.busy = true
+  store.selectedPath = path
+  store.packageSelected = true
+  store.selectedDataPath = "/tmp/LightenQA-characterization"
+  store.cancelScan()
+  store.togglePackage(actions: actions)
+  store.toggleData("/tmp/LightenQA-other", actions: actions)
+  #expect(store.selectedPath == path)
+  #expect(!store.packageSelected)
+  #expect(store.selectedDataPath == nil)
+  #expect(store.needsRescan)
+}
+
 @MainActor private func waitForApps(_ condition: @escaping @MainActor () -> Bool) async {
   for _ in 0..<1_000 {
     if condition() { return }
@@ -36,7 +55,7 @@ private struct ClosedAppSource: RunningApplicationSource {
     allocated: ByteAggregate(knownLowerBound: 512, completeTotal: 512),
     knownItemCount: 2, partial: false, related: [], manualUninstallerSuggested: false)
   let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
-  let store = AppsStore(running: ClosedAppSource(), events: { stream })
+  let store = AppsStore(pictures: disabledAppsPictures(), running: ClosedAppSource(), events: { stream })
   let actions = ActionStore()
   store.startScan(actions: actions)
   continuation.yield(.inventory(inventory, [metadata]))
@@ -64,12 +83,14 @@ private struct ClosedAppSource: RunningApplicationSource {
 @MainActor func appsUnexpectedEndNeedsRescan() async {
   let inventory = BundleInventory(
     applications: [], unidentifiedPaths: [], complete: true, observedAt: Date())
-  let store = AppsStore(events: {
-    AsyncStream { continuation in
-      continuation.yield(.inventory(inventory, []))
-      continuation.finish()
-    }
-  })
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    events: {
+      AsyncStream { continuation in
+        continuation.yield(.inventory(inventory, []))
+        continuation.finish()
+      }
+    })
   store.startScan(actions: ActionStore())
   await waitForApps { !store.busy }
   #expect(store.needsRescan)
@@ -124,6 +145,7 @@ private actor AppsPlanGate {
   let plan = ActionPlan(snapshotRunID: snapshot.runID, kind: .trash, items: [item])
   let gate = AppsPlanGate()
   let store = AppsStore(
+    pictures: disabledAppsPictures(),
     running: ClosedAppSource(),
     events: { AsyncStream { $0.finish() } },
     planBuilder: { _, _ in try await gate.next() })
@@ -159,4 +181,8 @@ private actor AppsPlanGate {
   #expect(actions.pending?.plan == plan)
   store.togglePackage(actions: actions)
   #expect(actions.pending == nil)
+}
+
+private func disabledAppsPictures() -> ResultPictureStore {
+  ResultPictureStore(directory: NSTemporaryDirectory() + "LightenQA-" + UUID().uuidString, maximumBytes: 0)
 }

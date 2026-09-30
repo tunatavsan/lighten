@@ -65,22 +65,6 @@
         }
       }
     },
-    "Action finished. Scan again before another choice.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Action finished. Scan again before another choice."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İşlem tamamlandı. Yeni bir seçimden önce tekrar tarayın."
-          }
-        }
-      }
-    },
     "Action needs attention": {
       "localizations": {
         "en": {
@@ -269,6 +253,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulama çalışıyor. Verilerini incelemeden önce normal şekilde kapatın."
+          }
+        }
+      }
+    },
+    "App no longer found · review carefully": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App no longer found · review carefully"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama artık bulunamıyor · dikkatle inceleyin"
           }
         }
       }
@@ -817,6 +817,22 @@
         }
       }
     },
+    "Data from removed apps": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Data from removed apps"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaldırılmış uygulamaların verileri"
+          }
+        }
+      }
+    },
     "Data is separate from the app. Exact names show a possible link, not guaranteed ownership.": {
       "localizations": {
         "en": {
@@ -941,6 +957,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bitti"
+          }
+        }
+      }
+    },
+    "Drop one application (.app) to review removal.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drop one application (.app) to review removal."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaldırmayı incelemek için bir uygulama (.app) bırakın."
           }
         }
       }
@@ -1473,6 +1505,22 @@
         }
       }
     },
+    "Last scan:": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Last scan:"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Son tarama:"
+          }
+        }
+      }
+    },
     "Lighten cannot read this folder. Full Disk Access in Settings or the folder's permissions decide this.": {
       "localizations": {
         "en": {
@@ -1777,6 +1825,22 @@
         }
       }
     },
+    "Modified:": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modified:"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Değiştirilme:"
+          }
+        }
+      }
+    },
     "More categories": {
       "localizations": {
         "en": {
@@ -1933,6 +1997,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu kimlikle kurulu bir uygulama bulunamadı. Çöp’e taşımadan önce inceleyin."
+          }
+        }
+      }
+    },
+    "No installed owner was found. These files may contain settings or documents; nothing is selected automatically.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No installed owner was found. These files may contain settings or documents; nothing is selected automatically."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kurulu bir sahip uygulama bulunamadı. Bu dosyalar ayar veya belge içerebilir; hiçbir şey otomatik seçilmez."
           }
         }
       }
@@ -2353,6 +2433,22 @@
         }
       }
     },
+    "Previous result · refreshing before actions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous result · refreshing before actions"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki sonuç · eylemlerden önce yenileniyor"
+          }
+        }
+      }
+    },
     "Previously associated · review in Clean": {
       "localizations": {
         "en": {
@@ -2589,6 +2685,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Yenile"
+          }
+        }
+      }
+    },
+    "Refresh Apps to review data left after removal.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refresh Apps to review data left after removal."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaldırma sonrası kalan verileri incelemek için Uygulamalar’ı yenileyin."
           }
         }
       }
@@ -2845,6 +2957,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Seçilenleri gözden geçir"
+          }
+        }
+      }
+    },
+    "Review selected removed-app data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review selected removed-app data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili kaldırılmış uygulama verilerini incele"
           }
         }
       }
@@ -3249,18 +3377,18 @@
         }
       }
     },
-    "Select one eligible data item": {
+    "Select the app or eligible related data": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Select one eligible data item"
+            "value": "Select the app or eligible related data"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Uygun bir veri öğesi seçin"
+            "value": "Uygulamayı veya uygun ilişkili verileri seçin"
           }
         }
       }
@@ -3361,18 +3489,18 @@
         }
       }
     },
-    "Shared Group Containers remain protected and are not included.": {
+    "Shared containers are included only when this app is their sole verified owner.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Shared Group Containers remain protected and are not included."
+            "value": "Shared containers are included only when this app is their sole verified owner."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Paylaşılan Group Containers korunur ve kapsam dışıdır."
+            "value": "Paylaşılan kapsayıcılar yalnızca doğrulanmış tek sahipleri bu uygulama olduğunda dahil edilir."
           }
         }
       }
@@ -3597,6 +3725,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bazı öğeler okunamadı; boyut en az değerdir."
+          }
+        }
+      }
+    },
+    "Some selected data is unavailable. Review the reasons before continuing.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some selected data is unavailable. Review the reasons before continuing."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili verilerin bazıları kullanılamıyor. Devam etmeden önce nedenleri inceleyin."
           }
         }
       }
@@ -3937,6 +4081,22 @@
         }
       }
     },
+    "This application could not be identified safely.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This application could not be identified safely."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulama güvenli biçimde tanımlanamadı."
+          }
+        }
+      }
+    },
     "This area is missing or unreadable. Inspect it in Finder; if it exists, check Full Disk Access.": {
       "localizations": {
         "en": {
@@ -4253,6 +4413,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Disk kullanımı"
+          }
+        }
+      }
+    },
+    "Wait for the current review or scan to finish.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wait for the current review or scan to finish."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geçerli inceleme veya taramanın bitmesini bekleyin."
           }
         }
       }

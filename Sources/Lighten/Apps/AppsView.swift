@@ -7,6 +7,7 @@ struct AppsView: View {
   @Bindable var actions: ActionStore
   @State private var searchText = ""
   @State private var showingCompactDetail = false
+  @State private var expandedOrphans: Set<String> = []
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var filtered: [ApplicationReport] {
@@ -39,11 +40,19 @@ struct AppsView: View {
           TextField(String(localized: "Search by name or path"), text: $searchText)
             .textFieldStyle(.roundedBorder)
             .frame(maxWidth: 340)
-          Text("\(filtered.count) / \(store.reports.count)")
-            .font(.system(size: 11)).monospacedDigit().foregroundStyle(LightenStyle.muted)
+          Text(
+            store.pictureRows.isEmpty
+              ? "\(filtered.count) / \(store.reports.count)" : "\(store.pictureRows.count)"
+          )
+          .font(.system(size: 11)).monospacedDigit().foregroundStyle(LightenStyle.muted)
           Spacer()
-          if let date = store.scannedAt {
-            Text(date, style: .time).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+          if let date = store.pictureObservedAt ?? store.scannedAt {
+            HStack(spacing: 4) {
+              Text(String(localized: "Last scan:"))
+              Text(date, style: .date)
+              Text(date, style: .time)
+            }
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
           }
         }
         .padding(.bottom, 10)
@@ -74,24 +83,21 @@ struct AppsView: View {
         if store.scannedAt != nil && !store.inventoryComplete {
           Label(
             String(
-              localized:
-                "Application inventory is incomplete. Other locations and unreadable apps remain unknown."
-            ),
+              localized: "Application inventory is incomplete. Other locations and unreadable apps remain unknown."),
             systemImage: "exclamationmark.circle"
           )
           .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
           .padding(.bottom, 10)
         }
         Divider()
-        if store.reports.isEmpty && !store.busy {
+        if !store.pictureRows.isEmpty {
+          pictureList
+        } else if store.reports.isEmpty && store.orphanCandidates.isEmpty && !store.busy {
           ContentUnavailableView(
             store.scannedAt == nil
-              ? String(localized: "Scan installed apps")
-              : String(localized: "No applications found"),
+              ? String(localized: "Scan installed apps") : String(localized: "No applications found"),
             systemImage: "app.dashed",
-            description: Text(
-              String(
-                localized: "Inspect applications in /Applications and your Applications folder."))
+            description: Text(String(localized: "Inspect applications in /Applications and your Applications folder."))
           )
           .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if store.busy && store.reports.isEmpty {
@@ -161,8 +167,7 @@ struct AppsView: View {
         }
         if let message = store.message {
           Divider()
-          Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning).padding(
-            .top, 9)
+          Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning).padding(.top, 9)
         }
         if let result = actions.result, result.planID == store.presentedPlanID {
           Text(resultLine(result))
@@ -179,32 +184,133 @@ struct AppsView: View {
       ConfirmationView(presentation: presentation, actions: actions)
     }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: store.selectedPath)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: store.selectedDataPath)
+    .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: store.selectedDataPaths)
     .onChange(of: store.selectedPath) { _, path in
       if path == nil { showingCompactDetail = false }
     }
     .onChange(of: actions.result?.planID) { _, _ in store.observeResult(actions: actions) }
-    .onAppear { store.observeResult(actions: actions) }
+    .onAppear {
+      store.observeResult(actions: actions)
+      store.open(actions: actions)
+    }
     .onDisappear { store.deactivate(actions: actions) }
+    .dropDestination(for: URL.self) { urls, _ in
+      Task { await store.acceptDrop(urls, actions: actions) }
+      return true
+    }
   }
 
   private var applicationList: some View {
     Group {
-      if filtered.isEmpty {
-        ContentUnavailableView(
-          String(localized: "No matching applications"), systemImage: "magnifyingglass"
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      if filtered.isEmpty && store.orphanCandidates.isEmpty {
+        ContentUnavailableView(String(localized: "No matching applications"), systemImage: "magnifyingglass")
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
         ScrollView {
           LazyVStack(spacing: 5) {
             ForEach(filtered) { app in appRow(app) }
+            orphanSection
           }
           .padding(.vertical, 10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
     }
+  }
+
+  private var pictureList: some View {
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 12) {
+        Label(String(localized: "Previous result · refreshing before actions"), systemImage: "clock")
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        ForEach(
+          store.pictureRows.filter {
+            searchText.isEmpty || $0.path.localizedStandardContains(searchText)
+              || $0.bundleID?.localizedStandardContains(searchText) == true
+          }
+        ) { row in
+          HStack(spacing: 10) {
+            ApplicationIconView(path: row.path)
+            VStack(alignment: .leading, spacing: 3) {
+              Text(URL(fileURLWithPath: row.path).deletingPathExtension().lastPathComponent)
+                .font(.system(size: 12, weight: .medium))
+              Text(row.path).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+                .lineLimit(1).truncationMode(.middle)
+            }
+            Spacer()
+            Text(format(row.logical.completeTotal ?? row.logical.knownLowerBound))
+              .font(.system(size: 11)).monospacedDigit()
+          }
+          .accessibilityElement(children: .combine)
+        }
+      }
+      .padding(.vertical, 10)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+  }
+
+  private var orphanSection: some View {
+    let groups = Dictionary(grouping: store.orphanCandidates) {
+      $0.bundleID ?? $0.receipt?.bundleID ?? String(localized: "Unknown")
+    }
+    return VStack(alignment: .leading, spacing: 10) {
+      if !groups.isEmpty {
+        Text(String(localized: "Data from removed apps")).font(.system(size: 14, weight: .semibold))
+        Text(
+          String(
+            localized:
+              "No installed owner was found. These files may contain settings or documents; nothing is selected automatically."
+          )
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+        ForEach(groups.keys.sorted(), id: \.self) { bundleID in
+          DisclosureGroup(
+            isExpanded: Binding(
+              get: { expandedOrphans.contains(bundleID) },
+              set: { if $0 { expandedOrphans.insert(bundleID) } else { expandedOrphans.remove(bundleID) } }
+            )
+          ) {
+            ForEach(groups[bundleID] ?? []) { candidate in
+              HStack(alignment: .top, spacing: 8) {
+                if candidate.canSelect && candidate.classification != .installed && !store.busy && !store.needsRescan {
+                  Button {
+                    store.toggleOrphan(candidate.path, actions: actions)
+                  } label: {
+                    Image(
+                      systemName: store.selectedOrphanPaths.contains(candidate.path)
+                        ? "checkmark.square.fill" : "square")
+                  }.buttonStyle(.plain)
+                    .accessibilityLabel(candidate.path)
+                } else {
+                  Image(systemName: "info.circle.fill").foregroundStyle(LightenStyle.warning)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(candidate.path).font(.system(size: 10)).lineLimit(2).truncationMode(.middle)
+                  Text(
+                    candidate.classification == .installed
+                      ? String(localized: "Refresh Apps to review data left after removal.")
+                      : String(localized: "App no longer found · review carefully")
+                  )
+                  .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+                  if let date = candidate.modifiedAt {
+                    HStack(spacing: 3) {
+                      Text(String(localized: "Modified:"))
+                      Text(date, style: .date)
+                    }.font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+                  }
+                }
+              }.padding(.vertical, 4)
+            }
+          } label: {
+            Text(bundleID).font(.system(size: 11, weight: .medium))
+          }
+        }
+        Button(String(localized: "Review selected removed-app data")) {
+          Task { await store.prepareOrphans(actions: actions) }
+        }.disabled(
+          store.selectedOrphanPaths.isEmpty || store.busy || store.preparing || store.needsRescan || actions.busy)
+      }
+    }.padding(.top, groups.isEmpty ? 0 : 14)
   }
 
   private var reviewExplanation: some View {
@@ -224,7 +330,7 @@ struct AppsView: View {
     }
     .buttonStyle(.borderedProminent)
     .disabled(
-      (store.selectedDataPath == nil && !store.packageSelected) || store.busy || store.preparing
+      (store.selectedDataPaths.isEmpty && !store.packageSelected) || store.busy || store.preparing
         || store.needsRescan || actions.busy)
   }
 
@@ -235,28 +341,24 @@ struct AppsView: View {
       showingCompactDetail = true
     } label: {
       HStack(spacing: 10) {
-        Image(systemName: "app.fill")
-          .font(.system(size: 17))
-          .foregroundStyle(selected ? LightenStyle.accent : LightenStyle.muted)
-          .frame(width: 29, height: 29)
-          .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 7))
+        ApplicationIconView(path: app.path)
         VStack(alignment: .leading, spacing: 3) {
           Text(URL(fileURLWithPath: app.path).deletingPathExtension().lastPathComponent)
             .font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
           Text(app.bundleID ?? String(localized: "Identity unavailable"))
             .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
             .lineLimit(1).truncationMode(.middle)
+          if let reason = store.packageUnavailableReason(app), !store.busy {
+            Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+              .lineLimit(2)
+          }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         Spacer(minLength: 4)
         VStack(alignment: .trailing, spacing: 2) {
-          Text(
-            store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app)
-          )
-          .font(.system(size: 11, weight: .medium)).monospacedDigit()
-          if !store.measuringPaths.contains(app.path) && app.partial
-            && app.logical.knownLowerBound > 0
-          {
+          Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
+            .font(.system(size: 11, weight: .medium)).monospacedDigit()
+          if !store.measuringPaths.contains(app.path) && app.partial && app.logical.knownLowerBound > 0 {
             Text(String(localized: "At least"))
               .font(.system(size: 9)).foregroundStyle(LightenStyle.muted)
           }
@@ -281,10 +383,7 @@ struct AppsView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
         HStack(alignment: .top, spacing: 12) {
-          Image(systemName: "app.dashed")
-            .font(.system(size: 25)).foregroundStyle(LightenStyle.accent)
-            .frame(width: 45, height: 45)
-            .background(LightenStyle.fileTile, in: RoundedRectangle(cornerRadius: 11))
+          ApplicationIconView(path: app.path)
           VStack(alignment: .leading, spacing: 3) {
             Text(URL(fileURLWithPath: app.path).deletingPathExtension().lastPathComponent)
               .font(.system(size: 19, weight: .semibold)).lineLimit(2).truncationMode(.middle)
@@ -294,31 +393,25 @@ struct AppsView: View {
           .frame(maxWidth: .infinity, alignment: .leading)
         }
         HStack(alignment: .firstTextBaseline) {
-          Text(
-            store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app)
-          )
-          .font(.system(size: 23, weight: .semibold)).monospacedDigit()
+          Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
+            .font(.system(size: 23, weight: .semibold)).monospacedDigit()
           Text(
             app.partial && app.logical.knownLowerBound == 0
               ? String(localized: "Size unavailable")
-              : app.partial
-                ? String(localized: "Known lower bound") : String(localized: "Logical size")
+              : app.partial ? String(localized: "Known lower bound") : String(localized: "Logical size")
           )
           .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
           Spacer()
         }
         Text(
           String(
-            localized:
-              "Protected package contents are measured from metadata. Trash size is not freed disk space."
-          )
+            localized: "Protected package contents are measured from metadata. Trash size is not freed disk space.")
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         VStack(alignment: .leading, spacing: 5) {
           metadataRow(String(localized: "Bundle ID"), app.bundleID ?? String(localized: "Unknown"))
           metadataRow(String(localized: "Version"), app.version ?? String(localized: "Unknown"))
-          metadataRow(
-            String(localized: "Signer"), app.signerTeamID ?? String(localized: "Unavailable"))
+          metadataRow(String(localized: "Signer"), app.signerTeamID ?? String(localized: "Unavailable"))
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
@@ -331,9 +424,7 @@ struct AppsView: View {
         }
         if app.manualUninstallerSuggested {
           Label(
-            String(
-              localized:
-                "This app contains a system extension or helper. Check the vendor's uninstaller."),
+            String(localized: "This app contains a system extension or helper. Check the vendor's uninstaller."),
             systemImage: "info.circle"
           )
           .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
@@ -358,25 +449,26 @@ struct AppsView: View {
     let reason = store.packageUnavailableReason(app)
     return VStack(alignment: .leading, spacing: 7) {
       HStack(alignment: .top, spacing: 8) {
-        Button {
-          store.togglePackage(actions: actions)
-        } label: {
-          Image(systemName: store.packageSelected ? "checkmark.square.fill" : "square")
+        if reason == nil {
+          Button {
+            store.togglePackage(actions: actions)
+          } label: {
+            Image(systemName: store.packageSelected ? "checkmark.square.fill" : "square")
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(String(localized: "Move the whole app to Trash"))
+        } else {
+          Image(systemName: "info.circle.fill").foregroundStyle(LightenStyle.warning)
+            .accessibilityHidden(true)
         }
-        .buttonStyle(.plain).disabled(reason != nil)
-        .accessibilityLabel(String(localized: "Move the whole app to Trash"))
         VStack(alignment: .leading, spacing: 3) {
           Text(String(localized: "Move the whole app to Trash"))
             .font(.system(size: 13, weight: .medium))
           Text(
             reason
-              ?? String(
-                localized:
-                  "The app moves as one package. Its data below stays unless you select it too.")
+              ?? String(localized: "The app moves as one package. Its data below stays unless you select it too.")
           )
-          .font(.system(size: 11)).foregroundStyle(
-            reason == nil ? LightenStyle.muted : LightenStyle.warning
-          )
+          .font(.system(size: 11)).foregroundStyle(reason == nil ? LightenStyle.muted : LightenStyle.warning)
           .fixedSize(horizontal: false, vertical: true)
         }
         Spacer(minLength: 0)
@@ -397,10 +489,7 @@ struct AppsView: View {
       Text(String(localized: "Related data"))
         .font(.system(size: 15, weight: .semibold))
       Text(
-        String(
-          localized:
-            "Data is separate from the app. Exact names show a possible link, not guaranteed ownership."
-        )
+        String(localized: "Data is separate from the app. Exact names show a possible link, not guaranteed ownership.")
       )
       .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       .fixedSize(horizontal: false, vertical: true)
@@ -418,7 +507,7 @@ struct AppsView: View {
         relatedRow(candidate, app: app)
       }
       Label(
-        String(localized: "Shared Group Containers remain protected and are not included."),
+        String(localized: "Shared containers are included only when this app is their sole verified owner."),
         systemImage: "lock.shield"
       )
       .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
@@ -429,32 +518,35 @@ struct AppsView: View {
 
   private func relatedRow(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> some View {
     let eligible = canSelect(candidate, app: app)
-    let selected = store.selectedDataPath == candidate.path
+    let selected = store.selectedDataPaths.contains(candidate.path)
     return HStack(alignment: .top, spacing: 8) {
-      Button {
-        store.toggleData(candidate.path, actions: actions)
-      } label: {
-        Image(systemName: selected ? "checkmark.square.fill" : "square")
+      if eligible {
+        Button {
+          store.toggleData(candidate.path, actions: actions)
+        } label: {
+          Image(systemName: selected ? "checkmark.square.fill" : "square")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+          "\(selected ? String(localized: "Deselect") : String(localized: "Select")) \(URL(fileURLWithPath: candidate.path).lastPathComponent)"
+        )
+      } else {
+        Image(systemName: "info.circle.fill").foregroundStyle(LightenStyle.warning)
+          .accessibilityHidden(true)
       }
-      .buttonStyle(.plain).disabled(!eligible)
-      .accessibilityLabel(
-        "\(selected ? String(localized: "Deselect") : String(localized: "Select")) \(URL(fileURLWithPath: candidate.path).lastPathComponent)"
-      )
       VStack(alignment: .leading, spacing: 2) {
         Text(URL(fileURLWithPath: candidate.path).lastPathComponent)
           .font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
         Text(candidate.path).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
           .lineLimit(1).truncationMode(.middle).help(candidate.path)
         Text(relatedReason(candidate, eligible: eligible))
-          .font(.system(size: 10)).foregroundStyle(
-            eligible ? LightenStyle.muted : LightenStyle.warning
-          )
+          .font(.system(size: 10)).foregroundStyle(eligible ? LightenStyle.muted : LightenStyle.warning)
           .fixedSize(horizontal: false, vertical: true)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       Spacer(minLength: 3)
-      if let node = candidate.snapshot?.nodes.first(where: { $0.parentID != nil }) {
-        Text(format(node.logical.completeTotal ?? node.logical.knownLowerBound))
+      if let observation = candidate.observation {
+        Text(format(observation.logical.completeTotal ?? observation.logical.knownLowerBound))
           .font(.system(size: 10)).monospacedDigit()
       }
     }
@@ -462,16 +554,7 @@ struct AppsView: View {
   }
 
   private func canSelect(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> Bool {
-    guard candidate.classification == .installed, candidate.snapshot != nil,
-      store.inventoryComplete, !store.busy, !store.needsRescan, let id = app.bundleID,
-      store.reports.filter({
-        $0.bundleID?.lowercased(with: Locale(identifier: "en_US_POSIX"))
-          == id.lowercased(with: Locale(identifier: "en_US_POSIX"))
-      }).count == 1,
-      store.runningCheckedIDs.contains(id),
-      !store.runningIDs.contains(id), !store.runningUnknownIDs.contains(id)
-    else { return false }
-    return true
+    store.canSelect(candidate, app: app)
   }
 
   private func relatedReason(_ candidate: RelatedDataCandidate, eligible: Bool) -> String {
@@ -486,8 +569,8 @@ struct AppsView: View {
     case .protected: String(localized: "Protected · report only")
     case .shared: String(localized: "Shared · report only")
     case .uncertain: String(localized: "Association uncertain · report only")
-    case .historicallyVerifiedAbsent, .orphanVerified:
-      String(localized: "Previously associated · review in Clean")
+    case .historicallyVerifiedAbsent: String(localized: "Previously associated · review in Clean")
+    case .orphanVerified: String(localized: "App no longer found · review carefully")
     }
   }
 
