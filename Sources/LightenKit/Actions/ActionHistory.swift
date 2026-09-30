@@ -15,9 +15,33 @@ public struct HistoryItem: Sendable {
   public let deletedLogicalBytes: Int64
 }
 
+public struct HistoryPlan: Sendable, Identifiable {
+  public let id: UUID
+  public let kind: ActionKind
+  public let createdAt: Date
+  public let items: [HistoryItem]
+  public let metadata: [JournalItemSummary]
+
+  public var canUndo: Bool { kind == .trash && items.contains { $0.state == .inTrash } }
+
+  public var state: HistoryState {
+    if items.contains(where: { $0.state == .uncertain }) { return .uncertain }
+    if items.contains(where: { $0.state == .partiallyDeleted }) { return .partiallyDeleted }
+    if items.contains(where: { $0.state == .inTrash }) { return .inTrash }
+    if items.contains(where: { $0.state == .failed }) { return .failed }
+    if items.contains(where: { $0.state == .skipped }) { return .skipped }
+    return items.first?.state ?? .uncertain
+  }
+
+  public var logicalBytes: Int64 { metadata.reduce(0) { $0 &+ $1.logicalBytes } }
+  public var deletedCount: Int { items.reduce(0) { $0 + $1.deletedCount } }
+  public var deletedLogicalBytes: Int64 { items.reduce(0) { $0 &+ $1.deletedLogicalBytes } }
+}
+
 public struct HistoryReadout: Sendable {
   public let items: [HistoryItem]
   public let issues: [JournalIssue]
+  public let plans: [HistoryPlan]
 }
 
 public enum UndoFailure: Error, Sendable {
@@ -44,14 +68,20 @@ public actor ActionHistory {
   }
 
   private func reconcileLeased() async throws -> HistoryReadout {
-    let readout = try await journal.read()
+    let readout = try await journal.readSummary()
     var items: [HistoryItem] = []
+    var plans: [HistoryPlan] = []
+    var eventsByItem: [UUID: [UUID: [JournalRecord]]] = [:]
+    for record in readout.records {
+      if let itemID = record.itemID {
+        eventsByItem[record.planID, default: [:]][itemID, default: []].append(record)
+      }
+    }
     for intent in readout.records where intent.kind == .intent {
-      guard let plan = intent.plan, plan.id == intent.planID else { continue }
+      guard let plan = intent.summary, plan.id == intent.planID else { continue }
+      let firstItem = items.count
       for item in plan.items {
-        let events = readout.records.filter {
-          $0.planID == plan.id && $0.itemID == item.id
-        }
+        let events = eventsByItem[plan.id]?[item.id] ?? []
         let terminal = events.last
         let applied = events.last { $0.kind == .applied }
         let state: HistoryState
@@ -91,7 +121,7 @@ public actor ActionHistory {
             state = .uncertain
           }
         case .intent, .deleteProgress, .none:
-          if let original = item.inventory.first?.identity,
+          if let original = item.rootIdentity,
             (try? DescriptorFileSystem.identity(at: item.sourcePath)) == original
           {
             state = .atSource
@@ -106,8 +136,12 @@ public actor ActionHistory {
             deletedCount: 0, deletedLogicalBytes: 0
           ))
       }
+      plans.append(
+        HistoryPlan(
+          id: plan.id, kind: plan.kind, createdAt: plan.createdAt,
+          items: Array(items[firstItem...]), metadata: plan.items))
     }
-    return HistoryReadout(items: items, issues: readout.issues)
+    return HistoryReadout(items: items, issues: readout.issues, plans: plans)
   }
 
   public func undo(planID: UUID, itemID: UUID) async throws {
@@ -119,16 +153,57 @@ public actor ActionHistory {
     }
   }
 
+  /// Restores every pending item in the action under one mutation lease.
+  public func undo(planID: UUID) async throws {
+    guard !busy else { throw UndoFailure.alreadyRunning }
+    busy = true
+    defer { busy = false }
+    try await journal.withMutationLease {
+      let readout = try await self.journal.readSummary()
+      guard readout.issues.isEmpty else { throw UndoFailure.corruptHistory }
+      let plan = try await self.journal.loadPlan(id: planID)
+      guard plan.kind == .trash else { throw UndoFailure.noAppliedRecord }
+      let events = Dictionary(grouping: readout.records.filter { $0.planID == planID && $0.itemID != nil }) {
+        $0.itemID!
+      }
+      var pending: [(PlanItem, [JournalRecord])] = []
+      var completedInterruptedRestore = false
+      for item in plan.items {
+        let records = events[item.id] ?? []
+        guard let applied = records.last(where: { $0.kind == .applied }),
+          records.last?.kind != .reversed,
+          let trashPath = applied.returnedTrashPath, let moved = applied.movedIdentity
+        else { continue }
+        if records.last?.kind == .undoIntent, Self.verifiedRestoredItem(item: item, moved: moved) {
+          try await self.journal.append(JournalRecord(kind: .reversed, planID: planID, itemID: item.id))
+          completedInterruptedRestore = true
+          continue
+        }
+        guard Self.verifiedTrashItem(at: trashPath, item: item, moved: moved) else {
+          throw UndoFailure.changedTrashItem
+        }
+        pending.append((item, records))
+      }
+      guard !pending.isEmpty || completedInterruptedRestore else { throw UndoFailure.noAppliedRecord }
+      for (item, records) in pending {
+        try await self.restoreLeased(plan: plan, item: item, records: records)
+      }
+    }
+  }
+
   private func undoLeased(planID: UUID, itemID: UUID) async throws {
-    let readout = try await journal.read()
+    let readout = try await journal.readSummary()
     guard readout.issues.isEmpty else { throw UndoFailure.corruptHistory }
-    guard
-      let plan = readout.records.first(where: {
-        $0.kind == .intent && $0.planID == planID
-      })?.plan, let item = plan.items.first(where: { $0.id == itemID })
-    else { throw UndoFailure.unknownItem }
+    let plan = try await journal.loadPlan(id: planID)
+    guard let item = plan.items.first(where: { $0.id == itemID }) else { throw UndoFailure.unknownItem }
     guard plan.kind == .trash else { throw UndoFailure.noAppliedRecord }
     let records = readout.records.filter { $0.planID == planID && $0.itemID == itemID }
+    try await restoreLeased(plan: plan, item: item, records: records)
+  }
+
+  private func restoreLeased(plan: ActionPlan, item: PlanItem, records: [JournalRecord]) async throws {
+    let planID = plan.id
+    let itemID = item.id
     guard let applied = records.last(where: { $0.kind == .applied }),
       records.last?.kind != .reversed,
       let trashPath = applied.returnedTrashPath,
@@ -208,6 +283,24 @@ public actor ActionHistory {
       JournalRecord(
         kind: .reversed, planID: planID, itemID: itemID
       ))
+  }
+
+  private static func verifiedTrashItem(at path: String, item: JournalItemSummary, moved: FileIdentity) -> Bool {
+    guard let original = item.rootIdentity, let volumeID = item.volumeID,
+      original.matchesStableTrashIdentity(moved),
+      (try? DescriptorFileSystem.volumeID(at: path)) == volumeID,
+      let observed = try? KnownPathFileSystem.identity(at: path)
+    else { return false }
+    return moved.matchesStableTrashIdentity(observed)
+  }
+
+  private static func verifiedRestoredItem(item: JournalItemSummary, moved: FileIdentity) -> Bool {
+    guard let original = item.rootIdentity, let volumeID = item.volumeID,
+      original.matchesStableTrashIdentity(moved),
+      (try? DescriptorFileSystem.volumeID(at: item.sourcePath)) == volumeID,
+      let observed = try? DescriptorFileSystem.identity(at: item.sourcePath)
+    else { return false }
+    return moved.matchesStableTrashIdentity(observed)
   }
 
   private static func verifiedTrashItem(at path: String, item: PlanItem, moved: FileIdentity) -> Bool {

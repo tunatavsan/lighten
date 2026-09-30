@@ -1,26 +1,437 @@
 {
-  "version": 1,
+  "version": 2,
   "rows": [
     {
-      "id": "pip-http-v2", "relativeRoot": "Library/Caches/pip/http-v2", "removal": "delete", "class": "regenerableCache", "activity": "pip",
-      "titleEN": "pip HTTP cache", "titleTR": "pip HTTP önbelleği",
-      "reasonEN": "Cached downloads can be fetched again.", "reasonTR": "Önbellekteki indirmeler yeniden alınabilir.",
-      "costEN": "Future installs may download packages again.", "costTR": "Sonraki kurulumlar paketleri yeniden indirebilir.",
-      "evidenceURL": "https://pip.pypa.io/en/stable/topics/caching/", "ruleSource": "pip caching documentation, HTTP cache", "verifiedOn": "2026-09-22"
+      "id": "pip-http-v2",
+      "relativeRoot": "Library/Caches/pip/http-v2",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "pip",
+        "python",
+        "uv"
+      ],
+      "titleEN": "pip HTTP cache",
+      "titleTR": "pip HTTP önbelleği",
+      "reasonEN": "Cached downloads can be fetched again.",
+      "reasonTR": "Önbellekteki indirmeler yeniden alınabilir.",
+      "costEN": "Future installs may download packages again.",
+      "costTR": "Sonraki kurulumlar paketleri yeniden indirebilir.",
+      "evidenceURL": "https://pip.pypa.io/en/stable/topics/caching/",
+      "ruleSource": "pip caching documentation, HTTP cache",
+      "verifiedOn": "2026-09-22",
+      "methods": [
+        "trash",
+        "catalogDelete"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0
     },
     {
-      "id": "pip-wheels", "relativeRoot": "Library/Caches/pip/wheels", "removal": "delete", "class": "regenerableCache", "activity": "pip",
-      "titleEN": "pip wheel cache", "titleTR": "pip wheel önbelleği",
-      "reasonEN": "Cached wheels can be rebuilt or downloaded again.", "reasonTR": "Önbellekteki wheel dosyaları yeniden derlenebilir veya indirilebilir.",
-      "costEN": "Future installs may need downloads or builds.", "costTR": "Sonraki kurulumlar indirme veya derleme gerektirebilir.",
-      "evidenceURL": "https://pip.pypa.io/en/stable/topics/caching/", "ruleSource": "pip caching documentation, locally built wheels", "verifiedOn": "2026-09-22"
+      "id": "pip-wheels",
+      "relativeRoot": "Library/Caches/pip/wheels",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "pip",
+        "python",
+        "uv"
+      ],
+      "titleEN": "pip wheel cache",
+      "titleTR": "pip wheel önbelleği",
+      "reasonEN": "Cached wheels can be rebuilt or downloaded again.",
+      "reasonTR": "Önbellekteki wheel dosyaları yeniden derlenebilir veya indirilebilir.",
+      "costEN": "Future installs may need downloads or builds.",
+      "costTR": "Sonraki kurulumlar indirme veya derleme gerektirebilir.",
+      "evidenceURL": "https://pip.pypa.io/en/stable/topics/caching/",
+      "ruleSource": "pip caching documentation, locally built wheels",
+      "verifiedOn": "2026-09-22",
+      "methods": [
+        "trash",
+        "catalogDelete"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0
     },
     {
-      "id": "homebrew-downloads", "relativeRoot": "Library/Caches/Homebrew/downloads", "removal": "delete", "class": "regenerableCache", "activity": "homebrew",
-      "titleEN": "Homebrew downloads", "titleTR": "Homebrew indirmeleri",
-      "reasonEN": "Downloaded archive cache can be fetched again.", "reasonTR": "İndirilen arşiv önbelleği yeniden alınabilir.",
-      "costEN": "Future installs may download archives again.", "costTR": "Sonraki kurulumlar arşivleri yeniden indirebilir.",
-      "evidenceURL": "https://docs.brew.sh/Manpage#--cache-options-formulacask-", "ruleSource": "Homebrew cache and cleanup documentation", "verifiedOn": "2026-09-22"
+      "id": "homebrew-downloads",
+      "relativeRoot": "Library/Caches/Homebrew/downloads",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "brew",
+        "bash",
+        "ruby",
+        "curl"
+      ],
+      "titleEN": "Homebrew downloads",
+      "titleTR": "Homebrew indirmeleri",
+      "reasonEN": "Downloaded archive cache can be fetched again.",
+      "reasonTR": "İndirilen arşiv önbelleği yeniden alınabilir.",
+      "costEN": "Future installs may download archives again.",
+      "costTR": "Sonraki kurulumlar arşivleri yeniden indirebilir.",
+      "evidenceURL": "https://docs.brew.sh/Manpage#--cache-options-formulacask-",
+      "ruleSource": "Homebrew cache and cleanup documentation",
+      "verifiedOn": "2026-09-22",
+      "methods": [
+        "trash",
+        "catalogDelete"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0
+    },
+    {
+      "id": "npm-cache",
+      "relativeRoot": ".npm/_cacache",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "npm",
+        "node"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "npm package cache",
+      "titleTR": "npm paket önbelleği",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://docs.npmjs.com/cli/v11/commands/npm-cache/",
+      "ruleSource": "npm package cache documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "npm-exec-cache",
+      "relativeRoot": ".npm/_npx",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "npm",
+        "node"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "npm execution cache",
+      "titleTR": "npm çalıştırma önbelleği",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://docs.npmjs.com/cli/v11/commands/npm-cache/",
+      "ruleSource": "npm execution cache documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "yarn-cache",
+      "relativeRoot": "Library/Caches/Yarn",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "yarn",
+        "node"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "Yarn package cache",
+      "titleTR": "Yarn paket önbelleği",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://classic.yarnpkg.com/lang/en/docs/cli/cache/",
+      "ruleSource": "Yarn package cache documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "pnpm-store",
+      "relativeRoot": "Library/pnpm/store",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "pnpm",
+        "node"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "pnpm package store",
+      "titleTR": "pnpm paket deposu",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://pnpm.io/cli/store",
+      "ruleSource": "pnpm package store documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "uv-cache",
+      "relativeRoot": "Library/Caches/uv",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "uv",
+        "python"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "uv package cache",
+      "titleTR": "uv paket önbelleği",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://docs.astral.sh/uv/concepts/cache/",
+      "ruleSource": "uv package cache documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "gradle-cache",
+      "relativeRoot": ".gradle/caches",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "gradle",
+        "java"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "Gradle caches",
+      "titleTR": "Gradle önbellekleri",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://docs.gradle.org/current/userguide/directory_layout.html",
+      "ruleSource": "Gradle caches documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "cargo-downloads",
+      "relativeRoot": ".cargo/registry/cache",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "cargo",
+        "rustc"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "Cargo download cache",
+      "titleTR": "Cargo indirme önbelleği",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://doc.rust-lang.org/cargo/guide/cargo-home.html",
+      "ruleSource": "Cargo download cache documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "go-build-cache",
+      "relativeRoot": "Library/Caches/go-build",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "go"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "Go build cache",
+      "titleTR": "Go derleme önbelleği",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://pkg.go.dev/cmd/go#hdr-Remove_object_files_and_cached_files",
+      "ruleSource": "Go build cache documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "xcode-cache",
+      "relativeRoot": "Library/Caches/com.apple.dt.Xcode",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "Xcode",
+        "xcodebuild"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "Xcode caches",
+      "titleTR": "Xcode önbellekleri",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://developer.apple.com/documentation/foundation/filemanager/searchpathdirectory/cachesdirectory",
+      "ruleSource": "Xcode caches documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "xcode-derived-data",
+      "relativeRoot": "Library/Developer/Xcode/DerivedData",
+      "removal": "delete",
+      "class": "buildOutput",
+      "activity": [
+        "Xcode",
+        "xcodebuild",
+        "swift",
+        "clang"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "Xcode build output",
+      "titleTR": "Xcode derleme çıktıları",
+      "reasonEN": "Derived build products can be rebuilt from project sources.",
+      "reasonTR": "Derleme çıktıları proje kaynaklarından yeniden oluşturulabilir.",
+      "costEN": "Xcode will rebuild indexes and products. Debug symbols remain recoverable in the Trash.",
+      "costTR": "Xcode dizinleri ve çıktıları yeniden oluşturur. Hata ayıklama simgeleri Çöp’ten geri alınabilir.",
+      "evidenceURL": "https://developer.apple.com/documentation/xcode/build-settings-reference",
+      "ruleSource": "Xcode build output documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "xcode-device-support",
+      "relativeRoot": "Library/Developer/Xcode/iOS DeviceSupport",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "Xcode",
+        "xcodebuild"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "Xcode device support cache",
+      "titleTR": "Xcode aygıt destek önbelleği",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://developer.apple.com/documentation/xcode/running-your-app-on-simulated-or-physical-devices",
+      "ruleSource": "Xcode device support cache documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "simulator-caches",
+      "relativeRoot": "Library/Developer/CoreSimulator/Caches",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [
+        "Simulator",
+        "CoreSimulatorService"
+      ],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "Simulator caches",
+      "titleTR": "Simülatör önbellekleri",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://developer.apple.com/documentation/xcode/running-your-app-on-simulated-or-physical-devices",
+      "ruleSource": "Simulator caches documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "simulator-devices",
+      "relativeRoot": "Library/Developer/CoreSimulator/Devices",
+      "removal": "reportOnly",
+      "class": "userDataRisk",
+      "activity": [
+        "Simulator",
+        "CoreSimulatorService"
+      ],
+      "methods": [],
+      "defaultSelected": false,
+      "minAgeDays": 0,
+      "titleEN": "Simulator device data",
+      "titleTR": "Simülatör aygıt verileri",
+      "reasonEN": "Simulator devices may contain application data.",
+      "reasonTR": "Simülatör aygıtları uygulama verisi içerebilir.",
+      "costEN": "Manage these devices in Xcode.",
+      "costTR": "Bu aygıtları Xcode içinde yönetin.",
+      "evidenceURL": "https://developer.apple.com/documentation/xcode/running-your-app-on-simulated-or-physical-devices",
+      "ruleSource": "Simulator device data documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "user-app-caches",
+      "relativeRoot": "Library/Caches",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": true,
+      "minAgeDays": 0,
+      "titleEN": "Application caches",
+      "titleTR": "Uygulama önbellekleri",
+      "reasonEN": "Cached files can be downloaded or rebuilt.",
+      "reasonTR": "Önbellekteki dosyalar yeniden indirilebilir veya oluşturulabilir.",
+      "costEN": "The next use may need a download or rebuild.",
+      "costTR": "Sonraki kullanımda indirme veya yeniden oluşturma gerekebilir.",
+      "evidenceURL": "https://developer.apple.com/documentation/foundation/filemanager/searchpathdirectory/cachesdirectory",
+      "ruleSource": "Application caches documentation",
+      "verifiedOn": "2026-09-30"
+    },
+    {
+      "id": "user-app-logs",
+      "relativeRoot": "Library/Logs",
+      "removal": "delete",
+      "class": "regenerableCache",
+      "activity": [],
+      "methods": [
+        "trash"
+      ],
+      "defaultSelected": false,
+      "minAgeDays": 7,
+      "titleEN": "Application logs",
+      "titleTR": "Uygulama günlükleri",
+      "reasonEN": "Older logs are diagnostic records.",
+      "reasonTR": "Eski günlükler tanılama kayıtlarıdır.",
+      "costEN": "Removed logs will no longer be available for troubleshooting.",
+      "costTR": "Kaldırılan günlükler sorun giderme için kullanılamaz.",
+      "evidenceURL": "https://developer.apple.com/documentation/os/logging",
+      "ruleSource": "Application logs documentation",
+      "verifiedOn": "2026-09-30"
     }
   ]
 }

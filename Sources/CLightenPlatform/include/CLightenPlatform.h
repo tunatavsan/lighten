@@ -1,6 +1,7 @@
 #ifndef CLIGHTEN_PLATFORM_H
 #define CLIGHTEN_PLATFORM_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct {
@@ -22,10 +23,11 @@ int lighten_read_processes(LightenProcessSample *samples, int32_t capacity,
                            uint32_t *timebase_numer, uint32_t *timebase_denom);
 const char *lighten_process_name(const LightenProcessSample *sample);
 
-// 1: relevant process observed, 0: complete current-UID snapshot clear,
-// -1: snapshot or classification incomplete. Never reads process arguments.
-int lighten_process_activity(int category);
-int lighten_process_name_veto(const char *name, int category);
+// 1: same-UID process has an open vnode or cwd at/below root, 0: no such
+// evidence in the current process table, -1: whole process table unavailable.
+// Never reads arguments. Process names are descriptive, never veto criteria.
+int lighten_process_activity(const char *root, char *process_name, size_t name_capacity);
+int lighten_path_is_under_root(const char *path, const char *root);
 
 enum {
   LIGHTEN_OBJ_REGULAR = 1,

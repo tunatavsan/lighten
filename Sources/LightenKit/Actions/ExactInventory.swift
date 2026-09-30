@@ -9,6 +9,10 @@ public enum TreePolicy: String, Codable, Sendable {
   /// A whole package selected as the operation root. The application-slice and
   /// localization rules do not apply beneath that root; every other rule does.
   case wholeBundle
+  /// Catalog cache packages and symbolic links, authorized only by a Trash proof.
+  case catalogTrash
+  /// Regenerable build output also permits debug symbols below the selected root.
+  case catalogBuildOutput
 }
 
 public enum RejectionReason: String, Codable, Sendable, Equatable {
@@ -27,6 +31,7 @@ public enum RejectionReason: String, Codable, Sendable, Equatable {
   case changedSinceScan
   case differentVolume
   case needsAdministrator
+  case userPermissionDenied
   case applicationRunning
   case lightenItself
   case tooManyItems
@@ -56,6 +61,16 @@ public struct PlanRejections: Error, Sendable, Equatable {
 /// descriptor-relative no-follow metadata. Scan trees and caches are never used.
 public struct ExactInventory: Sendable {
   public static let applicationRules: Set<String> = ["universal-thinning", "localization-bundles"]
+
+  static func permits(_ rules: [NeverRule], policy: TreePolicy) -> Bool {
+    let exemptions: Set<String>
+    switch policy {
+    case .spaceTrash: exemptions = []
+    case .wholeBundle, .catalogTrash: exemptions = applicationRules
+    case .catalogBuildOutput: exemptions = applicationRules.union(["xcode-debug-symbols"])
+    }
+    return rules.allSatisfy { exemptions.contains($0.id) }
+  }
   public let homeDirectory: String
   public let limit: Int
 
@@ -69,7 +84,7 @@ public struct ExactInventory: Sendable {
     public let policy: TreePolicy
     public let volumeID: UUID
     public let ancestors: [PathIdentity]
-    /// Identifiers of applications nested inside a whole application root.
+    /// Identifiers of application packages included by this tree policy.
     public let nestedApplicationIDs: [String]
   }
 
@@ -89,7 +104,8 @@ public struct ExactInventory: Sendable {
   }
 
   public func collect(
-    rootPath: String, expected: (device: UInt64, inode: UInt64)?, isCancelled: @Sendable () -> Bool = { false }
+    rootPath: String, expected: (device: UInt64, inode: UInt64)?, policy requestedPolicy: TreePolicy? = nil,
+    isCancelled: @Sendable () -> Bool = { false }
   ) throws(PlanRejection) -> Result {
     guard (try? DescriptorFileSystem.validatedComponents(rootPath)) != nil else {
       throw PlanRejection(.unavailable, path: rootPath)
@@ -107,7 +123,10 @@ public struct ExactInventory: Sendable {
       throw PlanRejection(.changedSinceScan, path: rootPath)
     }
     switch root.kind {
-    case .symbolicLink: throw PlanRejection(.symbolicLinkRoot, path: rootPath)
+    case .symbolicLink:
+      guard requestedPolicy == .catalogTrash || requestedPolicy == .catalogBuildOutput else {
+        throw PlanRejection(.symbolicLinkRoot, path: rootPath)
+      }
     case .other: throw PlanRejection(.specialFile, path: rootPath)
     case .regular, .directory: break
     }
@@ -118,16 +137,24 @@ public struct ExactInventory: Sendable {
     }
     let parent = (rootPath as NSString).deletingLastPathComponent
     if access(parent, W_OK) != 0 || (root.kind == .directory && access(rootPath, W_OK) != 0) {
-      throw PlanRejection(.needsAdministrator, path: rootPath)
+      var details = stat()
+      let owned = lstat(rootPath, &details) == 0 && details.st_uid == geteuid()
+      throw PlanRejection(owned ? .userPermissionDenied : .needsAdministrator, path: rootPath)
     }
     let ancestors: [PathIdentity]
     do { ancestors = try DescriptorFileSystem.ancestorIdentities(of: rootPath) } catch {
       throw PlanRejection(.changedSinceScan, path: rootPath)
     }
-    // Only a whole application skips the application-slice and localization rules.
+    // Catalog Trash permissions come from a later manifest-proof validation.
     let wholeBundle = root.kind == .directory && Self.isApplicationName(rootPath)
-    let policy: TreePolicy = wholeBundle ? .wholeBundle : .spaceTrash
+    let policy: TreePolicy = requestedPolicy ?? (wholeBundle ? .wholeBundle : .spaceTrash)
     var nested: [String] = []
+    if (policy == .catalogTrash || policy == .catalogBuildOutput) && wholeBundle {
+      guard let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: rootPath) else {
+        throw PlanRejection(.missingMetadata, path: rootPath)
+      }
+      nested.append(id)
+    }
     let rootEntry = ScanEntry(parentID: nil, path: rootPath, identity: root, issues: [], readable: true)
     var entries = [rootEntry]
     if root.kind == .directory {
@@ -136,6 +163,11 @@ public struct ExactInventory: Sendable {
         path: rootPath, parentID: rootEntry.id, identity: root, rootDevice: root.device,
         rootPath: rootPath, policy: policy, automaton: automaton,
         state: automaton.state(forPath: rootPath), entries: &entries, nested: &nested, isCancelled: isCancelled)
+    }
+    if nested.contains(where: {
+      $0.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
+    }) {
+      throw PlanRejection(.lightenItself, path: rootPath)
     }
     return Result(
       entries: entries, policy: policy, volumeID: volumeID, ancestors: ancestors, nestedApplicationIDs: nested)
@@ -166,7 +198,7 @@ public struct ExactInventory: Sendable {
       let childState = automaton.step(state, name)
       let rules = automaton.matches(childState, path: childPath, homeDirectory: homeDirectory)
       if let rule = rules.first,
-        !(policy == .wholeBundle && rules.allSatisfy { Self.applicationRules.contains($0.id) })
+        !Self.permits(rules, policy: policy)
       {
         let package = Self.enclosingPackage(of: childPath, below: rootPath)
         let inApplication = Self.applicationRules.contains(rule.id) && Self.isApplicationName(package)
@@ -184,7 +216,7 @@ public struct ExactInventory: Sendable {
       case .other: throw PlanRejection(.specialFile, path: childPath)
       case .symbolicLink, .regular: continue
       case .directory:
-        if policy == .wholeBundle, Self.isApplicationName(name) {
+        if policy != .spaceTrash, Self.isApplicationName(name) {
           // A nested app (a helper or bundled tool) must also be closed before the move.
           guard let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: childPath) else {
             throw PlanRejection(.missingMetadata, path: childPath)

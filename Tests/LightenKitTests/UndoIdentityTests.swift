@@ -57,7 +57,7 @@ private func undoFixtureRoot() throws -> String {
     throw FileSystemFailure.invalidPath
   }
   defer { free(resolved) }
-  let root = String(cString: resolved) + "/lighten-undo-test-" + UUID().uuidString
+  let root = String(cString: resolved) + "/LightenQA-" + UUID().uuidString
   try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
   return root
 }
@@ -129,7 +129,7 @@ private func undoFixtureRoot() throws -> String {
 
 @Test func nativeTrashAfterCtimeChangeReconcilesAndUndoRestores() async throws {
   let root = try undoFixtureRoot()
-  let source = root + "/inside.bin"
+  let source = root + "/LightenQA-" + UUID().uuidString + ".bin"
   let mover = CapturedNativeTrash()
   defer {
     // Only the known UUID fixture returned by this test is restored.
@@ -226,7 +226,7 @@ private func undoFixtureRoot() throws -> String {
 
 @Test func nativeDirectoryTrashAfterCtimeChangeReconcilesAndUndoRestores() async throws {
   let root = try undoFixtureRoot()
-  let source = root + "/folder"
+  let source = root + "/LightenQA-" + UUID().uuidString
   let child = source + "/inside.bin"
   let mover = CapturedNativeTrash()
   defer {

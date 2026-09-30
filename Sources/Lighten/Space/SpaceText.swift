@@ -64,32 +64,108 @@ enum SpaceText {
     }
   }
 
-  static func rejection(_ rejection: PlanRejection) -> String {
-    let reason: String =
+  static func rejection(_ rejection: PlanRejection) -> String { Self.rejection(rejection, turkish: nil) }
+
+  static func rejection(_ rejection: PlanRejection, turkish: Bool?) -> String {
+    let copy: (String, String) =
       switch rejection.reason {
-      case .bulkRoot: String(localized: "A whole standard folder cannot be moved. Choose items inside it.")
-      case .scanRoot: String(localized: "The scanned folder itself cannot be removed.")
+      case .bulkRoot:
+        (
+          "A whole standard folder cannot be moved. Choose items inside it.",
+          "Standart bir klasörün tamamı taşınamaz. İçindeki öğeleri seçin."
+        )
+      case .scanRoot:
+        (
+          "The scanned folder itself cannot be removed. Choose items inside it.",
+          "Taranan klasörün kendisi kaldırılamaz. İçindeki öğeleri seçin."
+        )
       case .insidePackage:
-        String(localized: "This is inside an app or package. Select the whole app or package instead.")
-      case .protectedItem: String(localized: "Protected by Lighten's safety rules.")
-      case .containsProtectedItem: String(localized: "Contains an item protected by Lighten's safety rules.")
+        (
+          "This item is inside an app or package. Select the whole app or package instead.",
+          "Bu öğe bir uygulama veya paketin içinde. Uygulamanın veya paketin tamamını seçin."
+        )
+      case .protectedItem:
+        (
+          "A safety rule protects this item. Inspect it in Finder.",
+          "Bir güvenlik kuralı bu öğeyi koruyor. Finder’da inceleyin."
+        )
+      case .containsProtectedItem:
+        (
+          "A safety rule protects an item inside this folder. Inspect that item in Finder.",
+          "Bir güvenlik kuralı bu klasördeki bir öğeyi koruyor. O öğeyi Finder’da inceleyin."
+        )
       case .containsApplication:
-        String(localized: "Contains an app. Select the app itself to move it whole, or choose other items.")
-      case .mountPoint: String(localized: "Contains another mounted volume.")
-      case .cloudItem: String(localized: "Contains cloud files that are not downloaded.")
-      case .unreadableFolder: String(localized: "Contains a folder Lighten cannot read.")
-      case .specialFile: String(localized: "Contains a special file such as a socket or device.")
-      case .symbolicLinkRoot: String(localized: "A symbolic link moves only together with its folder.")
-      case .missingMetadata: String(localized: "Its file metadata is incomplete, so undo could not be guaranteed.")
-      case .changedSinceScan: String(localized: "It changed after the scan. Scan again.")
-      case .differentVolume: String(localized: "Its volume cannot be identified.")
+        (
+          "This folder contains an app. Select the app itself or choose other items.",
+          "Bu klasörde bir uygulama var. Uygulamanın kendisini veya başka öğeleri seçin."
+        )
+      case .mountPoint:
+        (
+          "Another volume is mounted inside this folder. Choose items on the same volume.",
+          "Bu klasörün içinde başka bir disk bağlı. Aynı diskteki öğeleri seçin."
+        )
+      case .cloudItem:
+        (
+          "This item includes cloud files that are not downloaded. Download them in Finder first.",
+          "Bu öğede indirilmemiş bulut dosyaları var. Önce Finder’da indirin."
+        )
+      case .unreadableFolder:
+        (
+          "Lighten cannot read this folder. Check Full Disk Access and folder permissions.",
+          "Lighten bu klasörü okuyamıyor. Tam Disk Erişimi’ni ve klasör izinlerini kontrol edin."
+        )
+      case .specialFile:
+        (
+          "This folder contains a special file such as a socket or device. Choose ordinary files or folders.",
+          "Bu klasörde soket veya aygıt gibi özel bir dosya var. Normal dosya veya klasörleri seçin."
+        )
+      case .symbolicLinkRoot:
+        (
+          "This symbolic link cannot be moved by this action. Select its containing folder.",
+          "Bu sembolik bağlantı bu işlemle taşınamaz. İçinde bulunduğu klasörü seçin."
+        )
+      case .missingMetadata:
+        (
+          "File metadata is incomplete, so undo cannot be guaranteed. Scan again before cleaning.",
+          "Dosya metaverisi eksik; geri alma garantilenemiyor. Temizlemeden önce yeniden tarayın."
+        )
+      case .changedSinceScan:
+        (
+          "The item changed after the scan. Scan again before cleaning.",
+          "Öğe taramadan sonra değişti. Temizlemeden önce yeniden tarayın."
+        )
+      case .differentVolume:
+        (
+          "The item’s volume could not be verified. Inspect its location in Finder.",
+          "Öğenin diski doğrulanamadı. Konumunu Finder’da inceleyin."
+        )
       case .needsAdministrator:
-        String(localized: "Administrator permission is needed. Use Show in Finder to remove it there.")
-      case .applicationRunning: String(localized: "The app is running. Quit it first.")
-      case .lightenItself: String(localized: "Lighten does not remove itself.")
-      case .tooManyItems: String(localized: "It contains too many items to verify at once.")
-      case .unavailable: String(localized: "It is no longer available.")
+        (
+          "This item belongs to another account or requires elevated access. Inspect its permissions in Finder.",
+          "Bu öğe başka bir hesaba ait veya yükseltilmiş erişim gerektiriyor. İzinlerini Finder’da inceleyin."
+        )
+      case .userPermissionDenied:
+        (
+          "Your account cannot move this item from its folder. Check the folder’s permissions in Finder.",
+          "Hesabınız bu öğeyi klasöründen taşıyamıyor. Klasörün izinlerini Finder’da kontrol edin."
+        )
+      case .applicationRunning:
+        ("The app is running. Quit it before cleaning.", "Uygulama çalışıyor. Temizlemeden önce kapatın.")
+      case .lightenItself:
+        ("Lighten cannot remove itself. Choose another item.", "Lighten kendisini kaldıramaz. Başka bir öğe seçin.")
+      case .tooManyItems:
+        (
+          "This folder contains too many items to verify at once. Choose a smaller subfolder.",
+          "Bu klasörde bir kerede doğrulanamayacak kadar çok öğe var. Daha küçük bir alt klasör seçin."
+        )
+      case .unavailable:
+        (
+          "This item is no longer available. Inspect its location in Finder.",
+          "Bu öğe artık mevcut değil. Konumunu Finder’da inceleyin."
+        )
       }
-    return "\(reason) — \(rejection.path)"
+    let text = FailureText.text(copy.0, copy.1, turkish: turkish)
+    let rule = rejection.ruleID.flatMap { id in NeverRule.all.first { $0.id == id }?.reason }
+    return "\(text)\(rule.map { " \($0)" } ?? "") — \(rejection.path)"
   }
 }

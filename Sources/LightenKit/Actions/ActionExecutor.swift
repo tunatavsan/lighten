@@ -135,7 +135,7 @@ public actor ActionExecutor {
     for item in plan.items where item.installedRelatedProof != nil {
       try related.validateInstalled(item, plan: plan)
     }
-    let existing = try await journal.read()
+    let existing = try await journal.readSummary()
     guard existing.issues.isEmpty else { throw ExecutionFailure.corruptHistory }
     guard
       !existing.records.contains(where: {
@@ -148,11 +148,7 @@ public actor ActionExecutor {
     var results: [ItemActionResult] = []
     for item in plan.items {
       do {
-        if item.catalogProof != nil {
-          guard let row = try catalog?.validate(item, in: plan),
-            await activity.activity(for: row.id).state == .clearObservedCurrentUID
-          else { throw ExecutionFailure.catalogDeleteDenied }
-        }
+        if item.catalogProof != nil { try await validateCatalogActivity(item, in: plan) }
         if let proof = item.relatedProof {
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
           else { throw RelatedFailure.runningOrUnknown }
@@ -170,11 +166,7 @@ public actor ActionExecutor {
         try guardService.validate(item)
         try await beforeMutation?(item)
         // The hook models the final window. Never move on its prior validation.
-        if item.catalogProof != nil {
-          guard let row = try catalog?.validate(item, in: plan),
-            await activity.activity(for: row.id).state == .clearObservedCurrentUID
-          else { throw ExecutionFailure.catalogDeleteDenied }
-        }
+        if item.catalogProof != nil { try await validateCatalogActivity(item, in: plan) }
         if let proof = item.relatedProof {
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
           else { throw RelatedFailure.runningOrUnknown }
@@ -282,7 +274,30 @@ public actor ActionExecutor {
 
   /// A whole application leaves only while it is not running and still carries
   /// the identity recorded in the plan. Lighten never removes itself.
+  private func validateCatalogActivity(_ item: PlanItem, in plan: ActionPlan) async throws {
+    guard let catalog else { throw CatalogFailure.unavailable }
+    let row = try catalog.validate(item, in: plan)
+    let observation = await activity.activity(
+      for: row, rootPath: catalog.activityRoot(for: row, candidatePath: item.sourcePath))
+    switch observation.state {
+    case .clearObservedCurrentUID: return
+    case .active: throw ProcessActivityFailure.active(processNames: observation.processNames)
+    case .unknown: throw ProcessActivityFailure.unavailable
+    }
+  }
+
   private func validateApplication(_ item: PlanItem) async throws {
+    if item.policy == .catalogTrash || item.policy == .catalogBuildOutput {
+      for id in item.nestedApplicationIDs ?? [] {
+        if id.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame {
+          throw ExecutionFailure.selfRemoval
+        }
+        guard await runningApplications.isRunning(bundleID: id) == false else {
+          throw RelatedFailure.runningOrUnknown
+        }
+      }
+      return
+    }
     guard item.policy == .wholeBundle else { return }
     guard let expected = item.applicationBundleID,
       ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath) == expected
@@ -357,18 +372,29 @@ public actor ActionExecutor {
       return left == right ? $0.path > $1.path : left > right
     }
     let byPath = Dictionary(uniqueKeysWithValues: item.inventory.map { ($0.path, $0) })
-    var remaining = Set(item.inventory.map(\.path))
+    var remainingChildren: [String: Set<String>] = [:]
+    var directoryAncestors: [String: [String]] = [:]
+    for entry in item.inventory {
+      if entry.path != item.sourcePath {
+        remainingChildren[(entry.path as NSString).deletingLastPathComponent, default: []]
+          .insert((entry.path as NSString).lastPathComponent)
+      }
+      var path =
+        entry.identity?.kind == .directory
+        ? entry.path : (entry.path as NSString).deletingLastPathComponent
+      var directories: [String] = []
+      while path == item.sourcePath || path.hasPrefix(item.sourcePath + "/") {
+        if byPath[path]?.identity?.kind == .directory { directories.append(path) }
+        if path == item.sourcePath { break }
+        path = (path as NSString).deletingLastPathComponent
+      }
+      directoryAncestors[entry.path] = directories.reversed()
+    }
     for entry in leaves {
       do {
         guard let expected = entry.identity,
           ProtectionPolicy.rule(for: entry.path, homeDirectory: guardService.homeDirectory) == nil,
-          !ScanService.isPackage(entry.path), !ScanService.isInsidePackage(entry.path),
-          let row = try catalog?.validate(
-            item,
-            in: ActionPlan(
-              snapshotRunID: item.catalogProof?.snapshotRunID ?? UUID(),
-              kind: .catalogDelete, items: [item])),
-          await activity.activity(for: row.id).state == .clearObservedCurrentUID
+          !ScanService.isPackage(entry.path), !ScanService.isInsidePackage(entry.path)
         else { throw CatalogFailure.invalidProof }
         // Re-resolve the original ancestor chain after each journal await.
         // Within the selected subtree, only our already removed descendants
@@ -381,23 +407,19 @@ public actor ActionExecutor {
               homeDirectory: guardService.homeDirectory) == nil
           else { throw GuardFailure.changedAncestor }
         }
-        for directory in item.inventory
-        where directory.identity?.kind == .directory
-          && remaining.contains(directory.path)
-          && (entry.path == directory.path || entry.path.hasPrefix(directory.path + "/"))
-        {
-          guard let expectedDirectory = directory.identity,
-            let observed = try? DescriptorFileSystem.identity(at: directory.path),
+        // The immutable path index removes full-inventory filtering. Every
+        // affected directory is still enumerated after each journal await;
+        // observed ctime is never used to excuse an unknown child.
+        for directoryPath in directoryAncestors[entry.path] ?? [] {
+          guard let expectedDirectory = byPath[directoryPath]?.identity,
+            let observed = try? DescriptorFileSystem.identity(at: directoryPath),
             Self.stableDeleteDirectory(observed, expectedDirectory),
-            (try? DescriptorFileSystem.volumeID(at: directory.path)) == item.volumeID
+            (try? DescriptorFileSystem.volumeID(at: directoryPath)) == item.volumeID
           else { throw GuardFailure.changedInventory }
-          let observedNames = try DescriptorFileSystem.children(
-            at: directory.path,
-            expected: observed)
-          let expectedNames = remaining.filter {
-            ($0 as NSString).deletingLastPathComponent == directory.path
-          }.map { ($0 as NSString).lastPathComponent }.sorted()
-          guard observedNames == expectedNames else { throw GuardFailure.changedInventory }
+          let observedNames = try DescriptorFileSystem.children(at: directoryPath, expected: observed)
+          let expectedNames = remainingChildren[directoryPath] ?? []
+          guard observedNames.count == expectedNames.count && observedNames.allSatisfy(expectedNames.contains)
+          else { throw GuardFailure.changedInventory }
         }
         let (parentFD, name) = try DescriptorFileSystem.openParent(of: entry.path)
         defer { close(parentFD) }
@@ -426,7 +448,8 @@ public actor ActionExecutor {
         guard unlinkat(parentFD, name, flags) == 0 else {
           throw FileSystemFailure.systemCall("unlinkat", errno)
         }
-        remaining.remove(entry.path)
+        remainingChildren[(entry.path as NSString).deletingLastPathComponent]?.remove(name)
+        remainingChildren.removeValue(forKey: entry.path)
         count += 1
         let value = max(0, expected.logicalBytes)
         let (next, overflow) = bytes.addingReportingOverflow(value)

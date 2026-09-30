@@ -28,10 +28,7 @@ enum Bench {
       } catch {}
       return nil
     }
-    let timer = Task {
-      try? await Task.sleep(for: .seconds(timeout))
-      consumer.cancel()
-    }
+    let timer = cancellationTimer(timeout: timeout) { consumer.cancel() }
     let snapshot = await consumer.value
     timer.cancel()
     let after = ProcessSample.now()
@@ -62,10 +59,7 @@ enum Bench {
     do { run = try ScanEngine(configuration: configuration).start(root: root) } catch {
       return ["engine": "new", "root": root, "error": "\(error)"]
     }
-    let timer = Task {
-      try? await Task.sleep(for: .seconds(timeout))
-      run.cancel()
-    }
+    let timer = cancellationTimer(timeout: timeout) { run.cancel() }
     var firstScreen: UInt64?
     var publications = 0
     for await update in run.progress {
@@ -117,7 +111,7 @@ enum Bench {
     var inventoryAt: UInt64?
     var reports: [ApplicationReport] = []
     var complete = false
-    for await event in ApplicationDiscovery().events() {
+    for await event in ApplicationDiscovery(related: RelatedDataService(writeVerifiedReceipts: false)).events() {
       switch event {
       case .inventory: inventoryAt = inventoryAt ?? clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
       case .measured: break

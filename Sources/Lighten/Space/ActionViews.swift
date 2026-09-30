@@ -68,6 +68,12 @@ struct ConfirmationView: View {
           dismiss()
         }
         Spacer()
+        if presentation.permanentPlanBuilder != nil {
+          Button(String(localized: "Permanently clean instead")) {
+            Task { await actions.requestPermanent(presentation) }
+          }
+          .disabled(actions.busy || actions.preparingAlternate)
+        }
         Button(
           presentation.plan.kind == .trash
             ? String(localized: "Move to Trash")
@@ -78,7 +84,7 @@ struct ConfirmationView: View {
           Task { await actions.executeConfirmed(confirmedPlan) }
         }
         .buttonStyle(.borderedProminent)
-        .disabled(actions.busy)
+        .disabled(actions.busy || actions.preparingAlternate)
       }
       .padding(16)
     }
@@ -115,11 +121,22 @@ struct HistoryView: View {
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         .padding(.top, 3).padding(.bottom, 12)
       if let issues = actions.history?.issues, !issues.isEmpty {
-        ForEach(issues, id: \.line) { issue in
-          Text("\(String(localized: "Journal issue")) \(issue.line): \(issue.reason)")
-            .font(.system(size: 12)).foregroundStyle(.red)
-            .padding(.bottom, 5)
+        VStack(alignment: .leading, spacing: 8) {
+          Text(String(localized: "Some history records could not be read. Archive them to continue safely."))
+            .font(.system(size: 12)).foregroundStyle(LightenStyle.warning)
+          Button(String(localized: "Archive history and start again")) {
+            Task { await actions.repairHistory() }
+          }
+          .disabled(actions.busy)
+          .help(String(localized: "The original history is kept. Items still in Trash keep their Undo action."))
         }
+        .padding(.bottom, 12)
+      }
+      if let message = actions.message {
+        Text(message)
+          .font(.system(size: 12)).foregroundStyle(LightenStyle.warning)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.bottom, 12)
       }
       Divider()
       HStack {
@@ -137,66 +154,55 @@ struct HistoryView: View {
       ScrollView {
         LazyVStack(spacing: 0) {
           // Newest first: the action just taken, and its Undo, are at the top.
-          ForEach((actions.history?.items ?? []).reversed(), id: \.itemID) { item in
+          ForEach((actions.history?.plans ?? []).reversed()) { plan in
             VStack(alignment: .leading, spacing: 5) {
               HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
-                  Text(
-                    actions.historyMetadata[item.itemID].map {
-                      URL(fileURLWithPath: $0.path).lastPathComponent
-                    } ?? item.itemID.uuidString
-                  )
-                  .font(.system(size: 13, weight: .medium)).lineLimit(1)
-                  if let metadata = actions.historyMetadata[item.itemID] {
-                    Text(metadata.path)
+                  Text(title(plan))
+                    .font(.system(size: 13, weight: .medium)).lineLimit(1)
+                  Text(plan.createdAt, format: .dateTime.month().day().hour().minute())
+                    .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+                  if plan.metadata.count == 1, let path = plan.metadata.first?.sourcePath {
+                    Text(path)
                       .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-                      .lineLimit(1).truncationMode(.middle).help(metadata.path)
+                      .lineLimit(1).truncationMode(.middle).help(path)
                   }
-                  if item.state == .deleted {
+                  if plan.kind == .catalogDelete {
                     Text(String(localized: "Undo unavailable — permanently cleaned"))
                       .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-                  } else if let detail = item.detail {
+                  }
+                  if let detail = plan.items.last(where: { $0.detail != nil })?.detail {
                     Text(FailureText.describe(detail)).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
                       .lineLimit(2)
                   }
-                  if item.deletedCount > 0 {
+                  if plan.deletedCount > 0 {
                     Text(
-                      "\(item.deletedCount) \(String(localized: "irreversibly removed entries")) · \(format(item.deletedLogicalBytes)) \(String(localized: "known logical bytes"))"
+                      "\(plan.deletedCount) \(String(localized: "entries removed")) · \(format(plan.deletedLogicalBytes))"
                     )
                     .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
                   }
                 }
                 Spacer(minLength: 5)
-                Text(
-                  format(
-                    item.deletedCount > 0
-                      ? item.deletedLogicalBytes : actions.historyMetadata[item.itemID]?.logicalBytes)
-                )
-                .font(.system(size: 12)).monospacedDigit()
-                .frame(width: 90, alignment: .trailing)
-                Text(status(item.state))
-                  .font(.system(size: 12)).foregroundStyle(statusColor(item.state))
+                Text(format(plan.deletedCount > 0 ? plan.deletedLogicalBytes : plan.logicalBytes))
+                  .font(.system(size: 12)).monospacedDigit()
+                  .frame(width: 90, alignment: .trailing)
+                Text(status(plan.state))
+                  .font(.system(size: 12)).foregroundStyle(statusColor(plan.state))
                   .frame(width: 105, alignment: .trailing)
               }
               .accessibilityElement(children: .combine)
-              if item.state == .inTrash {
+              if plan.canUndo {
                 HStack {
                   Spacer()
-                  Button(String(localized: "Undo")) { Task { await actions.undo(item) } }
+                  Button(String(localized: "Undo")) { Task { await actions.undo(plan) } }
                     .buttonStyle(.bordered)
                     .disabled(actions.busy)
-                    .accessibilityLabel(
-                      String(localized: "Undo") + " "
-                        + (actions.historyMetadata[item.itemID].map {
-                          URL(fileURLWithPath: $0.path).lastPathComponent
-                        } ?? item.itemID.uuidString)
-                    )
-                    .accessibilityIdentifier("history.undo.\(item.itemID.uuidString)")
+                    .accessibilityLabel(String(localized: "Undo") + " " + title(plan))
+                    .accessibilityIdentifier("history.undo.\(plan.id.uuidString)")
                 }
               }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 8).padding(.vertical, 7)
             Divider()
           }
         }
@@ -216,6 +222,13 @@ struct HistoryView: View {
     .tint(LightenStyle.accent)
     .navigationTitle(String(localized: "History"))
     .task { await actions.reloadHistory() }
+  }
+
+  private func title(_ plan: HistoryPlan) -> String {
+    if plan.metadata.count == 1, let path = plan.metadata.first?.sourcePath {
+      return URL(fileURLWithPath: path).lastPathComponent
+    }
+    return "\(plan.metadata.count) \(String(localized: "items"))"
   }
 
   private func statusColor(_ state: HistoryState) -> Color {

@@ -22,6 +22,17 @@ struct BasketEntry: Sendable, Equatable {
 struct ActionPresentation: Identifiable, Sendable {
   let plan: ActionPlan
   let items: [ActionItemSummary]
+  let permanentPlanBuilder: (@MainActor @Sendable () async -> Void)?
+
+  init(
+    plan: ActionPlan, items: [ActionItemSummary],
+    permanentPlanBuilder: (@MainActor @Sendable () async -> Void)? = nil
+  ) {
+    self.plan = plan
+    self.items = items
+    self.permanentPlanBuilder = permanentPlanBuilder
+  }
+
   var id: UUID { plan.id }
 }
 
@@ -37,6 +48,7 @@ final class ActionStore {
   @ObservationIgnored private let executor: ActionExecutor
   @ObservationIgnored private let historyService: ActionHistory
   @ObservationIgnored private var claimedPlan: ActionPlan?
+  @ObservationIgnored private var alternatePlanID: UUID?
 
   init(
     journal: JSONLActionJournal = JSONLActionJournal(),
@@ -57,6 +69,7 @@ final class ActionStore {
   var history: HistoryReadout?
   var historyMetadata: [UUID: HistoryMetadata] = [:]
   var busy = false
+  private(set) var preparingAlternate = false
   var message: String?
 
   func add(_ item: SpaceItem) {
@@ -92,7 +105,7 @@ final class ActionStore {
   /// Builds the plan from a fresh exact inventory of each basket item. The scan
   /// tree only told us where to look.
   func prepare(scanRoot: String, runID: UUID?) async {
-    guard !basket.isEmpty else { return }
+    guard !basket.isEmpty, !busy, !preparingAlternate else { return }
     busy = true
     defer { busy = false }
     let selections = basket.values.map {
@@ -127,27 +140,54 @@ final class ActionStore {
       }
       guard running.isEmpty else {
         pending = nil
-        message = running.map(SpaceText.rejection).joined(separator: "\n")
+        message = running.map { SpaceText.rejection($0) }.joined(separator: "\n")
         return
       }
+      // Planning is complete before publishing the confirmation synchronously.
+      busy = false
       present(plan: plan, items: summary)
       message = nil
     case .failure(let refused):
       pending = nil
-      message = refused.rejections.map(SpaceText.rejection).joined(separator: "\n")
+      message = refused.rejections.map { SpaceText.rejection($0) }.joined(separator: "\n")
     }
   }
 
   /// Other modules supply their own guarded plan and reason summary.
-  func present(plan: ActionPlan, items: [ActionItemSummary]) {
-    guard Set(plan.items.map(\.id)) == Set(items.map(\.id)) else { return }
-    pending = ActionPresentation(plan: plan, items: items)
+  func present(
+    plan: ActionPlan, items: [ActionItemSummary],
+    permanentPlanBuilder: (@MainActor @Sendable () async -> Void)? = nil
+  ) {
+    guard !busy, Set(plan.items.map(\.id)) == Set(items.map(\.id)),
+      !preparingAlternate || pending?.plan.id == alternatePlanID
+    else { return }
+    pending = ActionPresentation(
+      plan: plan, items: items,
+      permanentPlanBuilder: plan.kind == .trash ? permanentPlanBuilder : nil)
+  }
+
+  func requestPermanent(_ presentation: ActionPresentation) async {
+    guard !busy, !preparingAlternate, pending?.plan == presentation.plan,
+      let builder = presentation.permanentPlanBuilder
+    else { return }
+    preparingAlternate = true
+    alternatePlanID = presentation.plan.id
+    defer {
+      preparingAlternate = false
+      alternatePlanID = nil
+    }
+    await builder()
+  }
+
+  func invalidatePending(expectedPlanID: UUID?) {
+    guard pending?.plan.id == expectedPlanID else { return }
+    pending = nil
   }
 
   /// Claim synchronously while the confirmation sheet still owns its presentation.
   /// SwiftUI may clear `pending` as soon as the sheet begins dismissing.
   func takeConfirmedPlan(_ presentation: ActionPresentation) -> ActionPlan? {
-    guard !busy, claimedPlan == nil,
+    guard !busy, !preparingAlternate, claimedPlan == nil,
       pending?.plan == presentation.plan,
       presentation.plan.kind == .trash || presentation.plan.kind == .catalogDelete
     else { return nil }
@@ -180,25 +220,44 @@ final class ActionStore {
   func reloadHistory() async {
     do {
       let readout = try await historyService.reconcile()
-      let journalReadout = try await journal.read()
-      let metadata = await Task.detached {
-        var result: [UUID: HistoryMetadata] = [:]
-        for record in journalReadout.records where record.kind == .intent {
-          guard let plan = record.plan else { continue }
-          for item in plan.items {
-            // Same measure as Space and the confirmation: files and links, hard links once.
-            let (logical, allocated) = PlanItemSize.measure(item)
-            result[item.id] = HistoryMetadata(
-              path: item.sourcePath, logicalBytes: logical, allocatedBytes: allocated)
-          }
+      var metadata: [UUID: HistoryMetadata] = [:]
+      for plan in readout.plans {
+        for item in plan.metadata {
+          metadata[item.id] = HistoryMetadata(
+            path: item.sourcePath, logicalBytes: item.logicalBytes, allocatedBytes: item.allocatedBytes)
         }
-        return result
-      }.value
+      }
       history = readout
       historyMetadata = metadata
     } catch {
       message = FailureText.describe(error)
     }
+  }
+
+  func repairHistory() async {
+    guard !busy else { return }
+    busy = true
+    defer { busy = false }
+    do {
+      _ = try await journal.archiveAndRestart()
+      message = String(localized: "History was repaired. Items still in Trash can be restored.")
+    } catch {
+      message = FailureText.describe(error)
+    }
+    await reloadHistory()
+  }
+
+  func undo(_ plan: HistoryPlan) async {
+    guard !busy else { return }
+    busy = true
+    defer { busy = false }
+    do {
+      try await historyService.undo(planID: plan.id)
+      message = nil
+    } catch {
+      message = FailureText.describe(error)
+    }
+    await reloadHistory()
   }
 
   func undo(_ item: HistoryItem) async {

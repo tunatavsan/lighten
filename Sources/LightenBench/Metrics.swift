@@ -51,9 +51,58 @@ func seconds(from start: UInt64, to end: UInt64) -> Double {
   Double(end &- start) / 1_000_000_000
 }
 
-func emit(_ values: [String: Any]) {
-  let data = try! JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])
-  print(String(decoding: data, as: UTF8.self))
+struct BenchEnvironment {
+  let uptime: TimeInterval
+  let load: [Double]?
+
+  static func now() -> BenchEnvironment {
+    var values = [Double](repeating: 0, count: 3)
+    let count = values.withUnsafeMutableBufferPointer { getloadavg($0.baseAddress, 3) }
+    return BenchEnvironment(
+      uptime: ProcessInfo.processInfo.systemUptime, load: count == 3 ? values : nil)
+  }
+
+  var quiet: Bool { load.map { $0[0] < 4 } ?? false }
+  var json: [String: Any] {
+    ["uptimeSeconds": uptime, "loadAverage": load as Any? ?? NSNull(), "loadSource": "getloadavg"]
+  }
+}
+
+func emit(_ values: [String: Any], command: String, before: BenchEnvironment) {
+  let after = BenchEnvironment.now()
+  let measured = before.quiet && after.quiet
+  var result = values
+  result["command"] = command
+  result["environmentStart"] = before.json
+  result["environmentEnd"] = after.json
+  result["performanceMeasured"] = measured
+  if !measured {
+    result["performanceUnmeasuredReason"] =
+      before.load == nil || after.load == nil ? "load unavailable" : "one-minute load is at least 4"
+  }
+  // JSON has no NaN. Empty cancellation samples and unknown values remain null,
+  // and busy-machine observations never produce a performance claim.
+  func sanitized(_ value: Any, keepTiming: Bool) -> Any {
+    if let dictionary = value as? [String: Any] {
+      return dictionary.reduce(into: [String: Any]()) { result, pair in
+        let timing = pair.key.hasSuffix("Seconds") || pair.key.hasSuffix("Ms")
+        result[pair.key] = timing && !keepTiming ? NSNull() : sanitized(pair.value, keepTiming: keepTiming)
+      }
+    }
+    if let array = value as? [Any] { return array.map { sanitized($0, keepTiming: keepTiming) } }
+    if let number = value as? Double, !number.isFinite { return NSNull() }
+    return value
+  }
+  var output = sanitized(result, keepTiming: measured) as! [String: Any]
+  output["environmentStart"] = before.json
+  output["environmentEnd"] = after.json
+  do {
+    let data = try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
+    print(String(decoding: data, as: UTF8.self))
+  } catch {
+    FileHandle.standardError.write(Data("JSON output failed: \(error)\n".utf8))
+    exit(1)
+  }
 }
 
 func percentile(_ values: [Double], _ fraction: Double) -> Double {

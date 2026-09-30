@@ -2,13 +2,16 @@ import Darwin
 import Foundation
 import LightenKit
 
-// lighten-bench: measurement tool for scan engines. It never mutates anything
-// except a tree it creates itself with `generate`.
+// Read-only observations. Writes are limited to fresh temporary fixtures.
 //
 //   lighten-bench generate --out DIR --files N [--seed S]
 //   lighten-bench scan --engine old|new --root PATH [--timeout SECONDS] [--workers N]
 //   lighten-bench apps [--app PATH]
 //   lighten-bench cancel --engine old|new --root PATH [--trials N] [--workers N]
+//   lighten-bench dup --root PATH [--timeout SECONDS]
+//   lighten-bench clean [--home PATH] [--row ID] [--timeout SECONDS]
+//   lighten-bench cache-load|space-open --root PATH [--timeout SECONDS]
+//   lighten-bench fsevents [--root PATH] [--seconds N]
 
 struct Options {
   var values: [String: String] = [:]
@@ -30,9 +33,14 @@ func usage() -> Never {
   FileHandle.standardError.write(
     Data(
       """
-      usage: lighten-bench generate --out DIR --files N [--seed S]
+      usage: lighten-bench generate [--out TEMP/LightenQA-UUID] --files N [--seed S]
              lighten-bench scan --engine old|new --root PATH [--timeout SECONDS] [--workers N]
+             lighten-bench apps [--app PATH]
              lighten-bench cancel --engine old|new --root PATH [--trials N] [--workers N]
+             lighten-bench dup --root PATH [--timeout SECONDS]
+             lighten-bench clean [--home PATH] [--row ID] [--timeout SECONDS]
+             lighten-bench cache-load|space-open --root PATH [--timeout SECONDS] [--workers N]
+             lighten-bench fsevents [--root PATH] [--seconds N]
 
       """.utf8))
   exit(64)
@@ -41,19 +49,45 @@ func usage() -> Never {
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else { usage() }
 let options = Options(arguments.dropFirst(2))
+let environment = BenchEnvironment.now()
+let command = arguments[1]
 
-switch arguments[1] {
+func output(_ values: [String: Any]) {
+  emit(values, command: command, before: environment)
+}
+
+switch command {
 case "generate":
-  guard let out = options.string("out") else { usage() }
+  var fixture: OwnedFixture?
   do {
-    let manifest = try TreeGenerator(
-      root: out, files: options.int("files", 100_000), seed: UInt64(options.int("seed", 1))
+    let owned = try OwnedFixture(path: options.string("out"))
+    fixture = owned
+    var manifest = try TreeGenerator(
+      root: owned.directory, files: max(0, options.int("files", 100_000)),
+      seed: UInt64(max(0, options.int("seed", 1)))
     ).run()
     let data = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys, .prettyPrinted])
-    try data.write(to: URL(fileURLWithPath: out + ".manifest.json"))
-    emit(manifest)
+    let manifestPath = owned.directory + "/manifest.json"
+    try data.write(to: URL(fileURLWithPath: manifestPath))
+    manifest["fixtureDirectory"] = owned.directory
+    manifest["manifestPath"] = manifestPath
+    let persistent = options.string("out") != nil
+    if !persistent { try owned.remove() }
+    manifest["fixtureRemoved"] = !persistent
+    manifest["cleanupRequired"] = persistent
+    output(manifest)
   } catch {
-    FileHandle.standardError.write(Data("generate failed: \(error)\n".utf8))
+    var result: [String: Any] = ["error": String(describing: error)]
+    if let fixture {
+      result["fixtureDirectory"] = fixture.directory
+      do {
+        try fixture.remove()
+        result["fixtureRemoved"] = true
+      } catch {
+        result["cleanupError"] = String(describing: error)
+      }
+    }
+    output(result)
     exit(1)
   }
 case "scan":
@@ -61,14 +95,30 @@ case "scan":
   let result = await Bench.scan(
     engine: engine, root: root, timeout: options.double("timeout", 600),
     workers: options.int("workers", 0))
-  emit(result)
+  output(result)
 case "apps":
-  emit(await Bench.apps(focus: options.string("app") ?? "/Applications/Xcode.app"))
+  output(await Bench.apps(focus: options.string("app") ?? "/Applications/Xcode.app"))
 case "cancel":
   guard let root = options.string("root"), let engine = options.string("engine") else { usage() }
   let result = await Bench.cancellation(
-    engine: engine, root: root, trials: options.int("trials", 20), workers: options.int("workers", 0))
-  emit(result)
+    engine: engine, root: root, trials: max(1, options.int("trials", 20)), workers: options.int("workers", 0))
+  output(result)
+case "dup":
+  guard let root = options.string("root") else { usage() }
+  output(await Bench.duplicates(root: root, timeout: options.double("timeout", 600)))
+case "clean":
+  output(
+    await Bench.clean(
+      home: options.string("home") ?? NSHomeDirectory(), rowID: options.string("row"),
+      timeout: options.double("timeout", 600)))
+case "cache-load", "space-open":
+  guard let root = options.string("root") else { usage() }
+  output(
+    await Bench.cachedSpace(
+      root: root, layout: command == "space-open", timeout: options.double("timeout", 600),
+      workers: options.int("workers", 0)))
+case "fsevents":
+  output(await Bench.fileEvents(root: options.string("root"), duration: options.double("seconds", 2)))
 default:
   usage()
 }

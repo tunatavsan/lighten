@@ -7,7 +7,7 @@ import Testing
 private func inventoryRoot() throws -> String {
   guard let resolved = realpath(NSTemporaryDirectory(), nil) else { throw FileSystemFailure.invalidPath }
   defer { free(resolved) }
-  let path = String(cString: resolved) + "/lighten-exact-" + UUID().uuidString
+  let path = String(cString: resolved) + "/LightenQA-" + UUID().uuidString
   try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
   return path
 }

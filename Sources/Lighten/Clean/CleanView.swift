@@ -1,3 +1,4 @@
+import AppKit
 import LightenKit
 import SwiftUI
 
@@ -7,286 +8,291 @@ struct CleanView: View {
   @State private var searchText = ""
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+  private var turkish: Bool { Bundle.main.preferredLocalizations.first?.hasPrefix("tr") == true }
   private var searchTerm: String { searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
-  private var filteredCandidates: [CleanCandidate] {
-    store.candidates.filter { matches($0.entry.path) }
+  private var filtered: [CleanCandidate] {
+    store.candidates.filter {
+      searchTerm.isEmpty || $0.entry.path.localizedStandardContains(searchTerm)
+        || $0.row.title(turkish: turkish).localizedStandardContains(searchTerm)
+    }
   }
-  private var filteredRelatedCandidates: [RelatedDataCandidate] {
-    store.relatedCandidates.filter { matches($0.path) }
+  private var actionableRows: [CatalogRow] {
+    store.rows.filter { row in filtered.contains { $0.row.id == row.id && $0.canAct } }
   }
-  private var totalCount: Int { store.candidates.count + store.relatedCandidates.count }
-  private var visibleCount: Int { filteredCandidates.count + filteredRelatedCandidates.count }
-
-  private var selectedCandidate: CleanCandidate? {
-    store.candidates.first { store.selected.contains($0.id) }
-  }
-
-  private func matches(_ path: String) -> Bool {
-    searchTerm.isEmpty || path.localizedStandardContains(searchTerm)
+  private var related: [RelatedDataCandidate] {
+    store.relatedCandidates.filter { searchTerm.isEmpty || $0.path.localizedStandardContains(searchTerm) }
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
+    VStack(alignment: .leading, spacing: 12) {
       HStack(alignment: .top) {
         VStack(alignment: .leading, spacing: 5) {
-          Text(String(localized: "Clean"))
-            .font(.system(size: 24, weight: .semibold))
-          Text(String(localized: "Documented caches and related app data"))
-            .foregroundStyle(LightenStyle.muted)
+          Text(String(localized: "Clean")).font(.system(size: 24, weight: .semibold))
+          Text(String(localized: "Documented caches and related app data")).foregroundStyle(LightenStyle.muted)
         }
         Spacer()
-        Button(store.busy ? String(localized: "Cancel scan") : String(localized: "Scan")) {
-          if store.busy { store.cancelScan() } else { store.startScan() }
+        Button(store.phase == .scanning ? String(localized: "Cancel scan") : String(localized: "Scan")) {
+          if store.phase == .scanning { store.cancelScan(actions: actions) } else { store.startScan(actions: actions) }
         }
+        .disabled(actions.busy || store.tool.preparation.preparing)
       }
-      .padding(.bottom, 14)
       HStack {
         TextField(String(localized: "Search by name or path"), text: $searchText)
-          .textFieldStyle(.roundedBorder)
+          .textFieldStyle(.roundedBorder).frame(maxWidth: 360)
           .accessibilityLabel(String(localized: "Search by name or path"))
-          .frame(maxWidth: 360)
-        Button(String(localized: "Clear search")) { searchText = "" }
-          .disabled(searchText.isEmpty)
-        Spacer()
-      }
-      .padding(.bottom, 10)
-      HStack {
-        Text(
-          store.busy
-            ? String(localized: "Scanning")
-            : store.scannedAt.map { String(localized: "Last scan") + ": " + $0.formatted() }
-              ?? String(localized: "Scan to inspect candidate areas")
-        )
-        .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+        Button(String(localized: "Clear search")) { searchText = "" }.disabled(searchText.isEmpty)
         Spacer()
         Text(
-          searchTerm.isEmpty
-            ? "\(totalCount) \(String(localized: "candidates"))"
-            : "\(visibleCount) \(String(localized: "matches")) / \(totalCount) \(String(localized: "candidates"))"
+          "\(store.toolSummary.count) \(String(localized: "candidates")) · \(format(store.toolSummary.logicalBytes))"
         )
         .font(.system(size: 12)).monospacedDigit()
       }
-      .padding(.bottom, 10)
-      if !searchTerm.isEmpty && visibleCount == 0 && !store.busy && store.scannedAt != nil {
-        Text(String(localized: "No matching candidates"))
-          .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-          .padding(.bottom, 10)
+      HStack {
+        Text(scanStatus).font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+        Spacer()
+        Button(String(localized: "Select all")) { store.selectAll(actions: actions) }
+          .disabled(store.phase != .ready || actions.busy)
       }
       Divider()
       ScrollView {
-        // Rows are direct children of one lazy stack so only visible rows are built,
-        // even when a cache area has thousands of entries.
-        let grouped = Dictionary(grouping: filteredCandidates, by: { $0.row.id })
-        LazyVStack(alignment: .leading, spacing: 0) {
-          ForEach(store.rows) { row in
-            cacheHeader(row)
-            ForEach(grouped[row.id] ?? []) { candidate in candidateRow(candidate) }
-            cacheFooter()
-          }
-          VStack(alignment: .leading, spacing: 5) {
-            Text(String(localized: "Removed app data"))
-              .font(.system(size: 16, weight: .semibold))
-            Text(
-              String(
-                localized: "Only exact metadata links can qualify. Other locations and incomplete scans remain unknown."
-              )
-            )
-            .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-            LazyVStack(alignment: .leading, spacing: 0) {
-              ForEach(filteredRelatedCandidates) { candidate in
-                HStack {
-                  VStack(alignment: .leading, spacing: 2) {
-                    Text(URL(fileURLWithPath: candidate.path).lastPathComponent)
-                      .font(.system(size: 12, weight: .medium))
-                    Text(relatedReason(candidate.reason)).font(.system(size: 11))
-                      .foregroundStyle(LightenStyle.muted)
-                  }
-                  Spacer()
-                  if candidate.classification == .historicallyVerifiedAbsent {
-                    Button(String(localized: "Review Trash")) {
-                      Task { await store.prepareRelated(candidate, actions: actions) }
-                    }
-                    .disabled(store.busy || actions.busy)
-                  } else {
-                    Text(String(localized: "Report only"))
-                      .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
-                  }
-                }
-                .padding(.vertical, 3)
-              }
+        LazyVStack(alignment: .leading, spacing: 12) {
+          ForEach(Array(actionableRows.prefix(7))) { row in categoryCard(row) }
+          if actionableRows.count > 7 {
+            DisclosureGroup(String(localized: "More categories")) {
+              ForEach(Array(actionableRows.dropFirst(7))) { row in categoryCard(row) }
             }
           }
-          .padding(13).frame(maxWidth: .infinity, alignment: .leading)
-          .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
+          if !related.isEmpty { removedData }
+          reportOnly
         }
-        .padding(.vertical, 12)
-      }
-      if let candidate = selectedCandidate {
-        Divider()
-        VStack(alignment: .leading, spacing: 4) {
-          Text(URL(fileURLWithPath: candidate.entry.path).lastPathComponent)
-            .font(.system(size: 13, weight: .medium))
-          Text(candidate.entry.path).font(.system(size: 11))
-            .foregroundStyle(LightenStyle.muted).lineLimit(1).truncationMode(.middle)
-          let turkish = Bundle.main.preferredLocalizations.first?.hasPrefix("tr") == true
-          Text(candidate.row.reason(turkish: turkish) + " " + candidate.row.cost(turkish: turkish))
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          Text(candidate.row.evidenceURL).font(.system(size: 10))
-            .foregroundStyle(LightenStyle.muted).lineLimit(1)
-        }
-        .padding(.vertical, 10)
+        .padding(.vertical, 4)
       }
       Divider()
       HStack {
-        Picker(String(localized: "Action"), selection: $store.mode) {
-          Text(String(localized: "Move to Trash")).tag(ActionKind.trash)
-          Text(String(localized: "Permanent cleanup · cannot undo")).tag(ActionKind.catalogDelete)
-        }
-        .pickerStyle(.segmented).frame(maxWidth: 360)
-        Spacer()
-        Text("\(store.selected.count) \(String(localized: "selected"))")
+        Text("\(store.selected.count) \(String(localized: "selected")) · \(format(store.selectedLogicalBytes))")
           .font(.system(size: 12)).monospacedDigit()
-        Button(String(localized: "Review selection")) {
-          Task { await store.prepare(actions: actions) }
-        }
-        .buttonStyle(.borderedProminent)
-        .disabled(store.selected.isEmpty || store.busy || actions.busy)
+        Spacer()
+        Button(String(localized: "Clean")) { Task { await store.prepare(actions: actions) } }
+          .buttonStyle(.borderedProminent)
+          .disabled(store.selected.isEmpty || store.phase != .ready || store.busy || actions.busy)
       }
-      .padding(.top, 13)
       if let message = store.message {
         Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-      } else if let detail = actions.message {
-        Text(String(localized: "Action paused. Review History and scan again."))
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-        Text(detail).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+          .textSelection(.enabled)
+      } else if let message = actions.message {
+        Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
       }
       if let result = actions.result, result.planID == store.presentedPlanID {
-        Text(resultLine(result))
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        Text(resultLine(result)).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       }
     }
     .padding(20)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
     .navigationTitle(String(localized: "Clean"))
-    .sheet(item: $actions.pending) { presentation in
-      ConfirmationView(presentation: presentation, actions: actions)
-    }
+    .sheet(item: $actions.pending) { ConfirmationView(presentation: $0, actions: actions) }
+    .onChange(of: actions.result?.planID) { store.observeResult(actions: actions) }
+    .onDisappear { store.deactivate(actions: actions) }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.selected)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: actions.result?.planID)
   }
 
-  private func cacheHeader(_ row: CatalogRow) -> some View {
-    let turkish = Bundle.main.preferredLocalizations.first?.hasPrefix("tr") == true
+  private var scanStatus: String {
+    if store.partial { return String(localized: "Partial scan. Scan again before cleaning.") }
+    if store.phase == .scanning { return String(localized: "Scanning") }
+    return store.scannedAt.map { String(localized: "Last scan") + ": " + $0.formatted() }
+      ?? String(localized: "Scan to inspect candidate areas")
+  }
+
+  private func categoryCard(_ row: CatalogRow) -> some View {
+    let candidates = filtered.filter { $0.row.id == row.id && $0.canAct }
+    let ids = Set(candidates.map(\.id))
+    let bytes = candidates.reduce(Int64(0)) { $0 + $1.logicalBytes }
+    let incomplete = candidates.contains { !$0.sizeComplete }
     return VStack(alignment: .leading, spacing: 7) {
       HStack {
-        Text(row.title(turkish: turkish)).font(.system(size: 16, weight: .semibold))
+        Button {
+          store.toggleCategory(row.id, actions: actions)
+        } label: {
+          Image(systemName: ids.isSubset(of: store.selected) ? "checkmark.square.fill" : "square")
+        }
+        .buttonStyle(.plain).disabled(store.phase != .ready || actions.busy)
+        .accessibilityLabel(row.title(turkish: turkish))
+        Text(row.title(turkish: turkish)).font(.system(size: 15, weight: .semibold))
         Spacer()
-        Text(rowStatus(store.rowStatuses[row.id]))
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        Text(
+          "\(candidates.count) \(String(localized: "items")) · \(incomplete ? String(localized: "At least") + " " : "")\(format(bytes))"
+        )
+        .font(.system(size: 12)).monospacedDigit()
       }
       Text(row.reason(turkish: turkish) + " " + row.cost(turkish: turkish))
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-    }
-    .padding([.horizontal, .top], 13).padding(.bottom, 7)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(
-      LightenStyle.surface, in: UnevenRoundedRectangle(topLeadingRadius: 9, topTrailingRadius: 9))
-  }
-
-  private func cacheFooter() -> some View {
-    VStack(spacing: 0) {
-      Color.clear.frame(height: 10)
-        .frame(maxWidth: .infinity)
-        .background(
-          LightenStyle.surface, in: UnevenRoundedRectangle(bottomLeadingRadius: 9, bottomTrailingRadius: 9))
-      Color.clear.frame(height: 15)
-    }
-  }
-
-  private func candidateRow(_ candidate: CleanCandidate) -> some View {
-    HStack(spacing: 8) {
-      Button {
-        if store.selected.contains(candidate.id) {
-          store.selected.remove(candidate.id)
-        } else {
-          store.selected.insert(candidate.id)
+      DisclosureGroup(String(localized: "Inspect items")) {
+        LazyVStack(alignment: .leading, spacing: 4) {
+          ForEach(candidates) { candidate in
+            HStack {
+              Text(URL(fileURLWithPath: candidate.entry.path).lastPathComponent).lineLimit(1)
+                .help(candidate.entry.path)
+              Spacer()
+              Text(format(candidate.logicalBytes)).monospacedDigit()
+            }.font(.system(size: 11))
+          }
         }
-      } label: {
-        Image(systemName: store.selected.contains(candidate.id) ? "checkmark.square.fill" : "square")
       }
-      .buttonStyle(.plain).disabled(!candidate.canAct)
-      Text(URL(fileURLWithPath: candidate.entry.path).lastPathComponent)
-        .lineLimit(1)
-      Spacer()
-      Text(
-        candidate.node.logical.completeTotal.map {
-          ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
-        }
-          ?? String(localized: "Unknown")
-      )
-      .monospacedDigit()
-      if !candidate.canAct {
-        Text(String(localized: "Report only"))
-          .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
-      }
+      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
     }
-    .font(.system(size: 12)).padding(.vertical, 3).padding(.horizontal, 13)
-    .background(LightenStyle.surface)
-    .accessibilityLabel(
-      "\(candidate.entry.path), \(candidate.canAct ? String(localized: "Selectable") : String(localized: "Report only"))"
-    )
+    .padding(13).background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
   }
 
-  private func rowStatus(_ value: CleanRowStatus?) -> String {
-    switch value {
-    case .toolRunning: String(localized: "Tool running — cleaning paused")
-    case .processUnknown: String(localized: "Process activity unknown — report only")
-    case .empty: String(localized: "No entries")
-    case .clear: String(localized: "Current-user process check clear")
-    case .unavailable: String(localized: "Unavailable or unreadable")
-    case nil: String(localized: "Not scanned")
+  private var reportOnly: some View {
+    DisclosureGroup(String(localized: "Report only")) {
+      ForEach(
+        store.rows.filter { row in
+          filtered.contains { $0.row.id == row.id && !$0.canAct }
+            || store.rowStatuses[row.id] == .unavailable || store.rowStatuses[row.id] == .toolRunning
+            || store.rowStatuses[row.id] == .processUnknown
+        }
+      ) { row in
+        VStack(alignment: .leading, spacing: 5) {
+          Text(row.title(turkish: turkish)).font(.system(size: 13, weight: .medium))
+          ForEach(reportReasons(row), id: \.self) { reason in
+            Text(reason).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+          }
+          HStack {
+            Button(String(localized: "Show in Finder")) {
+              NSWorkspace.shared.activateFileViewerSelecting([
+                URL(fileURLWithPath: store.homeDirectory + "/" + row.relativeRoot)
+              ])
+            }
+            if store.rowStatuses[row.id] == .unavailable
+              || store.candidates.contains(where: { $0.row.id == row.id && $0.requiresFullDiskAccess })
+            {
+              Button(String(localized: "Open Full Disk Access settings")) {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                  NSWorkspace.shared.open(url)
+                }
+              }
+            }
+          }.font(.system(size: 11))
+        }.padding(.vertical, 6)
+      }
+    }
+    .padding(13).background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
+  }
+
+  private var removedData: some View {
+    DisclosureGroup(String(localized: "Removed app data")) {
+      let grouped = Dictionary(grouping: related, by: bundleID)
+      ForEach(grouped.keys.sorted(), id: \.self) { id in
+        DisclosureGroup(id) {
+          let items = grouped[id] ?? []
+          ForEach(items) { candidate in
+            VStack(alignment: .leading, spacing: 4) {
+              Text(URL(fileURLWithPath: candidate.path).lastPathComponent).font(.system(size: 12))
+              Text(relatedReason(candidate.reason)).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+              if candidate.classification == .historicallyVerifiedAbsent {
+                Button(String(localized: "Review Trash")) {
+                  Task { await store.prepareRelated(candidate, actions: actions) }
+                }.disabled(store.phase != .ready || store.busy || actions.busy)
+              } else {
+                Button(String(localized: "Show in Finder")) {
+                  NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: candidate.path)])
+                }
+              }
+            }.padding(.vertical, 4)
+          }
+        }.padding(.vertical, 4)
+      }
+    }
+    .padding(13).background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
+  }
+
+  private func bundleID(_ candidate: RelatedDataCandidate) -> String {
+    if let id = candidate.receipt?.bundleID { return id }
+    let name = URL(fileURLWithPath: candidate.path).lastPathComponent
+    return name.hasSuffix(".plist") ? String(name.dropLast(6)) : name
+  }
+
+  private func reportReasons(_ row: CatalogRow) -> [String] {
+    let reasons = filtered.filter { $0.row.id == row.id && !$0.canAct }.map { candidate in
+      if let refusal = candidate.refusal { return refusal }
+      if candidate.activity == .active {
+        let names = candidate.processNames.isEmpty ? "" : " " + candidate.processNames.joined(separator: ", ")
+        return String(localized: "A related process is running. Quit it, then scan again.") + names
+      }
+      if candidate.activity == .unknown {
+        return String(localized: "Process activity could not be checked. Scan again before cleaning.")
+      }
+      if let rule = ProtectionPolicy.rule(
+        for: candidate.entry.path,
+        homeDirectory: store.homeDirectory)
+      {
+        return String(localized: "A safety rule protects this item. Inspect it in Finder.") + " " + rule.reason
+      }
+      if row.relativeRoot == "Library/Caches" {
+        if URL(fileURLWithPath: candidate.entry.path).lastPathComponent.lowercased().hasPrefix("com.apple.") {
+          return String(localized: "Apple-managed caches are excluded. Inspect this cache in Finder.")
+        }
+        if store.rows.contains(where: {
+          $0.id != row.id
+            && $0.relativeRoot.hasPrefix(
+              row.relativeRoot + "/" + URL(fileURLWithPath: candidate.entry.path).lastPathComponent + "/")
+        }) {
+          return String(localized: "This cache is covered by another category. Review that category.")
+        }
+      }
+      if row.minAgeDays > 0 {
+        return String(localized: "Recently changed items are kept. Inspect them in Finder.")
+      }
+      if candidate.entry.identity == nil {
+        return SpaceText.rejection(PlanRejection(.missingMetadata, path: candidate.entry.path))
+      }
+      return reportReason(row)
+    }
+    return reasons.isEmpty ? [reportReason(row)] : Array(Set(reasons)).sorted()
+  }
+
+  private func reportReason(_ row: CatalogRow) -> String {
+    switch store.rowStatuses[row.id] {
+    case .toolRunning: String(localized: "A related process is running. Quit it, then scan again.")
+    case .processUnknown: String(localized: "Process activity could not be checked. Scan again before cleaning.")
+    case .unavailable:
+      String(
+        localized: "This area is missing or unreadable. Inspect it in Finder; if it exists, check Full Disk Access.")
+    default:
+      row.methods.isEmpty
+        ? row.reason(turkish: turkish) + " " + row.cost(turkish: turkish)
+          + " " + String(localized: "Inspect these items in Finder.")
+        : String(localized: "These items do not meet this category's safety rules. Inspect them in Finder.")
     }
   }
 
   private func relatedReason(_ value: RelatedReason) -> String {
     switch value {
-    case .candidateAreaUnreadable: String(localized: "Candidate area unreadable")
-    case .recordUnsafe: String(localized: "Relation record unreadable or unsafe")
-    case .protected: String(localized: "Protected by safety rules")
-    case .installed: String(localized: "Owner found in searched app locations")
-    case .incompleteInventory: String(localized: "Application inventory incomplete")
-    case .recordUnavailable: String(localized: "Relation record unavailable")
+    case .candidateAreaUnreadable:
+      String(localized: "This data area is unreadable. Check Full Disk Access and folder permissions.")
+    case .recordUnsafe: String(localized: "The ownership record could not be verified. Inspect this data in Finder.")
+    case .protected: String(localized: "A safety rule protects this data. Inspect it in Finder.")
+    case .installed: String(localized: "An installed app owns this data. Review the app in Applications.")
+    case .incompleteInventory:
+      String(localized: "The application inventory is incomplete. Scan Applications again before cleaning this data.")
+    case .recordUnavailable: String(localized: "The ownership record is unavailable. Inspect this data in Finder.")
     case .historicallyVerified: String(localized: "Previously verified owner absent here; it may exist elsewhere")
-    case .nameOnly: String(localized: "Exact name alone does not prove former ownership")
-    case .sharedGroup: String(localized: "Shared Group Containers are protected and report only")
-    case .installedElsewhere: String(localized: "An app with this identifier is installed elsewhere")
+    case .nameOnly: String(localized: "The name alone does not prove former ownership. Inspect this data in Finder.")
+    case .sharedGroup:
+      String(localized: "Shared Group Containers may contain data from several apps. Inspect the folder in Finder.")
+    case .installedElsewhere:
+      String(localized: "An app with this identifier is installed elsewhere. Review the app in Applications.")
     }
   }
 
   private func resultLine(_ result: ActionResult) -> String {
-    let categories: [(ActionOutcome, String)] = [
-      (
-        .applied,
-        actions.resultKind == .catalogDelete
-          ? String(localized: "Permanently cleaned") : String(localized: "Moved to Trash")
-      ),
-      (.skipped, String(localized: "Skipped")),
-      (.failed, String(localized: "Failed")),
-      (.uncertain, String(localized: "Uncertain")),
-      (.notAttempted, String(localized: "Not attempted")),
-    ]
-    var parts = categories.compactMap { outcome, label -> String? in
-      let count = result.items.filter { $0.outcome == outcome }.count
-      return count > 0 ? "\(count) \(label)" : nil
-    }
-    let removed = result.items.reduce(0) { $0 + $1.deletedCount }
-    let bytes = result.items.reduce(Int64(0)) { $0 + $1.deletedLogicalBytes }
-    if removed > 0 {
-      parts.append(
-        "\(removed) \(String(localized: "irreversibly removed entries")) · \(format(bytes)) \(String(localized: "known logical bytes"))"
-      )
-    }
-    return String(localized: "Last result") + ": " + parts.joined(separator: " · ")
+    let applied = result.items.filter { $0.outcome == .applied }.count
+    let remaining = result.items.count - applied
+    let label =
+      actions.resultKind == .catalogDelete
+      ? String(localized: "Permanently cleaned") : String(localized: "Moved to Trash")
+    return "\(applied) \(label) · \(remaining) \(String(localized: "Not moved"))"
   }
+
+  private func format(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 }

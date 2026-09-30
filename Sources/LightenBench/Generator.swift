@@ -28,8 +28,9 @@ struct TreeGenerator {
   }
 
   func run() throws -> [String: Any] {
-    guard mkdir(root, 0o755) == 0 else {
-      throw FileSystemFailureDescription("mkdir \(root): \(String(cString: strerror(errno)))")
+    var details = stat()
+    guard lstat(root, &details) == 0, details.st_mode & S_IFMT == S_IFDIR else {
+      throw FileSystemFailureDescription("fixture directory unavailable")
     }
     let leaves = (files + Self.namesPerLeaf - 1) / Self.namesPerLeaf
     let tops = (leaves + 255) / 256

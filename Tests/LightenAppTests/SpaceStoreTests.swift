@@ -27,7 +27,7 @@ struct SpaceStoreTests {
       return
     }
     defer { free(resolved) }
-    let container = String(cString: resolved) + "/lighten-confirm-" + UUID().uuidString
+    let container = String(cString: resolved) + "/LightenQA-" + UUID().uuidString
     let root = container + "/source"
     let source = root + "/inside.bin"
     let destination = container + "/returned.bin"
@@ -43,8 +43,11 @@ struct SpaceStoreTests {
       journal: JSONLActionJournal(path: container + "/journal/actions-v1.jsonl"),
       trash: mover)
     store.add(item)
+    #expect(store.basket[item.path] != nil)
     await store.prepare(scanRoot: root, runID: run.runID)
-    let presentation = try #require(store.pending)
+    #expect(store.message == nil, "Fresh writable fixture should have no planning rejection")
+    let presentation = try #require(
+      store.pending, "basket=\(store.basket.count), busy=\(store.busy), message=\(store.message ?? "none")")
     #expect(presentation.plan.items.map(\.policy) == [.spaceTrash])
     let confirmed = try #require(store.takeConfirmedPlan(presentation))
     store.pending = nil  // SwiftUI's sheet dismissal clears its binding.

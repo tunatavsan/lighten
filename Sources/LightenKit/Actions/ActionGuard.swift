@@ -14,12 +14,33 @@ public struct ActionGuard: Sendable {
 
   public func validate(_ item: PlanItem) throws {
     let policy = item.policy
-    // A tree policy only ever applies to a plain Trash item without other proofs.
-    if policy != nil {
+    // Catalog tree policies require a matching, bundled Trash authority.
+    if policy == .catalogTrash || policy == .catalogBuildOutput {
+      guard let proof = item.catalogProof, proof.method == .trash,
+        item.relatedProof == nil, item.installedRelatedProof == nil, item.duplicateProof == nil,
+        let catalog = try? CleanCatalog(homeDirectory: homeDirectory),
+        let row = try? catalog.validate(
+          item, in: ActionPlan(snapshotRunID: proof.snapshotRunID, kind: .trash, items: [item])),
+        policy == (row.class == "buildOutput" ? .catalogBuildOutput : .catalogTrash)
+      else { throw GuardFailure.unsupportedItem }
+    } else if policy != nil {
       guard item.catalogProof == nil, item.relatedProof == nil, item.installedRelatedProof == nil,
         item.duplicateProof == nil,
         !ExactInventory(homeDirectory: homeDirectory).isBulkRoot(item.sourcePath)
       else { throw GuardFailure.unsupportedItem }
+    }
+    if policy == .catalogTrash || policy == .catalogBuildOutput {
+      var identifiers: [String] = []
+      for entry in item.inventory
+      where entry.identity?.kind == .directory && ExactInventory.isApplicationName(entry.path) {
+        guard let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: entry.path) else {
+          throw GuardFailure.unsupportedItem
+        }
+        identifiers.append(id)
+      }
+      guard identifiers.sorted() == (item.nestedApplicationIDs ?? []).sorted() else {
+        throw GuardFailure.changedInventory
+      }
     }
     // Strict items keep the original extension check; tree policies judge a
     // package root only when it really is a directory.
@@ -28,7 +49,8 @@ public struct ActionGuard: Sendable {
     let rootIsApplication = rootIsDirectory && ExactInventory.isApplicationName(item.sourcePath)
     guard let root = item.inventory.first, root.id == item.id,
       root.path == item.sourcePath,
-      root.identity?.kind == .regular || root.identity?.kind == .directory,
+      root.identity?.kind == .regular || root.identity?.kind == .directory
+        || (root.identity?.kind == .symbolicLink && (policy == .catalogTrash || policy == .catalogBuildOutput)),
       !PlanService.isBulkRoot(item.sourcePath, homeDirectory: homeDirectory),
       !rootIsPackage || policy != nil,
       policy != .wholeBundle || (rootIsApplication && item.applicationBundleID != nil),
@@ -94,8 +116,8 @@ public struct ActionGuard: Sendable {
       if !rules.isEmpty {
         // Whole-bundle exception: only beneath a package that is itself the operation root.
         let exempt =
-          policy == .wholeBundle && entry.id != item.id && entry.path.hasPrefix(item.sourcePath + "/")
-          && rules.allSatisfy { ExactInventory.applicationRules.contains($0.id) }
+          entry.id != item.id && entry.path.hasPrefix(item.sourcePath + "/")
+          && policy.map { ExactInventory.permits(rules, policy: $0) } == true
         if !exempt { throw GuardFailure.protectedItem }
       }
       // Tree policies move symlinks as leaves (never followed) and packages as contents.
@@ -103,7 +125,8 @@ public struct ActionGuard: Sendable {
         policy == nil && (ScanService.isPackage(entry.path) || ScanService.isInsidePackage(entry.path))
       if packageBoundary
         || expected.device != root.identity?.device
-        || (expected.kind == .symbolicLink && (policy == nil || entry.id == item.id))
+        || (expected.kind == .symbolicLink
+          && (policy == nil || (entry.id == item.id && policy != .catalogTrash && policy != .catalogBuildOutput)))
         || expected.kind == .other
         || expected.flags & UInt32(SF_DATALESS | UF_DATAVAULT) != 0
       {

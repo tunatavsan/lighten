@@ -89,25 +89,32 @@ public struct UnknownRunningApplicationSource: RunningApplicationSource {
 public struct RelatedDataService: Sendable {
   public let homeDirectory: String
   private let applicationRoots: [String]
+  private let writeVerifiedReceipts: Bool
   /// Whether the system knows an app with this bundle ID anywhere outside the
   /// Trash. A known app elsewhere keeps its data from being called a leftover.
   private let installedElsewhere: @Sendable (String) -> Bool
 
+  /// Disable receipt writes for read-only observations. Existing receipts are
+  /// still read and validated; this option does not change action authority.
   public init(
     homeDirectory: String = NSHomeDirectory(),
+    writeVerifiedReceipts: Bool = true,
     installedElsewhere: @escaping @Sendable (String) -> Bool = { _ in false }
   ) {
     self.homeDirectory = homeDirectory
     self.applicationRoots = ["/Applications", homeDirectory + "/Applications"]
+    self.writeVerifiedReceipts = writeVerifiedReceipts
     self.installedElsewhere = installedElsewhere
   }
 
   init(
     homeDirectory: String, applicationRoots: [String],
+    writeVerifiedReceipts: Bool = true,
     installedElsewhere: @escaping @Sendable (String) -> Bool = { _ in false }
   ) {
     self.homeDirectory = homeDirectory
     self.applicationRoots = applicationRoots
+    self.writeVerifiedReceipts = writeVerifiedReceipts
     self.installedElsewhere = installedElsewhere
   }
 
@@ -378,7 +385,7 @@ public struct RelatedDataService: Sendable {
           id: groupRoot, path: groupRoot,
           classification: .shared, reason: .sharedGroup, snapshot: nil, receipt: nil))
     }
-    if !Task.isCancelled && apps.complete && receiptStoreHealthy {
+    if writeVerifiedReceipts && !Task.isCancelled && apps.complete && receiptStoreHealthy {
       do {
         try saveVerifiedReceipts(apps: apps, candidates: candidates, existing: receipts)
       } catch {

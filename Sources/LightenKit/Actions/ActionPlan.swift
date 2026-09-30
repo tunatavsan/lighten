@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ActionKind: String, Codable, Sendable {
+public enum ActionKind: String, Codable, Sendable, Hashable {
   case trash, catalogDelete
 }
 
@@ -10,6 +10,8 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   public let volumeID: UUID?
   public let inventory: [ScanEntry]
   public let ancestors: [PathIdentity]
+  /// The observation that supplied this item; older plans use the plan-level run.
+  public let snapshotRunID: UUID?
   public let catalogProof: CatalogProof?
   public let relatedProof: RelatedProof?
   public let installedRelatedProof: InstalledRelatedProof?
@@ -18,7 +20,7 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   public let policy: TreePolicy?
   /// Bundle identifier of a whole application moved to the Trash; it must not be running.
   public let applicationBundleID: String?
-  /// Applications nested inside that application; none of them may be running either.
+  /// Application packages included by the inventory; none may be running.
   public let nestedApplicationIDs: [String]?
 
   public init(
@@ -26,13 +28,14 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     inventory: [ScanEntry], ancestors: [PathIdentity], catalogProof: CatalogProof? = nil,
     relatedProof: RelatedProof? = nil, installedRelatedProof: InstalledRelatedProof? = nil,
     duplicateProof: DuplicateProof? = nil, policy: TreePolicy? = nil, applicationBundleID: String? = nil,
-    nestedApplicationIDs: [String]? = nil
+    nestedApplicationIDs: [String]? = nil, snapshotRunID: UUID? = nil
   ) {
     self.id = id
     self.sourcePath = sourcePath
     self.volumeID = volumeID
     self.inventory = inventory
     self.ancestors = ancestors
+    self.snapshotRunID = snapshotRunID
     self.catalogProof = catalogProof
     self.relatedProof = relatedProof
     self.installedRelatedProof = installedRelatedProof

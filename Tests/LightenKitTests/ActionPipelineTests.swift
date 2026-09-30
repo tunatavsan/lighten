@@ -81,7 +81,7 @@ private func actionFixture() throws -> String {
     throw FileSystemFailure.invalidPath
   }
   defer { free(resolved) }
-  let root = String(cString: resolved) + "/lighten-test-action-" + UUID().uuidString
+  let root = String(cString: resolved) + "/LightenQA-" + UUID().uuidString
   try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
   return root
 }
@@ -638,7 +638,7 @@ private func localMover(destination: String) -> TestMover {
   let right = root + "/right"
   try FileManager.default.createDirectory(atPath: left, withIntermediateDirectories: true)
   try FileManager.default.createDirectory(atPath: right, withIntermediateDirectories: true)
-  let name = "lighten-test-" + UUID().uuidString
+  let name = "LightenQA-" + UUID().uuidString
   let a = left + "/" + name
   let b = right + "/" + name
   try put(a, "a")

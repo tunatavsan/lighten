@@ -73,7 +73,7 @@ private func cleanFixture() throws -> (home: String, root: String, candidate: St
     throw FileSystemFailure.invalidPath
   }
   defer { free(resolved) }
-  let home = String(cString: resolved) + "/lighten-clean-" + UUID().uuidString
+  let home = String(cString: resolved) + "/LightenQA-" + UUID().uuidString
   let root = home + "/Library/Caches/pip/http-v2"
   let candidate = root + "/" + UUID().uuidString
   try FileManager.default.createDirectory(atPath: candidate, withIntermediateDirectories: true)
@@ -88,7 +88,7 @@ func packagedCatalogLocatorIsFailClosed() throws {
     throw FileSystemFailure.invalidPath
   }
   defer { free(resolved) }
-  let root = String(cString: resolved) + "/lighten-catalog-layout-" + UUID().uuidString
+  let root = String(cString: resolved) + "/LightenQA-" + UUID().uuidString
   let app = URL(fileURLWithPath: root + "/Lighten.app")
   let resources = app.appendingPathComponent("Contents/Resources")
   let bundle = resources.appendingPathComponent("Lighten_LightenKit.bundle")
@@ -186,7 +186,7 @@ func cleanTrashProofAndUndo() async throws {
     journal: CleanJournal(), trash: CountedTrash(),
     guardService: ActionGuard(homeDirectory: fixture.home),
     activity: FixedActivity(state: .clearObservedCurrentUID), catalog: catalog)
-  await #expect(throws: CatalogFailure.self) {
+  await #expect(throws: ExecutionFailure.self) {
     try await forgedExecutor.execute(
       changedKind,
       confirmation: IrreversibleConfirmation(planID: changedKind.id, method: .catalogDelete))
@@ -612,4 +612,294 @@ func sharedGroupIsReportOnly() async throws {
   let result = await service.discover()
   #expect(result.first { $0.path == group }?.classification == .shared)
   #expect(!result.contains { $0.path == group + "/hidden-group" })
+}
+
+@Test("Catalog v2 loads many independent rows and rejects unsafe roots or methods")
+func catalogV2ValidatesDataRatherThanKnownIdentifiers() throws {
+  let catalog = try CleanCatalog()
+  #expect(catalog.version == 2)
+  #expect(catalog.rows.count >= 15)
+  #expect(catalog.rows.allSatisfy { !$0.evidenceURL.isEmpty })
+  func manifest(_ rows: [[String: Any]]) throws -> Data {
+    try JSONSerialization.data(withJSONObject: ["version": 2, "rows": rows])
+  }
+  let rows = try #require(
+    try JSONSerialization.jsonObject(with: JSONEncoder().encode(catalog.rows)) as? [[String: Any]])
+  var renamed = rows
+  renamed[0]["id"] = "independent-cache-name"
+  #expect(try CleanCatalog(data: manifest(renamed)).row(id: "independent-cache-name") != nil)
+  for mode in 0..<3 {
+    var changed = rows
+    switch mode {
+    case 0: changed[0]["relativeRoot"] = "Library/Caches/../Mail"
+    case 1: changed[0]["relativeRoot"] = "Library/Keychains"
+    default: changed[0]["class"] = "userDataRisk"
+    }
+    #expect(throws: CatalogFailure.self) { try CleanCatalog(data: manifest(changed)) }
+  }
+}
+
+@Test("Resource roots resolve aliases while catalog and mutation parents remain no-follow")
+func catalogAliasResolutionDoesNotWeakenActionPaths() throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let physical = fixture.home + "/physical/Lighten_LightenKit.bundle"
+  try FileManager.default.createDirectory(atPath: physical, withIntermediateDirectories: true)
+  let data = Data("catalog".utf8)
+  try data.write(to: URL(fileURLWithPath: physical + "/catalog.json"))
+  let alias = fixture.home + "/alias"
+  #expect(symlink(fixture.home + "/physical", alias) == 0)
+  let resolved = CatalogResourceLocator.url(
+    mainBundleURL: URL(fileURLWithPath: fixture.home + "/runner"), mainResourceURL: nil,
+    moduleURL: URL(fileURLWithPath: alias + "/Lighten_LightenKit.bundle/catalog.json"))
+  #expect(resolved?.path == physical + "/catalog.json")
+  let nestedResources = physical + "/Contents/Resources"
+  let externalResources = fixture.home + "/external-resources"
+  try FileManager.default.createDirectory(atPath: physical + "/Contents", withIntermediateDirectories: true)
+  try FileManager.default.createDirectory(atPath: externalResources, withIntermediateDirectories: true)
+  try data.write(to: URL(fileURLWithPath: externalResources + "/catalog.json"))
+  #expect(symlink(externalResources, nestedResources) == 0)
+  #expect(
+    CatalogResourceLocator.url(
+      mainBundleURL: URL(fileURLWithPath: fixture.home + "/runner"), mainResourceURL: nil,
+      moduleURL: URL(fileURLWithPath: alias + "/Lighten_LightenKit.bundle/Contents/Resources/catalog.json")) == nil)
+  #expect(try SecureMetadataFile.read(path: try #require(resolved).path, limit: 1024, ownerOnly: false) == data)
+  #expect(throws: FileSystemFailure.self) { try DescriptorFileSystem.openParent(of: alias + "/mutation") }
+  try FileManager.default.removeItem(atPath: physical + "/catalog.json")
+  #expect(symlink(fixture.candidate + "/a", physical + "/catalog.json") == 0)
+  #expect(
+    CatalogResourceLocator.url(
+      mainBundleURL: URL(fileURLWithPath: fixture.home + "/runner"), mainResourceURL: nil,
+      moduleURL: URL(fileURLWithPath: alias + "/Lighten_LightenKit.bundle/catalog.json")) == nil)
+}
+
+@Test("Generic application caches exclude Apple caches and every dedicated row")
+func catalogGenericRowsCannotOverlapOrGrantReportOnlyAuthority() throws {
+  let catalog = try CleanCatalog()
+  let generic = try #require(catalog.row(id: "user-app-caches"))
+  let root = catalog.root(for: generic)
+  #expect(!catalog.allowsCandidate(path: root + "/com.apple.Safari", row: generic))
+  #expect(!catalog.allowsCandidate(path: root + "/pip", row: generic))
+  #expect(!catalog.allowsCandidate(path: root + "/Homebrew", row: generic))
+  #expect(catalog.allowsCandidate(path: root + "/com.example.closed", row: generic))
+  let devices = try #require(catalog.row(id: "simulator-devices"))
+  #expect(devices.methods.isEmpty)
+  #expect(!devices.defaultSelected)
+  #expect(!catalog.allowsCandidate(path: catalog.root(for: devices) + "/device", row: devices))
+  #expect(try #require(catalog.row(id: "xcode-derived-data")).methods == [.trash])
+}
+
+@Test("Two category observations bind their own proof runs in one reversible plan")
+func catalogMultipleRunProofAndOneUndo() async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let catalog = try CleanCatalog(homeDirectory: fixture.home)
+  let otherRow = try #require(catalog.row(id: "homebrew-downloads"))
+  let otherRoot = catalog.root(for: otherRow)
+  try FileManager.default.createDirectory(atPath: otherRoot, withIntermediateDirectories: true)
+  let otherPath = otherRoot + "/LightenQA-" + UUID().uuidString
+  let bytes = Data("other cache archive".utf8)
+  try bytes.write(to: URL(fileURLWithPath: otherPath))
+  let first = try await ScanService(homeDirectory: fixture.home).scan(rootPath: fixture.root)
+  let second = try await ScanService(homeDirectory: fixture.home).scan(rootPath: otherRoot)
+  let firstID = try #require(first.entries.first { $0.path == fixture.candidate }).id
+  let secondID = try #require(second.entries.first { $0.path == otherPath }).id
+  let plan = try catalog.plan(selections: [
+    CatalogSelection(snapshot: first, selectedIDs: [firstID], rowID: "pip-http-v2"),
+    CatalogSelection(snapshot: second, selectedIDs: [secondID], rowID: otherRow.id),
+  ])
+  #expect(plan.items.count == 2)
+  #expect(Set(plan.items.compactMap(\.snapshotRunID)) == [first.runID, second.runID])
+  for item in plan.items { _ = try catalog.validate(item, in: plan) }
+  let item = try #require(plan.items.first)
+  let proof = try #require(item.catalogProof)
+  let forged = PlanItem(
+    id: item.id, sourcePath: item.sourcePath, volumeID: item.volumeID,
+    inventory: item.inventory, ancestors: item.ancestors,
+    catalogProof: CatalogProof(
+      version: proof.version, rowID: proof.rowID, allowedRoot: proof.allowedRoot,
+      method: proof.method, snapshotRunID: UUID()), policy: item.policy,
+    snapshotRunID: item.snapshotRunID)
+  #expect(throws: CatalogFailure.self) { try catalog.validate(forged, in: plan) }
+  let trash = fixture.home + "/Trash"
+  try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: true)
+  let journal = CleanJournal()
+  let result = try await ActionExecutor(
+    journal: journal, trash: LocalTrash(directory: trash),
+    guardService: ActionGuard(homeDirectory: fixture.home),
+    activity: FixedActivity(state: .clearObservedCurrentUID), catalog: catalog
+  ).execute(plan)
+  #expect(result.items.allSatisfy { $0.outcome == .applied })
+  try await ActionHistory(journal: journal, homeDirectory: fixture.home).undo(planID: plan.id)
+  #expect(try Data(contentsOf: URL(fileURLWithPath: otherPath)) == bytes)
+  #expect(try Data(contentsOf: URL(fileURLWithPath: fixture.candidate + "/a")) == Data("a".utf8))
+  #expect(try Data(contentsOf: URL(fileURLWithPath: fixture.candidate + "/b")) == Data("b".utf8))
+}
+
+private func buildFixture(_ home: String) throws -> (root: String, project: String) {
+  let root = home + "/Library/Developer/Xcode/DerivedData"
+  let project = root + "/LightenQA-" + UUID().uuidString
+  let app = project + "/Build/Products/Debug/LightenQA-" + UUID().uuidString + ".app"
+  let paths = [
+    app + "/Contents/MacOS/tool": Data("binary".utf8),
+    app + "/Contents/Resources/en.lproj/Localizable.strings": Data("text".utf8),
+    project + "/Build/Products/Debug/Tool.dSYM/Contents/Resources/DWARF/Tool": Data("symbols".utf8),
+    app + "/Contents/Info.plist": try PropertyListSerialization.data(
+      fromPropertyList: ["CFBundleIdentifier": "qa.lighten." + UUID().uuidString], format: .xml, options: 0),
+  ]
+  for (path, data) in paths {
+    try FileManager.default.createDirectory(
+      atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    try data.write(to: URL(fileURLWithPath: path))
+  }
+  return (root, project)
+}
+
+@Test("Build output moves application products, symbols and symlink leaves together and restores exactly")
+func catalogBuildOutputTrashAndUndo() async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let build = try buildFixture(fixture.home)
+  #expect(symlink(fixture.candidate, build.project + "/outside-link") == 0)
+  let snapshot = try await ScanService(homeDirectory: fixture.home).scan(rootPath: build.root)
+  let entry = try #require(snapshot.entries.first { $0.path == build.project })
+  let catalog = try CleanCatalog(homeDirectory: fixture.home)
+  let plan = try catalog.plan(snapshot: snapshot, selectedIDs: [entry.id], rowID: "xcode-derived-data", kind: .trash)
+  let item = try #require(plan.items.first)
+  #expect(item.policy == .catalogBuildOutput)
+  #expect(item.inventory.contains { $0.path.contains(".dSYM/Contents/Resources/DWARF") })
+  #expect(!item.inventory.contains { $0.path.hasPrefix(build.project + "/outside-link/") })
+  try ActionGuard(homeDirectory: fixture.home).validate(item)
+  #expect(throws: CatalogFailure.self) {
+    try catalog.plan(snapshot: snapshot, selectedIDs: [entry.id], rowID: "xcode-derived-data", kind: .catalogDelete)
+  }
+  let original = try Dictionary(
+    uniqueKeysWithValues: item.inventory.compactMap { entry -> (String, Data)? in
+      guard entry.identity?.kind == .regular else { return nil }
+      return (entry.path, try Data(contentsOf: URL(fileURLWithPath: entry.path)))
+    })
+  let trash = fixture.home + "/Trash"
+  try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: true)
+  let journal = CleanJournal()
+  let result = try await ActionExecutor(
+    journal: journal, trash: LocalTrash(directory: trash),
+    guardService: ActionGuard(homeDirectory: fixture.home),
+    activity: FixedActivity(state: .clearObservedCurrentUID), catalog: catalog,
+    runningApplications: FixedRunning(value: false)
+  ).execute(plan)
+  #expect(result.items[0].outcome == .applied)
+  #expect(FileManager.default.fileExists(atPath: fixture.candidate + "/a"))
+  try await ActionHistory(journal: journal, homeDirectory: fixture.home).undo(planID: plan.id)
+  for (path, data) in original { #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == data) }
+  #expect(
+    try FileManager.default.destinationOfSymbolicLink(atPath: build.project + "/outside-link") == fixture.candidate)
+}
+
+@Test("Catalog package exceptions never apply to protected personal data or forged cache policy")
+func catalogBuildOutputStillRejectsProtectedDataAndForgedPolicy() async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let build = try buildFixture(fixture.home)
+  let protected = build.project + "/Pictures.photoslibrary"
+  try FileManager.default.createDirectory(atPath: protected, withIntermediateDirectories: true)
+  let snapshot = try await ScanService(homeDirectory: fixture.home).scan(rootPath: build.root)
+  let entry = try #require(snapshot.entries.first { $0.path == build.project })
+  let catalog = try CleanCatalog(homeDirectory: fixture.home)
+  #expect(throws: PlanRejection.self) {
+    try catalog.plan(snapshot: snapshot, selectedIDs: [entry.id], rowID: "xcode-derived-data", kind: .trash)
+  }
+  let base = try await cleanTrashPlan(fixture)
+  let item = try #require(base.items.first)
+  let forged = PlanItem(
+    id: item.id, sourcePath: item.sourcePath, volumeID: item.volumeID, inventory: item.inventory,
+    ancestors: item.ancestors, catalogProof: item.catalogProof, policy: .catalogBuildOutput,
+    snapshotRunID: item.snapshotRunID)
+  #expect(throws: CatalogFailure.self) { try catalog.validate(forged, in: base) }
+  #expect(throws: GuardFailure.self) { try ActionGuard(homeDirectory: fixture.home).validate(forged) }
+}
+
+@Test("A catalog symlink root is a Trash leaf and never grants permanent or target authority")
+func catalogSymlinkChildTrashPreservesTarget() async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let path = fixture.root + "/LightenQA-" + UUID().uuidString
+  #expect(symlink(fixture.candidate, path) == 0)
+  let snapshot = try await ScanService(homeDirectory: fixture.home).scan(rootPath: fixture.root)
+  let id = try #require(snapshot.entries.first { $0.path == path }).id
+  let catalog = try CleanCatalog(homeDirectory: fixture.home)
+  let plan = try catalog.plan(snapshot: snapshot, selectedIDs: [id], rowID: "pip-http-v2", kind: .trash)
+  #expect(plan.items[0].inventory.count == 1)
+  try ActionGuard(homeDirectory: fixture.home).validate(plan.items[0])
+  #expect(throws: PlanFailure.self) {
+    try catalog.plan(snapshot: snapshot, selectedIDs: [id], rowID: "pip-http-v2", kind: .catalogDelete)
+  }
+  let trash = fixture.home + "/Trash"
+  try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: true)
+  let journal = CleanJournal()
+  let result = try await ActionExecutor(
+    journal: journal, trash: LocalTrash(directory: trash),
+    guardService: ActionGuard(homeDirectory: fixture.home),
+    activity: FixedActivity(state: .clearObservedCurrentUID), catalog: catalog
+  ).execute(plan)
+  #expect(result.items[0].outcome == .applied)
+  #expect(FileManager.default.fileExists(atPath: fixture.candidate + "/a"))
+  try await ActionHistory(journal: journal, homeDirectory: fixture.home).undo(planID: plan.id)
+  #expect(try FileManager.default.destinationOfSymbolicLink(atPath: path) == fixture.candidate)
+}
+
+@Test("A forged exact inventory cannot bypass protected descendants using a valid catalog proof")
+func catalogGuardRejectsProtectedDescendantInForgedInventory() async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let base = try await cleanTrashPlan(fixture)
+  let original = try #require(base.items.first)
+  let protected = fixture.candidate + "/Personal.photoslibrary"
+  try FileManager.default.createDirectory(atPath: protected, withIntermediateDirectories: true)
+  var entries = original.inventory
+  entries[0] = ScanEntry(
+    id: original.id, parentID: nil, path: fixture.candidate,
+    identity: try DescriptorFileSystem.identity(at: fixture.candidate), issues: [], readable: true)
+  entries.append(
+    ScanEntry(
+      parentID: original.id, path: protected,
+      identity: try DescriptorFileSystem.identity(at: protected), issues: [], readable: true))
+  let forged = PlanItem(
+    id: original.id, sourcePath: original.sourcePath, volumeID: original.volumeID,
+    inventory: entries, ancestors: original.ancestors, catalogProof: original.catalogProof,
+    policy: original.policy, snapshotRunID: original.snapshotRunID)
+  #expect(throws: GuardFailure.protectedItem) { try ActionGuard(homeDirectory: fixture.home).validate(forged) }
+}
+
+private actor CountedItemActivity: ProcessActivitySource {
+  private var observed = 0
+  func activity(for rowID: String) async -> ProcessActivity {
+    observed += 1
+    return ProcessActivity(state: .clearObservedCurrentUID)
+  }
+  func count() -> Int { observed }
+}
+
+@Test("Permanent deletion checks activity per item and detects new children in a nested directory")
+func catalogPermanentItemActivityAndNestedUnknownChild() async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let nested = fixture.candidate + "/nested"
+  try FileManager.default.createDirectory(atPath: nested, withIntermediateDirectories: true)
+  try Data("c".utf8).write(to: URL(fileURLWithPath: nested + "/c"))
+  try Data("d".utf8).write(to: URL(fileURLWithPath: nested + "/d"))
+  let plan = try await cleanPlan(fixture)
+  let activity = CountedItemActivity()
+  let journal = CleanJournal(afterProgress: {
+    try? Data("unplanned".utf8).write(to: URL(fileURLWithPath: nested + "/new-child"))
+  })
+  let result = try await ActionExecutor(
+    journal: journal, trash: ForbiddenTrash(), guardService: ActionGuard(homeDirectory: fixture.home),
+    activity: activity, catalog: try CleanCatalog(homeDirectory: fixture.home)
+  ).execute(plan, confirmation: IrreversibleConfirmation(planID: plan.id, method: .catalogDelete))
+  #expect(result.items[0].outcome == .failed)
+  #expect(result.items[0].deletedCount == 1)
+  #expect(await activity.count() == 2)
+  #expect(FileManager.default.fileExists(atPath: nested + "/new-child"))
+  #expect(FileManager.default.fileExists(atPath: nested + "/c"))
+  #expect(FileManager.default.fileExists(atPath: fixture.candidate + "/a"))
 }
