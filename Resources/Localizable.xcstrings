@@ -1617,6 +1617,22 @@
         }
       }
     },
+    "Loading history details…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading history details…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geçmiş ayrıntıları yükleniyor…"
+          }
+        }
+      }
+    },
     "Logical": {
       "localizations": {
         "en": {

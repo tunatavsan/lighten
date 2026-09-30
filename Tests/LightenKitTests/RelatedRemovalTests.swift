@@ -155,7 +155,7 @@ func relatedNineDomainsUndo() async throws {
   #expect(moved.items.allSatisfy { $0.outcome == .applied }, "\(moved.items)")
   #expect(try await journal.readSummary().records.filter { $0.kind == .intent }.count == 1)
   let history = ActionHistory(journal: journal, homeDirectory: fixture.home)
-  let recoverable = try #require(try await history.reconcile().plans.first)
+  let recoverable = try await history.loadGroup(planID: plan.id)
   #expect(recoverable.canUndo && recoverable.items.allSatisfy(\.canUndo))
   let restored = try await history.undo(planID: plan.id)
   #expect(restored.restoredCount == 10 && restored.remainingCount == 0)

@@ -167,7 +167,32 @@ struct HistoryView: View {
         LazyVStack(spacing: 0) {
           // Newest first: the action just taken, and its Undo, are at the top.
           ForEach((actions.history?.plans ?? []).reversed()) { plan in
-            VStack(alignment: .leading, spacing: 5) {
+            DisclosureGroup(
+              isExpanded: Binding(
+                get: { actions.expandedHistoryGroups.contains(plan.id) },
+                set: { expanded in Task { await actions.setHistoryGroupExpanded(plan.id, expanded: expanded) } }
+              )
+            ) {
+              if actions.loadingHistoryGroups.contains(plan.id) {
+                ProgressView(String(localized: "Loading history details…"))
+                  .controlSize(.small)
+              }
+              if plan.detailsLoaded {
+                ForEach(plan.items, id: \.itemID) { item in
+                  historyItem(item, plan: plan)
+                }
+                if plan.canUndo {
+                  HStack {
+                    Spacer()
+                    Button(String(localized: "Undo")) { Task { await actions.undo(plan) } }
+                      .buttonStyle(.bordered)
+                      .disabled(actions.busy || actions.loadingHistoryGroups.contains(plan.id))
+                      .accessibilityLabel(String(localized: "Undo") + " " + title(plan))
+                      .accessibilityIdentifier("history.undo.\(plan.id.uuidString)")
+                  }
+                }
+              }
+            } label: {
               HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 3) {
                   Text(title(plan))
@@ -199,20 +224,8 @@ struct HistoryView: View {
                   .frame(width: 105, alignment: .trailing)
               }
               .accessibilityElement(children: .combine)
-              ForEach(plan.items, id: \.itemID) { item in
-                historyItem(item, plan: plan)
-              }
-              if plan.canUndo {
-                HStack {
-                  Spacer()
-                  Button(String(localized: "Undo")) { Task { await actions.undo(plan) } }
-                    .buttonStyle(.bordered)
-                    .disabled(actions.busy)
-                    .accessibilityLabel(String(localized: "Undo") + " " + title(plan))
-                    .accessibilityIdentifier("history.undo.\(plan.id.uuidString)")
-                }
-              }
             }
+            .accessibilityIdentifier("history.group.\(plan.id.uuidString)")
             .padding(.horizontal, 8).padding(.vertical, 7)
             Divider()
           }

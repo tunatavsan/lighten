@@ -359,7 +359,7 @@ struct SpaceSafetyTests {
     #expect(result.items.first?.outcome == .applied)
     try spacePut(home + "/trash/folder/.DS_Store")
     let history = ActionHistory(journal: journal, homeDirectory: home)
-    #expect(try await history.reconcile().items.first?.canUndo == true)
+    #expect(try await history.loadGroup(planID: plan.id).items.first?.canUndo == true)
     #expect(try await history.undo(planID: plan.id).restoredCount == 1)
     #expect(FileManager.default.fileExists(atPath: path + "/.DS_Store"))
     let regular = home + "/single-file"

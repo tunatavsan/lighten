@@ -72,6 +72,8 @@ final class ActionStore {
   var resultKind: ActionKind?
   var history: HistoryReadout?
   var historyMetadata: [UUID: HistoryMetadata] = [:]
+  private(set) var expandedHistoryGroups: Set<UUID> = []
+  private(set) var loadingHistoryGroups: Set<UUID> = []
   var undoResults: [UUID: UndoPlanResult] = [:]
   var busy = false
   private(set) var preparingAlternate = false
@@ -235,6 +237,32 @@ final class ActionStore {
       }
       history = readout
       historyMetadata = metadata
+      expandedHistoryGroups.formIntersection(readout.plans.map(\.id))
+      for id in expandedHistoryGroups.sorted(by: { $0.uuidString < $1.uuidString }) {
+        await loadHistoryGroup(planID: id)
+      }
+    } catch {
+      message = FailureText.describe(error)
+    }
+  }
+
+  func setHistoryGroupExpanded(_ planID: UUID, expanded: Bool) async {
+    if expanded {
+      expandedHistoryGroups.insert(planID)
+      await loadHistoryGroup(planID: planID)
+    } else {
+      expandedHistoryGroups.remove(planID)
+    }
+  }
+
+  private func loadHistoryGroup(planID: UUID) async {
+    guard expandedHistoryGroups.contains(planID), !loadingHistoryGroups.contains(planID) else { return }
+    loadingHistoryGroups.insert(planID)
+    defer { loadingHistoryGroups.remove(planID) }
+    do {
+      let group = try await historyService.loadGroup(planID: planID)
+      guard expandedHistoryGroups.contains(planID) else { return }
+      history = history?.replacingGroup(group)
     } catch {
       message = FailureText.describe(error)
     }

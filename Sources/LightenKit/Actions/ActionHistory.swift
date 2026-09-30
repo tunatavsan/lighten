@@ -23,6 +23,8 @@ public struct HistoryPlan: Sendable, Identifiable {
   public let createdAt: Date
   public let items: [HistoryItem]
   public let metadata: [JournalItemSummary]
+  /// Summary refreshes leave recoverability unchecked until this group is opened.
+  public var detailsLoaded: Bool = false
 
   public var canUndo: Bool { kind == .trash && items.contains(where: \.canUndo) }
   public var appliedCount: Int { items.filter(\.applied).count }
@@ -48,6 +50,11 @@ public struct HistoryReadout: Sendable {
   public let items: [HistoryItem]
   public let issues: [JournalIssue]
   public let plans: [HistoryPlan]
+
+  public func replacingGroup(_ group: HistoryPlan) -> HistoryReadout {
+    let updated = plans.map { $0.id == group.id ? group : $0 }
+    return HistoryReadout(items: updated.flatMap(\.items), issues: issues, plans: updated)
+  }
 }
 
 public enum UndoFailure: Error, Sendable, Equatable {
@@ -89,8 +96,18 @@ public actor ActionHistory {
     }
   }
 
-  private func reconcileLeased() async throws -> HistoryReadout {
+  /// Loads and checks only the explicitly opened group's durable plan.
+  public func loadGroup(planID: UUID) async throws -> HistoryPlan {
+    try await journal.withMutationLease {
+      let readout = try await self.reconcileLeased(loadingGroup: planID)
+      guard let group = readout.plans.first(where: { $0.id == planID }) else { throw UndoFailure.unknownItem }
+      return group
+    }
+  }
+
+  private func reconcileLeased(loadingGroup: UUID? = nil) async throws -> HistoryReadout {
     let readout = try await journal.readSummary()
+    if loadingGroup != nil && !readout.issues.isEmpty { throw UndoFailure.corruptHistory }
     var items: [HistoryItem] = []
     var plans: [HistoryPlan] = []
     var eventsByItem: [UUID: [UUID: [JournalRecord]]] = [:]
@@ -104,13 +121,13 @@ public actor ActionHistory {
       let firstItem = items.count
       var exactItems: [UUID: PlanItem] = [:]
       var exactUndoPlan: ActionPlan?
-      if plan.kind == .trash,
+      if loadingGroup == plan.id, plan.kind == .trash,
         plan.items.contains(where: { item in
           let events = eventsByItem[plan.id]?[item.id] ?? []
           return events.contains { $0.kind == .applied } && events.last?.kind != .reversed
-        }),
-        let exactPlan = try? await journal.loadPlan(id: plan.id)
+        })
       {
+        let exactPlan = try await journal.loadPlan(id: plan.id)
         exactUndoPlan = exactPlan
         exactItems = Dictionary(exactPlan.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
       }
@@ -175,7 +192,7 @@ public actor ActionHistory {
           } catch {
             detail = detail ?? String(describing: error)
           }
-        } else if state == .inTrash {
+        } else if state == .inTrash && loadingGroup == plan.id {
           detail = detail ?? String(describing: UndoFailure.corruptHistory)
         }
         items.append(
@@ -188,7 +205,7 @@ public actor ActionHistory {
       plans.append(
         HistoryPlan(
           id: plan.id, kind: plan.kind, createdAt: plan.createdAt,
-          items: Array(items[firstItem...]), metadata: plan.items))
+          items: Array(items[firstItem...]), metadata: plan.items, detailsLoaded: loadingGroup == plan.id))
     }
     return HistoryReadout(items: items, issues: readout.issues, plans: plans)
   }

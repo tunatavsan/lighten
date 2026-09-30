@@ -45,6 +45,27 @@ private struct HistoryFixtureTrash: TrashMoving {
   }
 }
 
+private actor HistoryStoreJournalSpy: ActionJournal {
+  let base: JSONLActionJournal
+  private var fullReads = 0
+  private var loadedPlans: [UUID] = []
+
+  init(base: JSONLActionJournal) { self.base = base }
+  func acquireMutationLease() async throws -> JournalLease { try await base.acquireMutationLease() }
+  func releaseMutationLease(_ lease: JournalLease) async { await base.releaseMutationLease(lease) }
+  func append(_ record: JournalRecord) async throws { try await base.append(record) }
+  func read() async throws -> JournalReadout {
+    fullReads += 1
+    return try await base.read()
+  }
+  func readSummary() async throws -> JournalReadout { try await base.readSummary() }
+  func loadPlan(id: UUID) async throws -> ActionPlan {
+    loadedPlans.append(id)
+    return try await base.loadPlan(id: id)
+  }
+  func calls() -> (fullReads: Int, loadedPlans: [UUID]) { (fullReads, loadedPlans) }
+}
+
 @MainActor private func applyHistoryFixture(_ fixture: HistoryStoreFixture) async throws -> (ActionStore, ActionPlan) {
   let store = ActionStore(
     journal: fixture.journal, trash: HistoryFixtureTrash(directory: fixture.trash),
@@ -72,6 +93,7 @@ private struct HistoryFixtureTrash: TrashMoving {
   let (store, plan) = try await applyHistoryFixture(fixture)
   try Data("collision".utf8).write(to: URL(fileURLWithPath: fixture.paths[1]))
   await store.reloadHistory()
+  await store.setHistoryGroupExpanded(plan.id, expanded: true)
   let history = try #require(store.history?.plans.first)
   #expect(history.canUndo)
   #expect(history.appliedCount == 3)
@@ -120,6 +142,7 @@ private struct HistoryFixtureTrash: TrashMoving {
   let presentation = try #require(store.pending)
   let confirmed = try #require(store.takeConfirmedPlan(presentation))
   await store.executeConfirmed(confirmed)
+  await store.setHistoryGroupExpanded(plan.id, expanded: true)
   let history = try #require(store.history?.plans.first)
   #expect(history.metadata.count == 3)
   #expect(history.appliedCount == 2)
@@ -131,4 +154,46 @@ private struct HistoryFixtureTrash: TrashMoving {
   #expect(store.history?.plans.first?.appliedCount == 2)
   #expect(store.history?.plans.first?.logicalBytes == 22)
   #expect(store.pendingTrashLogicalBytes == 0)
+}
+
+@Test("Collapsed History refresh loads no plans and refreshes details only for opened groups")
+@MainActor func historyStoreLoadsOnlyExpandedGroups() async throws {
+  let fixture = try HistoryStoreFixture()
+  defer { fixture.cleanup() }
+  let selection = try fixture.plan()
+  let plans = selection.items.map { ActionPlan(snapshotRunID: selection.snapshotRunID, kind: .trash, items: [$0]) }
+  for plan in plans {
+    let item = plan.items[0]
+    let destination = fixture.trash + "/" + URL(fileURLWithPath: item.sourcePath).lastPathComponent
+    try await fixture.journal.withMutationLease {
+      try await fixture.journal.append(JournalRecord(kind: .intent, planID: plan.id, plan: plan))
+      try FileManager.default.moveItem(atPath: item.sourcePath, toPath: destination)
+      let moved = try DescriptorFileSystem.identity(at: destination)
+      try await fixture.journal.append(
+        JournalRecord(
+          kind: .applied, planID: plan.id, itemID: item.id,
+          returnedTrashPath: destination, movedIdentity: moved))
+    }
+  }
+  let spy = HistoryStoreJournalSpy(base: fixture.journal)
+  let store = ActionStore(
+    journal: fixture.journal,
+    historyService: ActionHistory(journal: spy, homeDirectory: fixture.root))
+  await store.reloadHistory()
+  #expect(store.history?.plans.count == 3)
+  #expect(store.history?.plans.allSatisfy { !$0.detailsLoaded && !$0.canUndo } == true)
+  #expect((await spy.calls()).loadedPlans.isEmpty)
+  await store.setHistoryGroupExpanded(plans[1].id, expanded: true)
+  #expect(store.expandedHistoryGroups == [plans[1].id])
+  #expect(store.loadingHistoryGroups.isEmpty)
+  #expect(store.history?.plans.map(\.detailsLoaded) == [false, true, false])
+  #expect((await spy.calls()).loadedPlans == [plans[1].id])
+  await store.reloadHistory()
+  #expect((await spy.calls()).loadedPlans == [plans[1].id, plans[1].id])
+  #expect(store.history?.plans.first { $0.id == plans[1].id }?.canUndo == true)
+  await store.setHistoryGroupExpanded(plans[1].id, expanded: false)
+  await store.reloadHistory()
+  #expect(store.history?.plans.allSatisfy { !$0.detailsLoaded } == true)
+  #expect((await spy.calls()).loadedPlans == [plans[1].id, plans[1].id])
+  #expect((await spy.calls()).fullReads == 0)
 }

@@ -57,7 +57,7 @@ func groupedPlanUndoRestoresAllSHA() async throws {
     plan)
   #expect(result.items.allSatisfy { $0.outcome == .applied })
   let history = ActionHistory(journal: JSONLActionJournal(path: fixture.journalPath))
-  let before = try await history.reconcile()
+  let before = (try await history.reconcile()).replacingGroup(try await history.loadGroup(planID: plan.id))
   #expect(before.plans.count == 1)
   #expect(before.plans[0].items.count == 3)
   #expect(before.plans[0].canUndo)
