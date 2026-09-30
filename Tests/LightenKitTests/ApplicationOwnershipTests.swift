@@ -36,7 +36,7 @@ struct ApplicationOwnershipTests {
       homeDirectory: home, applicationRoots: [apps], writeVerifiedReceipts: false,
       signingMetadata: { path in
         path == unknown ? nil : ApplicationSigningMetadata(teamID: nil, groupIdentifiers: [domain])
-      })
+      }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
     let app = try #require(service.application(at: chosen))
     let candidate = try #require((await service.discover(for: app)).first { $0.path == group })
     #expect(candidate.classification == .shared)
@@ -73,7 +73,7 @@ struct ApplicationOwnershipTests {
       writeVerifiedReceipts: false,
       signingMetadata: { path in
         ApplicationSigningMetadata(teamID: nil, groupIdentifiers: path == chosen || path == claimed ? [domain] : [])
-      })
+      }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
     let app = try #require(service.application(at: chosen))
     let inventory = service.inventory()
     #expect(inventory.ownershipCandidates.contains { $0.path == claimed && $0.packagePath == other })
@@ -97,7 +97,8 @@ struct ApplicationOwnershipTests {
     try FileManager.default.createDirectory(atPath: group, withIntermediateDirectories: true)
     let service = RelatedDataService(
       homeDirectory: home, applicationRoots: [apps], writeVerifiedReceipts: false,
-      signingMetadata: { _ in ApplicationSigningMetadata(teamID: nil, groupIdentifiers: [domain]) })
+      signingMetadata: { _ in ApplicationSigningMetadata(teamID: nil, groupIdentifiers: [domain]) },
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
     let app = try #require(service.application(at: chosen))
     let candidate = try #require((await service.discover(for: app)).first { $0.path == group })
     #expect(candidate.classification == .installed && candidate.canSelect)
@@ -117,7 +118,8 @@ struct ApplicationOwnershipTests {
     try FileManager.default.createDirectory(atPath: group, withIntermediateDirectories: true)
     let service = RelatedDataService(
       homeDirectory: home, applicationRoots: [apps], writeVerifiedReceipts: false,
-      signingMetadata: { _ in ApplicationSigningMetadata(teamID: nil, groupIdentifiers: [domain]) })
+      signingMetadata: { _ in ApplicationSigningMetadata(teamID: nil, groupIdentifiers: [domain]) },
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
     let app = try #require(service.application(at: chosen))
     let candidate = try #require((await service.discover(for: app)).first { $0.path == group })
     #expect(candidate.classification == .shared && !candidate.canSelect && !candidate.defaultSelected)

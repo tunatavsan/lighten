@@ -44,7 +44,9 @@ private struct AppsFixture {
   }
 
   var service: RelatedDataService {
-    RelatedDataService(homeDirectory: home, applicationRoots: [appRoot])
+    RelatedDataService(
+      homeDirectory: home, applicationRoots: [appRoot],
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   }
 
   func candidate() async throws -> RelatedDataCandidate {
@@ -162,7 +164,8 @@ func installedDataTrashUndo() async throws {
   let executor = ActionExecutor(
     journal: journal, trash: AppsTrash(destination: fixture.trash),
     guardService: ActionGuard(homeDirectory: fixture.home),
-    related: fixture.service, runningApplications: AppsRunning(value: false))
+    related: fixture.service, runningApplications: AppsRunning(value: false),
+    applicationActivity: FixtureClearApplicationActivity())
   let result = try await executor.execute(plan)
   #expect(result.items.first?.outcome == .applied)
   #expect(!FileManager.default.fileExists(atPath: fixture.cache))
@@ -182,7 +185,8 @@ func installedDataVetoes() async throws {
       journal: JSONLActionJournal(path: fixture.home + "/Journal/actions.jsonl"),
       trash: AppsTrash(destination: fixture.trash),
       guardService: ActionGuard(homeDirectory: fixture.home),
-      related: fixture.service, runningApplications: AppsRunning(value: value))
+      related: fixture.service, runningApplications: AppsRunning(value: value),
+      applicationActivity: FixtureClearApplicationActivity())
     let result = try await executor.execute(plan)
     #expect(result.items.first?.outcome == .skipped)
     #expect(FileManager.default.fileExists(atPath: fixture.cache))
@@ -196,7 +200,8 @@ func installedDataVetoes() async throws {
     trash: AppsTrash(destination: fixture.trash),
     guardService: ActionGuard(homeDirectory: fixture.home),
     related: fixture.service,
-    runningApplications: MutatingRunning(infoPath: fixture.app + "/Contents/Info.plist"))
+    runningApplications: MutatingRunning(infoPath: fixture.app + "/Contents/Info.plist"),
+    applicationActivity: FixtureClearApplicationActivity())
   let result = try await executor.execute(plan)
   #expect(result.items.first?.outcome == .skipped)
   #expect(FileManager.default.fileExists(atPath: fixture.cache))
@@ -308,7 +313,8 @@ func installedElsewhereIsNotALeftover() async throws {
   try FileManager.default.createDirectory(atPath: orphan, withIntermediateDirectories: true)
   let service = RelatedDataService(
     homeDirectory: fixture.home, applicationRoots: [fixture.appRoot],
-    installedElsewhere: { $0 == "com.example.elsewhere" })
+    installedElsewhere: { $0 == "com.example.elsewhere" },
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   let candidate = try #require((await service.discover()).first { $0.path == orphan })
   #expect(candidate.classification == .uncertain)
   #expect(candidate.reason == .installedElsewhere)
@@ -365,7 +371,8 @@ func wholeApplicationMovesWhenClosed() async throws {
   let blocked = try await ActionExecutor(
     journal: journal, trash: AppsTrash(destination: fixture.trash),
     guardService: ActionGuard(homeDirectory: fixture.home), related: fixture.service,
-    runningApplications: SelectiveRunning(running: ["com.example.agent"])
+    runningApplications: SelectiveRunning(running: ["com.example.agent"]),
+    applicationActivity: FixtureClearApplicationActivity()
   ).execute(first)
   #expect(blocked.items.first?.outcome == .skipped)
   #expect(FileManager.default.fileExists(atPath: fixture.app))
@@ -374,7 +381,7 @@ func wholeApplicationMovesWhenClosed() async throws {
   let moved = try await ActionExecutor(
     journal: journal, trash: AppsTrash(destination: fixture.trash),
     guardService: ActionGuard(homeDirectory: fixture.home), related: fixture.service,
-    runningApplications: SelectiveRunning(running: [])
+    runningApplications: SelectiveRunning(running: []), applicationActivity: FixtureClearApplicationActivity()
   ).execute(second)
   #expect(moved.items.first?.outcome == .applied)
   #expect(!FileManager.default.fileExists(atPath: fixture.app))

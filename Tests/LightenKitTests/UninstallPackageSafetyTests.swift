@@ -32,6 +32,12 @@ private struct UninstallFixture {
 
   var service: RelatedDataService {
     RelatedDataService(
+      homeDirectory: home, applicationRoots: [home + "/Applications"], writeVerifiedReceipts: false,
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
+  }
+
+  var nativeService: RelatedDataService {
+    RelatedDataService(
       homeDirectory: home, applicationRoots: [home + "/Applications"], writeVerifiedReceipts: false)
   }
 
@@ -115,7 +121,7 @@ struct UninstallPackageSafetyTests {
       #expect(observation.state == .active)
       #expect(observation.processNames.contains { $0.hasPrefix("LightenQA-") })
       #expect(throws: ProcessActivityFailure.self) {
-        try fixture.service.planUninstall(app: app, selectedRelated: [candidate])
+        try fixture.nativeService.planUninstall(app: app, selectedRelated: [candidate])
       }
       let trash = UninstallTrash(destination: fixture.home + "/Trash")
       let result = try await ActionExecutor(
@@ -135,6 +141,32 @@ struct UninstallPackageSafetyTests {
     #expect(await stopUninstallHelper(pid))
   }
 
+  @Test("Unknown executable observation refuses package and dependent data")
+  func unknownExecutableObservationStopsData() async throws {
+    let fixture = try UninstallFixture()
+    defer { fixture.cleanup() }
+    let (app, candidate) = try await fixture.selected()
+    let unknown = RelatedDataService(
+      homeDirectory: fixture.home, applicationRoots: [fixture.home + "/Applications"],
+      writeVerifiedReceipts: false, packageActivity: { _ in ApplicationActivity(state: .unknown) })
+    let refusal = #expect(throws: ProcessActivityFailure.self) {
+      try unknown.planUninstall(app: app, selectedRelated: [candidate])
+    }
+    #expect(refusal?.description == "processActivityUnavailable")
+    let plan = try fixture.service.planUninstall(app: app, selectedRelated: [candidate])
+    let trash = UninstallTrash(destination: fixture.home + "/Trash")
+    let result = try await ActionExecutor(
+      journal: JSONLActionJournal(path: fixture.home + "/Journal/actions.jsonl"), trash: trash,
+      guardService: ActionGuard(homeDirectory: fixture.home), related: fixture.service,
+      runningApplications: UninstallNotRunning(), applicationActivity: FixtureUnknownApplicationActivity()
+    ).execute(plan)
+    #expect(result.items.allSatisfy { $0.outcome == .skipped })
+    #expect(result.items.allSatisfy { $0.detail?.contains("processActivityUnavailable") == true })
+    #expect(await trash.paths().isEmpty)
+    #expect(FileManager.default.fileExists(atPath: fixture.app))
+    #expect(FileManager.default.fileExists(atPath: fixture.cache))
+  }
+
   @Test("A final package change cannot move data even when data was ordered first")
   func latePackageChangeStopsData() async throws {
     let fixture = try UninstallFixture()
@@ -150,7 +182,8 @@ struct UninstallPackageSafetyTests {
         if item.sourcePath == fixture.app {
           try Data("changed metadata".utf8).write(to: URL(fileURLWithPath: fixture.app + "/Contents/Info.plist"))
         }
-      }, related: fixture.service, runningApplications: UninstallNotRunning()
+      }, related: fixture.service, runningApplications: UninstallNotRunning(),
+      applicationActivity: FixtureClearApplicationActivity()
     ).execute(plan)
     #expect(result.items.allSatisfy { $0.outcome == .skipped })
     #expect(await trash.paths().isEmpty)
@@ -168,7 +201,7 @@ struct UninstallPackageSafetyTests {
     let result = try await ActionExecutor(
       journal: JSONLActionJournal(path: fixture.home + "/Journal/actions.jsonl"), trash: trash,
       guardService: ActionGuard(homeDirectory: fixture.home), related: fixture.service,
-      runningApplications: UninstallNotRunning()
+      runningApplications: UninstallNotRunning(), applicationActivity: FixtureClearApplicationActivity()
     ).execute(plan)
     #expect(result.items.first { $0.itemID == plan.items.last?.id }?.outcome == .failed)
     #expect(result.items.first { $0.itemID == plan.items.first?.id }?.outcome == .skipped)
@@ -192,7 +225,8 @@ struct UninstallPackageSafetyTests {
           let suffix = changed == "info" ? "/Contents/Info.plist" : String(fixture.helper.dropFirst(fixture.app.count))
           try Data("changed metadata".utf8).write(to: URL(fileURLWithPath: owner + suffix))
         }
-      }, related: fixture.service, runningApplications: UninstallNotRunning()
+      }, related: fixture.service, runningApplications: UninstallNotRunning(),
+      applicationActivity: FixtureClearApplicationActivity()
     ).execute(plan)
     #expect(result.items.first { $0.itemID == plan.items.last?.id }?.outcome == .applied)
     #expect(result.items.first { $0.itemID == plan.items.first?.id }?.outcome == .skipped)
@@ -213,7 +247,8 @@ struct UninstallPackageSafetyTests {
       guardService: ActionGuard(homeDirectory: fixture.home),
       beforeMutation: { _ in
         try Data("changed metadata".utf8).write(to: URL(fileURLWithPath: fixture.app + "/Contents/Info.plist"))
-      }, related: fixture.service, runningApplications: UninstallNotRunning()
+      }, related: fixture.service, runningApplications: UninstallNotRunning(),
+      applicationActivity: FixtureClearApplicationActivity()
     ).execute(plan)
     #expect(result.items.allSatisfy { $0.outcome == .skipped })
     #expect(await trash.paths().isEmpty)
@@ -231,7 +266,8 @@ struct UninstallPackageSafetyTests {
     let journal = JSONLActionJournal(path: fixture.home + "/Journal/actions.jsonl")
     let result = try await ActionExecutor(
       journal: journal, trash: trash, guardService: ActionGuard(homeDirectory: fixture.home),
-      related: fixture.service, runningApplications: UninstallNotRunning()
+      related: fixture.service, runningApplications: UninstallNotRunning(),
+      applicationActivity: FixtureClearApplicationActivity()
     ).execute(plan)
     #expect(result.items.allSatisfy { $0.outcome == .applied })
     #expect(await trash.paths() == [fixture.app, fixture.cache])

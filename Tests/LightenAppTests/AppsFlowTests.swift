@@ -30,7 +30,9 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   ResultPictureStore(directory: root + "/results")
 }
 
-@Test("Linked and iOS wrapper apps remain visible without package or data selection", arguments: [false, true])
+@Test(
+  "Linked and iOS wrapper apps remain visible without package or data selection",
+  arguments: [false, true])
 @MainActor func appsUnsupportedPackagesCannotSelect(isWrapper: Bool) async throws {
   let root = try flowRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }
@@ -54,7 +56,9 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   #expect(store.selectedPath == nil)
   #expect(store.message?.isEmpty == false)
   #expect(!store.canSelect(candidate, app: report))
-  #expect(store.packageUnavailableReason(report)?.contains(isWrapper ? "iPhone or iPad" : "link to an app") == true)
+  #expect(
+    store.packageUnavailableReason(report)?.contains(
+      isWrapper ? "iPhone or iPad" : "link to an app") == true)
   // Directly injected selections must not bypass the same display-only boundary.
   store.selectedPath = appPath
   store.packageSelected = true
@@ -124,7 +128,8 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   }
 }
 
-@Test("Apps opening restores 92 display rows and refreshes without giving the picture plan authority")
+@Test(
+  "Apps opening restores 92 display rows and refreshes without giving the picture plan authority")
 @MainActor func appsPictureHasNoSelectionAuthority() async throws {
   let root = try flowRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }
@@ -166,7 +171,8 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   #expect(store.pictureRows.isEmpty)
 }
 
-@Test("Apps reviews all selected data once and drops only applied paths without requiring another scan")
+@Test(
+  "Apps reviews all selected data once and drops only applied paths without requiring another scan")
 @MainActor func appsMultipleDataAndTargetedResult() async throws {
   let root = try flowRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }
@@ -269,20 +275,28 @@ private func flowRoot() throws -> String {
   return root
 }
 
-@Test("An external application uses the default fresh package planner without an installed-root entry")
+@Test(
+  "An external application uses the default fresh package planner without an installed-root entry")
 @MainActor func appsExternalDropDefaultPlanner() async throws {
   let root = try flowRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }
   let app = root + "/LightenQA-external.app"
   let bundleID = "qa.lighten." + UUID().uuidString.lowercased()
-  try FileManager.default.createDirectory(atPath: app + "/Contents", withIntermediateDirectories: true)
-  let plist = ["CFBundleIdentifier": bundleID, "CFBundleName": "LightenQA", "CFBundlePackageType": "APPL"]
+  try FileManager.default.createDirectory(
+    atPath: app + "/Contents", withIntermediateDirectories: true)
+  let plist = [
+    "CFBundleIdentifier": bundleID, "CFBundleName": "LightenQA", "CFBundlePackageType": "APPL",
+  ]
   try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
     .write(to: URL(fileURLWithPath: app + "/Contents/Info.plist"))
   try Data("owned fixture".utf8).write(to: URL(fileURLWithPath: app + "/Contents/payload"))
   let fixtureReport = flowReport(path: app, bundleID: bundleID)
+  let related = RelatedDataService(
+    homeDirectory: root, applicationRoots: [], writeVerifiedReceipts: false,
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   let store = AppsStore(
-    pictures: flowPictures(root), droppedReport: { _ in fixtureReport }, running: AppsClosedSource())
+    pictures: flowPictures(root), relatedService: related,
+    droppedReport: { _ in fixtureReport }, running: AppsClosedSource())
   let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
   let began = ContinuousClock.now
   await store.acceptDrop([URL(fileURLWithPath: app)], actions: actions)
@@ -367,7 +381,9 @@ private actor DroppedReportGate {
   let gate = DroppedReportGate()
   let store = AppsStore(pictures: flowPictures(root), droppedReport: { _ in await gate.report() })
   let actions = ActionStore()
-  let task = Task { await store.acceptDrop([URL(fileURLWithPath: root + "/LightenQA-late.app")], actions: actions) }
+  let task = Task {
+    await store.acceptDrop([URL(fileURLWithPath: root + "/LightenQA-late.app")], actions: actions)
+  }
   while !(await gate.waiting) { await Task.yield() }
   store.deactivate(actions: actions)
   await gate.finish(flowReport(path: root + "/LightenQA-late.app"))
@@ -385,8 +401,10 @@ private actor DroppedReportGate {
   let installed = flowCandidate(root + "/Library/Caches/qa.lighten.orphan")
   let orphan = RelatedDataCandidate(
     id: installed.id, path: installed.path, classification: .orphanVerified,
-    reason: .orphanVerified, snapshot: installed.snapshot, receipt: nil, bundleID: "qa.lighten.orphan")
-  let inventory = BundleInventory(applications: [], unidentifiedPaths: [], complete: true, observedAt: Date())
+    reason: .orphanVerified, snapshot: installed.snapshot, receipt: nil,
+    bundleID: "qa.lighten.orphan")
+  let inventory = BundleInventory(
+    applications: [], unidentifiedPaths: [], complete: true, observedAt: Date())
   let plan = ActionPlan(
     snapshotRunID: UUID(), kind: .trash,
     items: [PlanItem(id: UUID(), sourcePath: orphan.path, inventory: [], ancestors: [])])

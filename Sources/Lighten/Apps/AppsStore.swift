@@ -59,13 +59,18 @@ final class AppsStore {
 
   init(
     pictures: ResultPictureStore = ResultPictureStore(),
-    uninstallPlanBuilder: (@Sendable (ApplicationReport, [RelatedDataCandidate], Bool) async throws -> ActionPlan)? =
+    uninstallPlanBuilder: (
+      @Sendable (ApplicationReport, [RelatedDataCandidate], Bool) async throws -> ActionPlan
+    )? =
       nil,
-    orphanPlanBuilder: @escaping @Sendable ([RelatedDataCandidate]) async throws -> ActionPlan = { candidates in
+    relatedService: RelatedDataService = .system,
+    orphanPlanBuilder: @escaping @Sendable ([RelatedDataCandidate]) async throws -> ActionPlan = {
+      candidates in
       let service = RelatedDataService.system
       let plans = try candidates.map { try service.plan(candidate: $0) }
       guard let first = plans.first else { throw PlanFailure.emptySelection }
-      return ActionPlan(snapshotRunID: first.snapshotRunID, kind: .trash, items: plans.flatMap(\.items))
+      return ActionPlan(
+        snapshotRunID: first.snapshotRunID, kind: .trash, items: plans.flatMap(\.items))
     },
     droppedReport: @escaping @Sendable (String) async -> ApplicationReport? = {
       await ApplicationDiscovery(related: .system).report(path: $0)
@@ -74,8 +79,10 @@ final class AppsStore {
     events: @escaping @Sendable () -> AsyncStream<ApplicationDiscovery.Event> = {
       ApplicationDiscovery(related: .system).events()
     },
-    planBuilder: (@Sendable (ApplicationReport, RelatedDataCandidate) async throws -> ActionPlan)? = nil,
-    appPlanBuilder: @escaping @Sendable (String) async -> Result<ActionPlan, PlanRejections> = { path in
+    planBuilder: (@Sendable (ApplicationReport, RelatedDataCandidate) async throws -> ActionPlan)? =
+      nil,
+    appPlanBuilder: @escaping @Sendable (String) async -> Result<ActionPlan, PlanRejections> = {
+      path in
       await Task.detached(priority: .userInitiated) { () -> Result<ActionPlan, PlanRejections> in
         do throws(PlanRejections) {
           guard let identity = try? DescriptorFileSystem.identity(at: path) else {
@@ -83,7 +90,9 @@ final class AppsStore {
           }
           return .success(
             try PlanService().makeSpacePlan(
-              selections: [PlanService.Selection(path: path, device: identity.device, inode: identity.inode)],
+              selections: [
+                PlanService.Selection(path: path, device: identity.device, inode: identity.inode)
+              ],
               scanRootPath: "", runID: UUID()))
         } catch {
           return .failure(error)
@@ -108,23 +117,26 @@ final class AppsStore {
             case .failure(let refused): throw refused
             }
           }
-          return ActionPlan(snapshotRunID: plans.first?.snapshotRunID ?? UUID(), kind: .trash, items: items)
+          return ActionPlan(
+            snapshotRunID: plans.first?.snapshotRunID ?? UUID(), kind: .trash, items: items)
         }
         return try await withCheckedThrowingContinuation { continuation in
           DispatchQueue.global(qos: .userInitiated).async {
             do {
-              let service = RelatedDataService.system
+              let service = relatedService
               guard let id = report.bundleID,
                 let app = service.application(at: report.path), app.bundleID == id
               else { throw RelatedFailure.ambiguousOwner }
               if includePackage {
-                continuation.resume(returning: try service.planUninstall(app: app, selectedRelated: candidates))
+                continuation.resume(
+                  returning: try service.planUninstall(app: app, selectedRelated: candidates))
                 return
               }
               let plans = try candidates.map { try service.planInstalled(app: app, candidate: $0) }
               guard let first = plans.first else { throw PlanFailure.emptySelection }
               continuation.resume(
-                returning: ActionPlan(snapshotRunID: first.snapshotRunID, kind: .trash, items: plans.flatMap(\.items)))
+                returning: ActionPlan(
+                  snapshotRunID: first.snapshotRunID, kind: .trash, items: plans.flatMap(\.items)))
             } catch { continuation.resume(throwing: error) }
           }
         }
@@ -151,7 +163,8 @@ final class AppsStore {
           self.pictureObservedAt = picture.observedAt
           self.needsRescan = true
           self.pictureOpeningTiming = PictureOpeningTiming(
-            requestedAt: requestedAt, loadStartedAt: loadStartedAt, loadFinishedAt: loadFinishedAt, publishedAt: .now)
+            requestedAt: requestedAt, loadStartedAt: loadStartedAt, loadFinishedAt: loadFinishedAt,
+            publishedAt: .now)
         }
         if self.scannedAt == nil, !self.busy { self.startScan(actions: actions) }
       }
@@ -271,13 +284,16 @@ final class AppsStore {
   func scanDidLayout() {
     guard !busy, let requested = cancellationRequestedAt else { return }
     let elapsed = requested.duration(to: .now).components
-    cancellationLayoutMilliseconds = Double(elapsed.seconds) * 1000 + Double(elapsed.attoseconds) / 1e15
+    cancellationLayoutMilliseconds =
+      Double(elapsed.seconds) * 1000 + Double(elapsed.attoseconds) / 1e15
     cancellationRequestedAt = nil
   }
 
   func select(_ path: String) {
     guard !needsRescan, pictureRows.isEmpty, !dropping else { return }
-    if let report = reports.first(where: { $0.path == path }), let reason = unsupportedPackageReason(report) {
+    if let report = reports.first(where: { $0.path == path }),
+      let reason = unsupportedPackageReason(report)
+    {
       message = reason
       return
     }
@@ -311,11 +327,15 @@ final class AppsStore {
     if busy { return String(localized: "Review is available after the scan") }
     if needsRescan { return String(localized: "Scan again to review data") }
 
-    guard let bundleID = report.bundleID else { return String(localized: "App identity unavailable") }
+    guard let bundleID = report.bundleID else {
+      return String(localized: "App identity unavailable")
+    }
     if bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame {
       return String(localized: "Lighten does not remove itself.")
     }
-    if runningIDs.contains(bundleID) { return String(localized: "The app is running. Quit it first.") }
+    if runningIDs.contains(bundleID) {
+      return String(localized: "The app is running. Quit it first.")
+    }
     if runningUnknownIDs.contains(bundleID) || !runningCheckedIDs.contains(bundleID) {
       return String(localized: "Whether the app is running is unknown.")
     }
@@ -323,7 +343,8 @@ final class AppsStore {
     var metadata = stat()
     let foreignOwner = Darwin.lstat(report.path, &metadata) == 0 && metadata.st_uid != geteuid()
     if foreignOwner || Darwin.access(parent, W_OK) != 0 || Darwin.access(report.path, W_OK) != 0 {
-      return String(localized: "Administrator permission is needed. Use Show in Finder to remove it there.")
+      return String(
+        localized: "Administrator permission is needed. Use Show in Finder to remove it there.")
     }
     return nil
   }
@@ -334,7 +355,8 @@ final class AppsStore {
         "\(String(localized: "This is a link to an app stored elsewhere. It is shown for identification only.")) \(target)"
     }
     if report.isIOSWrapper {
-      return String(localized: "This iPhone or iPad application cannot be removed here. Use Show in Finder.")
+      return String(
+        localized: "This iPhone or iPad application cannot be removed here. Use Show in Finder.")
     }
     return nil
   }
@@ -345,7 +367,11 @@ final class AppsStore {
     guard let app = selectedReport, let candidate = app.related.first(where: { $0.path == path }),
       canSelect(candidate, app: app)
     else { return }
-    if selectedDataPaths.contains(path) { selectedDataPaths.remove(path) } else { selectedDataPaths.insert(path) }
+    if selectedDataPaths.contains(path) {
+      selectedDataPaths.remove(path)
+    } else {
+      selectedDataPaths.insert(path)
+    }
   }
 
   /// Leaving the screen keeps a running scan going; only prepared plans expire.
@@ -361,11 +387,14 @@ final class AppsStore {
     else { return }
     observedResultID = result.planID
     invalidatePreparation(actions: actions, keepPresentedPlanID: true)
-    let moved = Set(result.items.filter { $0.outcome == .applied }.compactMap { presentedPaths[$0.itemID] })
+    let moved = Set(
+      result.items.filter { $0.outcome == .applied }.compactMap { presentedPaths[$0.itemID] })
     let retainedData = reports.filter { moved.contains($0.path) }.flatMap { report in
       report.related.filter { !moved.contains($0.path) }
     }
-    orphanCandidates += retainedData.filter { candidate in !orphanCandidates.contains { $0.path == candidate.path } }
+    orphanCandidates += retainedData.filter { candidate in
+      !orphanCandidates.contains { $0.path == candidate.path }
+    }
     reports = reports.filter { !moved.contains($0.path) }.map { report in
       var refreshed = report
       refreshed.related.removeAll { moved.contains($0.path) }
@@ -380,7 +409,8 @@ final class AppsStore {
   }
 
   func canSelect(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> Bool {
-    guard unsupportedPackageReason(app) == nil, candidate.canSelect, candidate.classification == .installed,
+    guard unsupportedPackageReason(app) == nil, candidate.canSelect,
+      candidate.classification == .installed,
       inventoryComplete || reviewedDropPath == app.path, !busy, !needsRescan, pictureRows.isEmpty,
       let id = app.bundleID,
       reports.filter({ $0.bundleID?.caseInsensitiveCompare(id) == .orderedSame }).count == 1,
@@ -392,10 +422,16 @@ final class AppsStore {
 
   func toggleOrphan(_ path: String, actions: ActionStore) {
     guard !busy, !needsRescan, !dropping, pictureRows.isEmpty,
-      orphanCandidates.contains(where: { $0.path == path && $0.canSelect && $0.classification != .installed })
+      orphanCandidates.contains(where: {
+        $0.path == path && $0.canSelect && $0.classification != .installed
+      })
     else { return }
     invalidatePreparation(actions: actions)
-    if selectedOrphanPaths.contains(path) { selectedOrphanPaths.remove(path) } else { selectedOrphanPaths.insert(path) }
+    if selectedOrphanPaths.contains(path) {
+      selectedOrphanPaths.remove(path)
+    } else {
+      selectedOrphanPaths.insert(path)
+    }
   }
 
   func prepareOrphans(actions: ActionStore) async {
@@ -482,7 +518,8 @@ final class AppsStore {
   }
 
   func prepareSelectedData(actions: ActionStore) async {
-    guard !busy, !preparing, !needsRescan, !actions.busy, pictureRows.isEmpty, let report = selectedReport,
+    guard !busy, !preparing, !needsRescan, !actions.busy, pictureRows.isEmpty,
+      let report = selectedReport,
       packageSelected || !selectedDataPaths.isEmpty
     else {
       message = String(localized: "Select the app or eligible related data")
@@ -496,7 +533,8 @@ final class AppsStore {
     guard candidates.count == selectedDataPaths.count,
       candidates.allSatisfy({ canSelect($0, app: report) })
     else {
-      message = String(localized: "Some selected data is unavailable. Review the reasons before continuing.")
+      message = String(
+        localized: "Some selected data is unavailable. Review the reasons before continuing.")
       return
     }
     if packageSelected, let reason = packageUnavailableReason(report) {
@@ -515,9 +553,14 @@ final class AppsStore {
       builder: {
         let plan = try await builder(report, candidates, includePackage)
         if includePackage {
-          guard let package = plan.items.first(where: { $0.sourcePath == report.path && $0.policy == .wholeBundle }),
+          guard
+            let package = plan.items.first(where: {
+              $0.sourcePath == report.path && $0.policy == .wholeBundle
+            }),
             package.applicationBundleID == report.bundleID
-          else { throw PlanRejections(rejections: [PlanRejection(.changedSinceScan, path: report.path)]) }
+          else {
+            throw PlanRejections(rejections: [PlanRejection(.changedSinceScan, path: report.path)])
+          }
         }
         return plan
       })
@@ -537,10 +580,14 @@ final class AppsStore {
       }
     }
     do {
-      let task = Task(priority: .userInitiated) { @concurrent () throws -> ActionPlan in try await builder() }
+      let task = Task(priority: .userInitiated) { @concurrent () throws -> ActionPlan in
+        try await builder()
+      }
       preparationTask = task
       let plan = try await task.value
-      guard preparationGeneration == id, stillSelected(), !task.isCancelled, !actions.busy else { return }
+      guard preparationGeneration == id, stillSelected(), !task.isCancelled, !actions.busy else {
+        return
+      }
       for item in plan.items where item.policy == .wholeBundle {
         guard let bundleID = item.applicationBundleID else { throw PlanFailure.unsafeSelection }
         for bundle in [bundleID] + (item.nestedApplicationIDs ?? [])
@@ -559,7 +606,9 @@ final class AppsStore {
           reason: item.policy == .wholeBundle
             ? String(localized: "Whole application package")
             : String(
-              localized: "Selected app data. Preferences and support files may contain personal settings or documents."),
+              localized:
+                "Selected app data. Preferences and support files may contain personal settings or documents."
+            ),
           logicalBytes: size.logical, allocatedBytes: size.allocated)
       }
       actions.present(plan: plan, items: summaries)
@@ -569,10 +618,14 @@ final class AppsStore {
       observedResultID = nil
       message = nil
     } catch let refused as PlanRejections {
-      if preparationGeneration == id { message = refused.rejections.map(SpaceText.rejection).joined(separator: "\n") }
+      if preparationGeneration == id {
+        message = refused.rejections.map(SpaceText.rejection).joined(separator: "\n")
+      }
     } catch {
       if preparationGeneration == id {
-        message = String(localized: "Could not prepare app data. Scan again.") + " " + FailureText.describe(error)
+        message =
+          String(localized: "Could not prepare app data. Scan again.") + " "
+          + FailureText.describe(error)
       }
     }
   }

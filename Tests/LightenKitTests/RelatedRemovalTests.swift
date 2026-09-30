@@ -78,7 +78,9 @@ private struct RemovalFixture {
   }
 
   var service: RelatedDataService {
-    RelatedDataService(homeDirectory: home, applicationRoots: [appRoot], writeVerifiedReceipts: false)
+    RelatedDataService(
+      homeDirectory: home, applicationRoots: [appRoot], writeVerifiedReceipts: false,
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   }
 
   func cleanup() {
@@ -149,7 +151,7 @@ func relatedNineDomainsUndo() async throws {
     journal: journal,
     trash: RemovalTrash(directory: fixture.storage + "/Trash", native: realHome),
     guardService: ActionGuard(homeDirectory: fixture.home), related: fixture.service,
-    runningApplications: RemovalRunning())
+    runningApplications: RemovalRunning(), applicationActivity: FixtureClearApplicationActivity())
   let moved = try await executor.execute(plan)
   #expect(moved.items.count == 10)
   #expect(moved.items.allSatisfy { $0.outcome == .applied }, "\(moved.items)")
@@ -228,14 +230,15 @@ func orphanRemovalRequiresCurrentAbsence() async throws {
     journal: journal,
     trash: RemovalTrash(directory: fixture.storage + "/Trash", native: false),
     guardService: ActionGuard(homeDirectory: fixture.home), related: fixture.service,
-    runningApplications: RemovalRunning()
+    runningApplications: RemovalRunning(), applicationActivity: FixtureClearApplicationActivity()
   ).execute(plan)
   #expect(result.items.allSatisfy { $0.outcome == .applied }, "\(result.items)")
   try await ActionHistory(journal: journal, homeDirectory: fixture.home).undo(planID: plan.id)
   for candidate in selected { #expect(FileManager.default.fileExists(atPath: candidate.path)) }
   let elsewhere = RelatedDataService(
     homeDirectory: fixture.home, applicationRoots: [fixture.appRoot],
-    writeVerifiedReceipts: false, installedElsewhere: { _ in true })
+    writeVerifiedReceipts: false, installedElsewhere: { _ in true },
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   #expect((await elsewhere.discover()).filter { fixture.paths.contains($0.path) }.allSatisfy { !$0.canSelect })
   #expect(throws: RelatedFailure.self) { try elsewhere.validateOrphan(plan.items[0], plan: plan) }
 }
@@ -322,7 +325,8 @@ func relatedMatchStrengths() async throws {
   let service = RelatedDataService(
     homeDirectory: fixture.home, applicationRoots: [fixture.appRoot],
     writeVerifiedReceipts: false,
-    signingMetadata: { _ in ApplicationSigningMetadata(teamID: "TEAM123456", groupIdentifiers: []) })
+    signingMetadata: { _ in ApplicationSigningMetadata(teamID: "TEAM123456", groupIdentifiers: []) },
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   let candidates = await service.discover()
   let team = try #require(candidates.first { $0.path == medium })
   let name = try #require(candidates.first { $0.path == weak })
@@ -356,7 +360,7 @@ func focusedReportIsReadOnlyWithoutGroupData(existingReceipts: Bool) async throw
     signingMetadata: { path in
       calls.withLock { $0[path, default: 0] += 1 }
       return ApplicationSigningMetadata(teamID: "TEAM123456", groupIdentifiers: [fixture.groupID])
-    })
+    }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   let receiptPath = fixture.home + "/Library/Application Support/com.tavsn.lighten/related-receipts.json"
   if existingReceipts { _ = await service.discover() }
   let beforeData = try? Data(contentsOf: URL(fileURLWithPath: receiptPath))
@@ -391,7 +395,7 @@ func focusedReportChecksPresentGroupOwners() async throws {
     signingMetadata: { path in
       calls.withLock { $0[path, default: 0] += 1 }
       return ApplicationSigningMetadata(teamID: nil, groupIdentifiers: [fixture.groupID])
-    })
+    }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   let report = try #require(await ApplicationDiscovery(related: service).report(path: fixture.app))
   let group = try #require(report.related.first { $0.path == fixture.paths[4] })
   #expect(group.classification == .shared && !group.canSelect && !group.defaultSelected)

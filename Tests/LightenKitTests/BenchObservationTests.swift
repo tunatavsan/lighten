@@ -31,7 +31,8 @@ func readOnlyDiscoveryPreservesReceiptStore(existingReceipt: Bool) async throws 
   let beforeData = try? Data(contentsOf: URL(fileURLWithPath: receiptPath))
   let beforeIdentity = try? DescriptorFileSystem.identity(at: receiptPath)
   let observer = RelatedDataService(
-    homeDirectory: root, applicationRoots: [appRoot], writeVerifiedReceipts: false)
+    homeDirectory: root, applicationRoots: [appRoot], writeVerifiedReceipts: false,
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   let candidates = await observer.discover()
   let candidate = try #require(candidates.first { $0.path == cachePath })
   #expect(candidate.classification == .installed)
