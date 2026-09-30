@@ -14,6 +14,8 @@ public struct ApplicationReport: Identifiable, Sendable {
   public let manualUninstallerSuggested: Bool
   /// Resolved location when the listed path is a symbolic link to an app.
   public var linkTarget: String?
+  /// Cached bundle-layout metadata; unsupported wrappers are display-only.
+  public var isIOSWrapper = false
 
   public var id: String { path }
 }
@@ -56,10 +58,16 @@ public struct ApplicationDiscovery: Sendable {
   private func discover(_ emit: @Sendable (Event) -> Void) async -> (BundleInventory, [ApplicationReport]) {
     let inventory = related.inventory()
     let known = inventory.applications.map {
-      (path: $0.path, bundleID: Optional($0.bundleID), version: $0.version, link: $0.linkTarget)
+      (
+        path: $0.path, bundleID: Optional($0.bundleID), version: $0.version, link: $0.linkTarget,
+        isIOSWrapper: Self.isIOSWrapper(at: $0.linkTarget ?? $0.path)
+      )
     }
     let unknown = inventory.unidentifiedPaths.map {
-      (path: $0, bundleID: Optional<String>.none, version: Optional<String>.none, link: Optional<String>.none)
+      (
+        path: $0, bundleID: Optional<String>.none, version: Optional<String>.none, link: Optional<String>.none,
+        isIOSWrapper: Self.isIOSWrapper(at: $0)
+      )
     }
     let metadata = (known + unknown).map { app in
       var report = ApplicationReport(
@@ -70,6 +78,7 @@ public struct ApplicationDiscovery: Sendable {
         knownItemCount: 0, partial: true, related: [],
         manualUninstallerSuggested: false)
       report.linkTarget = app.link
+      report.isIOSWrapper = app.isIOSWrapper
       return report
     }
     emit(.inventory(inventory, metadata))
@@ -98,6 +107,7 @@ public struct ApplicationDiscovery: Sendable {
               at: app.path + "/Contents/Library/SystemExtensions")) != nil
               || (try? DescriptorFileSystem.identity(at: app.path + "/Contents/Library/LaunchServices")) != nil)
           report.linkTarget = app.link
+          report.isIOSWrapper = app.isIOSWrapper
           return report
         }
       }
@@ -140,6 +150,7 @@ public struct ApplicationDiscovery: Sendable {
         partial: app.partial, related: candidates,
         manualUninstallerSuggested: app.manualUninstallerSuggested)
       enriched.linkTarget = app.linkTarget
+      enriched.isIOSWrapper = app.isIOSWrapper
       return enriched
     }
     reports.sort {
@@ -154,15 +165,32 @@ public struct ApplicationDiscovery: Sendable {
 
   /// Measures just one explicitly supplied bundle and its standard data locations.
   public func report(path: String) async -> ApplicationReport? {
-    guard let app = related.application(at: path) else { return nil }
+    guard let app = related.application(at: path) else {
+      guard Self.isIOSWrapper(at: path) else { return nil }
+      let size = await Self.measure(path: path, homeDirectory: related.homeDirectory)
+      var report = ApplicationReport(
+        path: path, bundleID: nil, version: nil, signerTeamID: nil,
+        logical: size.logical, allocated: size.allocated, knownItemCount: size.count, partial: size.partial,
+        related: [], manualUninstallerSuggested: false)
+      report.isIOSWrapper = true
+      return report
+    }
+    let isIOSWrapper = Self.isIOSWrapper(at: app.linkTarget ?? path)
     async let observation = related.focusedObservation(for: app)
-    let size = await Self.measure(path: path, homeDirectory: related.homeDirectory)
+    let size = await Self.measure(path: app.linkTarget ?? path, homeDirectory: related.homeDirectory)
     let data = await observation
-    return ApplicationReport(
+    var report = ApplicationReport(
       path: path, bundleID: app.bundleID, version: app.version,
       signerTeamID: data.signerTeamID,
       logical: size.logical, allocated: size.allocated, knownItemCount: size.count, partial: size.partial,
       related: data.candidates, manualUninstallerSuggested: false)
+    report.linkTarget = app.linkTarget
+    report.isIOSWrapper = isIOSWrapper
+    return report
+  }
+
+  private static func isIOSWrapper(at path: String) -> Bool {
+    RelatedDataService.infoPlistPath(ofBundleAt: path) != path + "/Contents/Info.plist"
   }
 
   public func discoverOrphans() async -> [RelatedDataCandidate] {

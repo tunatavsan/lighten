@@ -20,6 +20,7 @@ struct AppsView: View {
   }
 
   var body: some View {
+    let scanBusy = store.busy
     GeometryReader { geometry in
       let compact = geometry.size.width < 800
       VStack(alignment: .leading, spacing: 0) {
@@ -34,6 +35,7 @@ struct AppsView: View {
           Button(store.busy ? String(localized: "Cancel scan") : String(localized: "Scan")) {
             if store.busy { store.cancelScan() } else { store.startScan(actions: actions) }
           }
+          .accessibilityIdentifier("apps.scan-control")
         }
         .padding(.bottom, 14)
         HStack(spacing: 12) {
@@ -179,6 +181,11 @@ struct AppsView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
+    .onGeometryChange(for: Bool.self) { _ in
+      scanBusy
+    } action: { busy in
+      if !busy { store.scanDidLayout() }
+    }
     .navigationTitle(String(localized: "Apps"))
     .sheet(item: $actions.pending) { presentation in
       ConfirmationView(presentation: presentation, actions: actions)
@@ -348,7 +355,8 @@ struct AppsView: View {
           Text(app.bundleID ?? String(localized: "Identity unavailable"))
             .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
             .lineLimit(1).truncationMode(.middle)
-          if let reason = store.packageUnavailableReason(app), !store.busy {
+          if let reason = store.packageUnavailableReason(app), !store.busy || store.unsupportedPackageReason(app) != nil
+          {
             Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
               .lineLimit(2)
           }
@@ -373,7 +381,7 @@ struct AppsView: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .disabled(store.needsRescan)
+    .disabled(store.needsRescan || store.unsupportedPackageReason(app) != nil)
     .accessibilityLabel(
       "\(app.path), \(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : app.partial ? String(localized: "Partial size") : String(localized: "Measured size"))"
     )

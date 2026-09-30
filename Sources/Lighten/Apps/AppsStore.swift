@@ -16,6 +16,8 @@ final class AppsStore {
   @ObservationIgnored private let events: @Sendable () -> AsyncStream<ApplicationDiscovery.Event>
   @ObservationIgnored private var scanTask: Task<Void, Never>?
   @ObservationIgnored private var generation = UUID()
+  @ObservationIgnored private var cancellationRequestedAt: ContinuousClock.Instant?
+  private(set) var cancellationLayoutMilliseconds: Double?
   @ObservationIgnored private var preparationTask: Task<ActionPlan, Error>?
   @ObservationIgnored private var preparationGeneration = UUID()
   @ObservationIgnored private let running: any RunningApplicationSource
@@ -162,6 +164,8 @@ final class AppsStore {
     reviewedDropPath = nil
     let id = UUID()
     generation = id
+    cancellationRequestedAt = nil
+    cancellationLayoutMilliseconds = nil
     busy = true
     reports = []
     orphanCandidates = []
@@ -250,6 +254,8 @@ final class AppsStore {
 
   func cancelScan() {
     guard busy else { return }
+    cancellationRequestedAt = .now
+    cancellationLayoutMilliseconds = nil
     generation = UUID()
     scanTask?.cancel()
     scanTask = nil
@@ -261,8 +267,20 @@ final class AppsStore {
     message = String(localized: "Scan cancelled")
   }
 
+  /// Called when the view has laid out the idle state after cancellation.
+  func scanDidLayout() {
+    guard !busy, let requested = cancellationRequestedAt else { return }
+    let elapsed = requested.duration(to: .now).components
+    cancellationLayoutMilliseconds = Double(elapsed.seconds) * 1000 + Double(elapsed.attoseconds) / 1e15
+    cancellationRequestedAt = nil
+  }
+
   func select(_ path: String) {
     guard !needsRescan, pictureRows.isEmpty, !dropping else { return }
+    if let report = reports.first(where: { $0.path == path }), let reason = unsupportedPackageReason(report) {
+      message = reason
+      return
+    }
     selectedPath = path
     packageSelected = false
     selectedDataPaths = []
@@ -289,12 +307,10 @@ final class AppsStore {
 
   /// Why the whole app cannot be moved to the Trash, or nil when it can be selected.
   func packageUnavailableReason(_ report: ApplicationReport) -> String? {
+    if let reason = unsupportedPackageReason(report) { return reason }
     if busy { return String(localized: "Review is available after the scan") }
     if needsRescan { return String(localized: "Scan again to review data") }
-    if let target = report.linkTarget {
-      return
-        "\(String(localized: "This is a link to an app stored elsewhere. It is shown for identification only.")) \(target)"
-    }
+
     guard let bundleID = report.bundleID else { return String(localized: "App identity unavailable") }
     if bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame {
       return String(localized: "Lighten does not remove itself.")
@@ -308,6 +324,17 @@ final class AppsStore {
     let foreignOwner = Darwin.lstat(report.path, &metadata) == 0 && metadata.st_uid != geteuid()
     if foreignOwner || Darwin.access(parent, W_OK) != 0 || Darwin.access(report.path, W_OK) != 0 {
       return String(localized: "Administrator permission is needed. Use Show in Finder to remove it there.")
+    }
+    return nil
+  }
+
+  func unsupportedPackageReason(_ report: ApplicationReport) -> String? {
+    if let target = report.linkTarget {
+      return
+        "\(String(localized: "This is a link to an app stored elsewhere. It is shown for identification only.")) \(target)"
+    }
+    if report.isIOSWrapper {
+      return String(localized: "This iPhone or iPad application cannot be removed here. Use Show in Finder.")
     }
     return nil
   }
@@ -353,7 +380,7 @@ final class AppsStore {
   }
 
   func canSelect(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> Bool {
-    guard candidate.canSelect, candidate.classification == .installed,
+    guard unsupportedPackageReason(app) == nil, candidate.canSelect, candidate.classification == .installed,
       inventoryComplete || reviewedDropPath == app.path, !busy, !needsRescan, pictureRows.isEmpty,
       let id = app.bundleID,
       reports.filter({ $0.bundleID?.caseInsensitiveCompare(id) == .orderedSame }).count == 1,
@@ -417,10 +444,14 @@ final class AppsStore {
     pictureRows = []
     pictureObservedAt = nil
     needsRescan = false
-    selectedPath = report.path
+    selectedPath = unsupportedPackageReason(report) == nil ? report.path : nil
     reviewedDropPath = report.path
     selectedDataPaths = []
     packageSelected = false
+    if let reason = unsupportedPackageReason(report) {
+      message = reason
+      return
+    }
     guard let bundleID = report.bundleID else { return }
     let status = await running.isRunning(bundleID: bundleID)
     guard dropGeneration == id else { return }
@@ -455,6 +486,10 @@ final class AppsStore {
       packageSelected || !selectedDataPaths.isEmpty
     else {
       message = String(localized: "Select the app or eligible related data")
+      return
+    }
+    if let reason = unsupportedPackageReason(report) {
+      message = reason
       return
     }
     let candidates = report.related.filter { selectedDataPaths.contains($0.path) }

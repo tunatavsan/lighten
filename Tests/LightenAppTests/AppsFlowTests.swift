@@ -30,6 +30,92 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   ResultPictureStore(directory: root + "/results")
 }
 
+@Test("Linked and iOS wrapper apps remain visible without package or data selection", arguments: [false, true])
+@MainActor func appsUnsupportedPackagesCannotSelect(isWrapper: Bool) async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let appPath = root + "/LightenQA-unsupported.app"
+  let candidate = flowCandidate(root + "/Library/Caches/qa.lighten.flow")
+  var report = flowReport(path: appPath, candidates: [candidate])
+  report.isIOSWrapper = isWrapper
+  report.linkTarget = isWrapper ? nil : root + "/LightenQA-target.app"
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    uninstallPlanBuilder: { _, _, _ in
+      Issue.record("Unsupported app reached the plan builder")
+      throw PlanFailure.emptySelection
+    }, running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [report]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(appPath, actions: actions)
+  #expect(store.reports.count == 1)
+  #expect(store.selectedPath == nil)
+  #expect(store.message?.isEmpty == false)
+  #expect(!store.canSelect(candidate, app: report))
+  #expect(store.packageUnavailableReason(report)?.contains(isWrapper ? "iPhone or iPad" : "link to an app") == true)
+  // Directly injected selections must not bypass the same display-only boundary.
+  store.selectedPath = appPath
+  store.packageSelected = true
+  store.selectedDataPaths = [candidate.path]
+  store.toggleData(candidate.path, actions: actions)
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending == nil)
+  store.packageSelected = false
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending == nil)
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+}
+
+@Test("Discovery caches iOS wrapper metadata before measurements and preserves it in every report")
+@MainActor func appsWrapperMetadataIsCachedAndPropagated() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let appPath = root + "/Applications/LightenQA-wrapper.app"
+  let inner = appPath + "/Wrapper/LightenQA-inner.app"
+  try FileManager.default.createDirectory(atPath: inner, withIntermediateDirectories: true)
+  let plist = ["CFBundleIdentifier": "qa.lighten.wrapper", "CFBundleName": "LightenQA"]
+  try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+    .write(to: URL(fileURLWithPath: inner + "/Info.plist"))
+  let related = RelatedDataService(
+    homeDirectory: root, applicationRoots: [root + "/Applications"], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil })
+  let discovery = ApplicationDiscovery(related: related)
+  var metadataSeen = false
+  var measuredSeen = false
+  var completeSeen = false
+  for await event in discovery.events() {
+    switch event {
+    case .inventory(_, let reports):
+      let report = try #require(reports.first { $0.path == appPath })
+      #expect(report.isIOSWrapper)
+      metadataSeen = true
+    case .measured(let reports):
+      let report = try #require(reports.first { $0.path == appPath })
+      #expect(report.isIOSWrapper)
+      measuredSeen = true
+    case .completed(_, let reports):
+      let report = try #require(reports.first { $0.path == appPath })
+      #expect(report.isIOSWrapper)
+      completeSeen = true
+    case .orphans: break
+    }
+  }
+  #expect(metadataSeen && measuredSeen && completeSeen)
+  let focused = try #require(await discovery.report(path: appPath))
+  #expect(focused.isIOSWrapper)
+  #expect(focused.bundleID == nil)
+  #expect(focused.related.isEmpty)
+  let store = AppsStore(pictures: flowPictures(root), droppedReport: { _ in focused })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  await store.acceptDrop([URL(fileURLWithPath: appPath)], actions: actions)
+  #expect(store.reports.first?.isIOSWrapper == true)
+  #expect(store.selectedPath == nil)
+  #expect(store.message?.contains("iPhone or iPad") == true)
+  #expect(actions.pending == nil)
+}
+
 @MainActor private func waitFlow(_ condition: @escaping @MainActor () -> Bool) async throws {
   let deadline = ContinuousClock.now.advanced(by: .seconds(2))
   while !condition() {

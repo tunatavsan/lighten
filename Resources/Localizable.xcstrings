@@ -4209,6 +4209,22 @@
         }
       }
     },
+    "This iPhone or iPad application cannot be removed here. Use Show in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This iPhone or iPad application cannot be removed here. Use Show in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu iPhone veya iPad uygulaması buradan kaldırılamaz. Finder’da Göster'i kullanın."
+          }
+        }
+      }
+    },
     "This is a link to an app stored elsewhere. It is shown for identification only.": {
       "localizations": {
         "en": {
