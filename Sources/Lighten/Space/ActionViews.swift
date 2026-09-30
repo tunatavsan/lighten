@@ -171,10 +171,6 @@ struct HistoryView: View {
                     Text(String(localized: "Undo unavailable — permanently cleaned"))
                       .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
                   }
-                  if let detail = plan.items.last(where: { $0.detail != nil })?.detail {
-                    Text(FailureText.describe(detail)).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-                      .lineLimit(2)
-                  }
                   if plan.deletedCount > 0 {
                     Text(
                       "\(plan.deletedCount) \(String(localized: "entries removed")) · \(format(plan.deletedLogicalBytes))"
@@ -191,6 +187,9 @@ struct HistoryView: View {
                   .frame(width: 105, alignment: .trailing)
               }
               .accessibilityElement(children: .combine)
+              ForEach(plan.items, id: \.itemID) { item in
+                historyItem(item, plan: plan)
+              }
               if plan.canUndo {
                 HStack {
                   Spacer()
@@ -228,7 +227,41 @@ struct HistoryView: View {
     if plan.metadata.count == 1, let path = plan.metadata.first?.sourcePath {
       return URL(fileURLWithPath: path).lastPathComponent
     }
-    return "\(plan.metadata.count) \(String(localized: "items"))"
+    let completed =
+      plan.kind == .trash
+      ? String(localized: "items moved") : String(localized: "items completed")
+    return "\(plan.appliedCount) \(completed)"
+  }
+
+  private func historyItem(_ item: HistoryItem, plan: HistoryPlan) -> some View {
+    let path = plan.metadata.first { $0.id == item.itemID }?.sourcePath
+    let showProblem = item.state == .inTrash ? !item.canUndo : item.state != .reversed
+    let detail =
+      showProblem
+      ? actions.undoResults[plan.id]?.items.first { $0.itemID == item.itemID }?.detail ?? item.detail : nil
+    return VStack(alignment: .leading, spacing: 3) {
+      HStack(alignment: .firstTextBaseline, spacing: 10) {
+        Text(path ?? item.itemID.uuidString)
+          .font(.system(size: 11)).lineLimit(2).truncationMode(.middle)
+          .textSelection(.enabled)
+        Spacer(minLength: 4)
+        Text(status(item.state))
+          .font(.system(size: 10)).foregroundStyle(statusColor(item.state))
+      }
+      if let detail {
+        Text(FailureText.describe(detail))
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      if item.state == .inTrash && !item.canUndo {
+        Text(String(localized: "Cannot restore yet. Resolve the reason above, then refresh History."))
+          .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(.leading, 10).padding(.vertical, 4)
+    .accessibilityElement(children: .combine)
+    .accessibilityIdentifier("history.item.\(item.itemID.uuidString)")
   }
 
   private func statusColor(_ state: HistoryState) -> Color {

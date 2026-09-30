@@ -52,14 +52,15 @@ final class ActionStore {
 
   init(
     journal: JSONLActionJournal = JSONLActionJournal(),
-    trash: any TrashMoving = MacOSTrashService()
+    trash: any TrashMoving = MacOSTrashService(),
+    historyService: ActionHistory? = nil
   ) {
     self.journal = journal
     self.executor = ActionExecutor(
       journal: journal, trash: trash,
       activity: MacOSProcessActivitySource(), related: .system,
       runningApplications: MacOSRunningApplicationSource())
-    self.historyService = ActionHistory(journal: journal)
+    self.historyService = historyService ?? ActionHistory(journal: journal)
   }
 
   var basket: [String: BasketEntry] = [:]
@@ -68,6 +69,7 @@ final class ActionStore {
   var resultKind: ActionKind?
   var history: HistoryReadout?
   var historyMetadata: [UUID: HistoryMetadata] = [:]
+  var undoResults: [UUID: UndoPlanResult] = [:]
   var busy = false
   private(set) var preparingAlternate = false
   var message: String?
@@ -95,12 +97,12 @@ final class ActionStore {
   }
 
   var pendingTrashLogicalBytes: Int64 {
-    (history?.items ?? []).filter { $0.state == .inTrash }.reduce(0) {
+    (history?.items ?? []).filter { $0.applied && $0.state == .inTrash }.reduce(0) {
       $0 + (historyMetadata[$1.itemID]?.logicalBytes ?? 0)
     }
   }
 
-  var pendingTrashCount: Int { history?.items.filter { $0.state == .inTrash }.count ?? 0 }
+  var pendingTrashCount: Int { history?.items.filter { $0.applied && $0.state == .inTrash }.count ?? 0 }
 
   /// Builds the plan from a fresh exact inventory of each basket item. The scan
   /// tree only told us where to look.
@@ -248,12 +250,14 @@ final class ActionStore {
   }
 
   func undo(_ plan: HistoryPlan) async {
-    guard !busy else { return }
+    guard !busy, plan.canUndo else { return }
     busy = true
     defer { busy = false }
     do {
-      try await historyService.undo(planID: plan.id)
-      message = nil
+      let result = try await historyService.undo(planID: plan.id)
+      undoResults[plan.id] = result
+      message =
+        "\(result.restoredCount) \(String(localized: "Restored")) · \(result.remainingCount) \(String(localized: "Not restored"))"
     } catch {
       message = FailureText.describe(error)
     }
@@ -261,6 +265,7 @@ final class ActionStore {
   }
 
   func undo(_ item: HistoryItem) async {
+    guard !busy, item.canUndo else { return }
     busy = true
     defer { busy = false }
     do {

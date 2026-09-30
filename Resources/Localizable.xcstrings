@@ -481,6 +481,22 @@
         }
       }
     },
+    "Cannot restore yet. Resolve the reason above, then refresh History.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cannot restore yet. Resolve the reason above, then refresh History."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Henüz geri yüklenemiyor. Yukarıdaki nedeni giderip Geçmiş’i yenileyin."
+          }
+        }
+      }
+    },
     "Check again": {
       "localizations": {
         "en": {
@@ -2013,6 +2029,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Taşınmadı"
+          }
+        }
+      }
+    },
+    "Not restored": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not restored"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geri yüklenmedi"
           }
         }
       }
@@ -4317,6 +4349,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "öğe"
+          }
+        }
+      }
+    },
+    "items completed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "items completed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "öğe tamamlandı"
+          }
+        }
+      }
+    },
+    "items moved": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "items moved"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "öğe taşındı"
           }
         }
       }
