@@ -849,22 +849,6 @@
         }
       }
     },
-    "Could not prepare app data. Scan again.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not prepare app data. Scan again."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Uygulama verisi hazırlanamadı. Tekrar tarayın."
-          }
-        }
-      }
-    },
     "Critical": {
       "localizations": {
         "en": {
@@ -3869,22 +3853,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bazı öğeler okunamadı; boyut en az değerdir."
-          }
-        }
-      }
-    },
-    "Some selected data is unavailable. Review the reasons before continuing.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Some selected data is unavailable. Review the reasons before continuing."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Seçili verilerin bazıları kullanılamıyor. Devam etmeden önce nedenleri inceleyin."
           }
         }
       }

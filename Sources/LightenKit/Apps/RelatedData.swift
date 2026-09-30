@@ -677,6 +677,70 @@ public struct RelatedDataService: Sendable {
     return plan
   }
 
+  public struct AvailableUninstallPlan: Sendable {
+    public let plan: ActionPlan?
+    public let rejections: [PlanRejection]
+
+    public init(plan: ActionPlan?, rejections: [PlanRejection]) {
+      self.plan = plan
+      self.rejections = rejections
+    }
+  }
+
+  /// Preflights the application first, then keeps independently valid data in
+  /// one plan. Data-only choices still depend on a movable application.
+  @concurrent
+  public func makeAvailableUninstallPlan(
+    app: InstalledApplication, selectedRelated: [RelatedDataCandidate], includePackage: Bool = true
+  ) async -> AvailableUninstallPlan {
+    let package: ActionPlan
+    do {
+      guard app.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame else {
+        throw PlanRejection(.lightenItself, path: app.path)
+      }
+      package = try packagePlan(app: app)
+      let running = NativeRunningApplicationSource()
+      for id in [app.bundleID] + (package.items.first?.nestedApplicationIDs ?? []) {
+        guard await running.isRunning(bundleID: id) == false else {
+          throw PlanRejection(.applicationRunning, path: app.path, ruleID: id)
+        }
+      }
+    } catch {
+      return AvailableUninstallPlan(plan: nil, rejections: Self.uninstallRejections(error, path: app.path))
+    }
+    let apps = inventory(including: app)
+    var items: [PlanItem] = []
+    var rejections: [PlanRejection] = []
+    for candidate in selectedRelated {
+      do {
+        let selected = try planInstalled(app: app, candidate: candidate, inventory: apps)
+        guard !items.contains(where: { $0.sourcePath == candidate.path }) else { continue }
+        items += selected.items
+      } catch {
+        rejections += Self.uninstallRejections(error, path: candidate.path)
+      }
+    }
+    if includePackage { items += package.items }
+    let plan =
+      items.isEmpty
+      ? nil
+      : ActionPlan(
+        snapshotRunID: items.first?.snapshotRunID ?? package.snapshotRunID, kind: .trash, items: items)
+    return AvailableUninstallPlan(plan: plan, rejections: rejections)
+  }
+
+  private static func uninstallRejections(_ error: any Error, path: String) -> [PlanRejection] {
+    if let rejection = error as? PlanRejection { return [rejection] }
+    if let rejections = error as? PlanRejections { return rejections.rejections }
+    if let activity = error as? ProcessActivityFailure {
+      switch activity {
+      case .active(let names): return [PlanRejection(.processActive, path: path, ruleID: names.joined(separator: ", "))]
+      case .unavailable: return [PlanRejection(.activityUnavailable, path: path)]
+      }
+    }
+    return [PlanRejection(.unavailable, path: path, ruleID: String(describing: error))]
+  }
+
   /// One action and one grouped Undo for an application and explicitly selected data.
   public func planUninstall(app: InstalledApplication, selectedRelated: [RelatedDataCandidate]) throws -> ActionPlan {
     guard app.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame else {
@@ -692,6 +756,12 @@ public struct RelatedDataService: Sendable {
   }
 
   func packagePlan(app: InstalledApplication) throws -> ActionPlan {
+    if app.linkTarget != nil || (try? DescriptorFileSystem.identity(at: app.path))?.kind == .symbolicLink {
+      throw PlanRejection(.symbolicLinkRoot, path: app.path)
+    }
+    guard Self.infoPlistPath(ofBundleAt: app.path) == app.path + "/Contents/Info.plist" else {
+      throw PlanRejection(.unavailable, path: app.path, ruleID: "ios-wrapper")
+    }
     guard Self.currentUserOwns(app.path) else { throw PlanRejection(.needsAdministrator, path: app.path) }
     let observation = packageActivity(app.path)
     switch observation.state {

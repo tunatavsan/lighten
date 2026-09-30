@@ -10,6 +10,38 @@ private struct AppsClosedSource: RunningApplicationSource {
   func isRunning(bundleID: String) async -> Bool? { false }
 }
 
+private struct AppsUnknownSource: RunningApplicationSource {
+  func isRunning(bundleID: String) async -> Bool? { nil }
+}
+
+@Test("An unknown final app-running check is reported as unknown and blocks review")
+@MainActor func appsFinalRunningCheckIsHonest() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let app = root + "/LightenQA-unknown.app"
+  try FileManager.default.createDirectory(atPath: app, withIntermediateDirectories: false)
+  let package = PlanItem(
+    id: UUID(), sourcePath: app, inventory: [], ancestors: [], policy: .wholeBundle,
+    applicationBundleID: "qa.lighten.flow")
+  let plan = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [package])
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    availableUninstallPlanBuilder: { _, _, _ in
+      RelatedDataService.AvailableUninstallPlan(plan: plan, rejections: [])
+    }, running: AppsUnknownSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [flowReport(path: app)]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(app, actions: actions)
+  store.togglePackage(actions: actions)
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending == nil)
+  #expect(store.message?.contains(app) == true)
+  #expect(store.message?.contains("could not be checked") == true)
+  #expect(store.message?.contains("is running") == false)
+}
+
 private func flowReport(
   path: String, candidates: [RelatedDataCandidate] = [], bundleID: String = "qa.lighten.flow"
 ) -> ApplicationReport {
@@ -30,9 +62,148 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   ResultPictureStore(directory: root + "/results")
 }
 
-@Test(
-  "Linked and iOS wrapper apps remain visible without package or data selection",
-  arguments: [false, true])
+@Test("Apps presents one remaining uninstall plan with exact refused data paths")
+@MainActor func appsAvailablePlanKeepsRemainingItemsAndRefusals() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let app = root + "/LightenQA-partial.app"
+  let accepted = flowCandidate(root + "/Library/Caches/qa.lighten.flow")
+  let refused = flowCandidate(root + "/Library/Preferences/qa.lighten.flow.plist")
+  let missing = root + "/Library/Logs/qa.lighten.missing"
+  let item = PlanItem(id: UUID(), sourcePath: accepted.path, inventory: [], ancestors: [])
+  let plan = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [item])
+  let rejection = PlanRejection(.unavailable, path: refused.path, ruleID: "unsupportedInstalledData")
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    availableUninstallPlanBuilder: { report, candidates, package in
+      #expect(report.path == app)
+      #expect(Set(candidates.map(\.path)) == [accepted.path, refused.path])
+      #expect(!package)
+      return RelatedDataService.AvailableUninstallPlan(plan: plan, rejections: [rejection])
+    }, running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [flowReport(path: app, candidates: [accepted, refused])]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(app, actions: actions)
+  store.toggleData(accepted.path, actions: actions)
+  store.toggleData(refused.path, actions: actions)
+  store.selectedDataPaths.insert(missing)
+  await store.prepareSelectedData(actions: actions)
+  let presentation = try #require(actions.pending)
+  #expect(presentation.plan == plan)
+  #expect(presentation.items.map(\.path) == [accepted.path])
+  #expect(Set(presentation.rejectedItems.map(\.path)) == [refused.path, missing])
+  #expect(presentation.rejectedItems.contains(rejection))
+  #expect(store.selectedDataPaths == [accepted.path, refused.path, missing])
+  #expect(store.message == nil)
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+}
+
+@Test("A fresh package refusal blocks selected app data and preserves its concrete reason")
+@MainActor func appsPackageRefusalStopsEntireReview() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let app = root + "/LightenQA-refused.app"
+  let candidate = flowCandidate(root + "/Library/Caches/qa.lighten.flow")
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    availableUninstallPlanBuilder: { _, candidates, package in
+      #expect(candidates.map(\.path) == [candidate.path])
+      #expect(!package)
+      return RelatedDataService.AvailableUninstallPlan(
+        plan: nil, rejections: [PlanRejection(.processActive, path: app, ruleID: "Fixture Helper")])
+    }, running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [flowReport(path: app, candidates: [candidate])]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(app, actions: actions)
+  store.toggleData(candidate.path, actions: actions)
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending == nil)
+  #expect(store.message?.contains("Fixture Helper") == true)
+  #expect(store.message?.contains(app) == true)
+  #expect(store.selectedDataPaths == [candidate.path])
+  #expect(!store.preparing)
+}
+
+@Test("All refused app data explains known related failure codes and exact paths")
+@MainActor func appsAllDataRefusedShowsSpecificFailure() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let app = root + "/LightenQA-data-refused.app"
+  let candidate = flowCandidate(root + "/Library/Caches/qa.lighten.flow")
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    availableUninstallPlanBuilder: { _, _, _ in
+      RelatedDataService.AvailableUninstallPlan(
+        plan: nil, rejections: [PlanRejection(.unavailable, path: candidate.path, ruleID: "unsupportedInstalledData")])
+    }, running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [flowReport(path: app, candidates: [candidate])]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(app, actions: actions)
+  store.toggleData(candidate.path, actions: actions)
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending == nil)
+  #expect(store.message?.contains("not eligible") == true)
+  #expect(store.message?.contains(candidate.path) == true)
+  #expect(store.message?.contains("Could not prepare app data") == false)
+}
+
+private actor AppsAvailableGate {
+  private var request: CheckedContinuation<RelatedDataService.AvailableUninstallPlan, Never>?
+  private var arrival: CheckedContinuation<Void, Never>?
+  func outcome() async -> RelatedDataService.AvailableUninstallPlan {
+    await withCheckedContinuation {
+      request = $0
+      arrival?.resume()
+      arrival = nil
+    }
+  }
+  func waitForArrival() async {
+    if request != nil { return }
+    await withCheckedContinuation { arrival = $0 }
+  }
+  func finish(_ outcome: RelatedDataService.AvailableUninstallPlan) {
+    request?.resume(returning: outcome)
+    request = nil
+  }
+}
+
+@Test("Changing an Apps choice discards a late available plan and its skipped reasons")
+@MainActor func appsLateAvailableReviewIsDiscarded() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let app = root + "/LightenQA-late-review.app"
+  let candidate = flowCandidate(root + "/Library/Caches/qa.lighten.flow")
+  let item = PlanItem(id: UUID(), sourcePath: candidate.path, inventory: [], ancestors: [])
+  let plan = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [item])
+  let gate = AppsAvailableGate()
+  let store = AppsStore(
+    pictures: flowPictures(root), availableUninstallPlanBuilder: { _, _, _ in await gate.outcome() },
+    running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [flowReport(path: app, candidates: [candidate])]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(app, actions: actions)
+  store.toggleData(candidate.path, actions: actions)
+  let preparation = Task { await store.prepareSelectedData(actions: actions) }
+  await gate.waitForArrival()
+  store.toggleData(candidate.path, actions: actions)
+  await gate.finish(
+    RelatedDataService.AvailableUninstallPlan(
+      plan: plan, rejections: [PlanRejection(.unavailable, path: root + "/late-refusal")]))
+  await preparation.value
+  #expect(actions.pending == nil)
+  #expect(store.message == nil)
+  #expect(!store.preparing)
+}
+
+@Test("Linked and iOS wrapper apps remain visible without package or data selection", arguments: [false, true])
 @MainActor func appsUnsupportedPackagesCannotSelect(isWrapper: Bool) async throws {
   let root = try flowRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }
@@ -56,9 +227,7 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   #expect(store.selectedPath == nil)
   #expect(store.message?.isEmpty == false)
   #expect(!store.canSelect(candidate, app: report))
-  #expect(
-    store.packageUnavailableReason(report)?.contains(
-      isWrapper ? "iPhone or iPad" : "link to an app") == true)
+  #expect(store.packageUnavailableReason(report)?.contains(isWrapper ? "iPhone or iPad" : "link to an app") == true)
   // Directly injected selections must not bypass the same display-only boundary.
   store.selectedPath = appPath
   store.packageSelected = true
@@ -128,8 +297,7 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   }
 }
 
-@Test(
-  "Apps opening restores 92 display rows and refreshes without giving the picture plan authority")
+@Test("Apps opening restores 92 display rows and refreshes without giving the picture plan authority")
 @MainActor func appsPictureHasNoSelectionAuthority() async throws {
   let root = try flowRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }
@@ -171,8 +339,7 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   #expect(store.pictureRows.isEmpty)
 }
 
-@Test(
-  "Apps reviews all selected data once and drops only applied paths without requiring another scan")
+@Test("Apps reviews all selected data once and drops only applied paths without requiring another scan")
 @MainActor func appsMultipleDataAndTargetedResult() async throws {
   let root = try flowRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }
@@ -275,18 +442,14 @@ private func flowRoot() throws -> String {
   return root
 }
 
-@Test(
-  "An external application uses the default fresh package planner without an installed-root entry")
+@Test("An external application uses the default fresh package planner without an installed-root entry")
 @MainActor func appsExternalDropDefaultPlanner() async throws {
   let root = try flowRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }
   let app = root + "/LightenQA-external.app"
   let bundleID = "qa.lighten." + UUID().uuidString.lowercased()
-  try FileManager.default.createDirectory(
-    atPath: app + "/Contents", withIntermediateDirectories: true)
-  let plist = [
-    "CFBundleIdentifier": bundleID, "CFBundleName": "LightenQA", "CFBundlePackageType": "APPL",
-  ]
+  try FileManager.default.createDirectory(atPath: app + "/Contents", withIntermediateDirectories: true)
+  let plist = ["CFBundleIdentifier": bundleID, "CFBundleName": "LightenQA", "CFBundlePackageType": "APPL"]
   try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
     .write(to: URL(fileURLWithPath: app + "/Contents/Info.plist"))
   try Data("owned fixture".utf8).write(to: URL(fileURLWithPath: app + "/Contents/payload"))
@@ -381,9 +544,7 @@ private actor DroppedReportGate {
   let gate = DroppedReportGate()
   let store = AppsStore(pictures: flowPictures(root), droppedReport: { _ in await gate.report() })
   let actions = ActionStore()
-  let task = Task {
-    await store.acceptDrop([URL(fileURLWithPath: root + "/LightenQA-late.app")], actions: actions)
-  }
+  let task = Task { await store.acceptDrop([URL(fileURLWithPath: root + "/LightenQA-late.app")], actions: actions) }
   while !(await gate.waiting) { await Task.yield() }
   store.deactivate(actions: actions)
   await gate.finish(flowReport(path: root + "/LightenQA-late.app"))
@@ -401,10 +562,8 @@ private actor DroppedReportGate {
   let installed = flowCandidate(root + "/Library/Caches/qa.lighten.orphan")
   let orphan = RelatedDataCandidate(
     id: installed.id, path: installed.path, classification: .orphanVerified,
-    reason: .orphanVerified, snapshot: installed.snapshot, receipt: nil,
-    bundleID: "qa.lighten.orphan")
-  let inventory = BundleInventory(
-    applications: [], unidentifiedPaths: [], complete: true, observedAt: Date())
+    reason: .orphanVerified, snapshot: installed.snapshot, receipt: nil, bundleID: "qa.lighten.orphan")
+  let inventory = BundleInventory(applications: [], unidentifiedPaths: [], complete: true, observedAt: Date())
   let plan = ActionPlan(
     snapshotRunID: UUID(), kind: .trash,
     items: [PlanItem(id: UUID(), sourcePath: orphan.path, inventory: [], ancestors: [])])
