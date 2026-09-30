@@ -158,7 +158,7 @@ extension ScanReplayTests {
       storage.finished = true
     }
     let cache = ScanCache(directory: root + "/cache", homeDirectory: root)
-    let saving = Task.detached { try cache.save(tree) }
+    let saving = Task.detached(priority: .utility) { try cache.save(tree) }
     var longest = Duration.zero
     for _ in 0..<1000 {
       let start = ContinuousClock.now
