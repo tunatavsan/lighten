@@ -61,20 +61,30 @@ private func withShell<Result>(
 }
 
 private func requireReady(_ output: FileHandle) async throws {
-  let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-  var ready = Data()
-  while ready.count < 6 && ContinuousClock.now < deadline {
-    var descriptor = pollfd(fd: output.fileDescriptor, events: Int16(POLLIN), revents: 0)
-    let available = Darwin.poll(&descriptor, 1, 0)
-    if available > 0 {
-      var bytes = [UInt8](repeating: 0, count: 6 - ready.count)
-      let count = Darwin.read(output.fileDescriptor, &bytes, bytes.count)
-      guard count > 0 else { throw ShellFixtureFailure.notReady }
-      ready.append(contentsOf: bytes.prefix(count))
-    } else if available < 0 && errno != EINTR {
-      throw ShellFixtureFailure.notReady
-    } else {
-      try await Task.sleep(for: .milliseconds(5))
+  let descriptorFD = output.fileDescriptor
+  let ready = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+    DispatchQueue.global(qos: .userInitiated).async {
+      let deadline = DispatchTime.now().uptimeNanoseconds + 2_000_000_000
+      var ready = Data()
+      do {
+        while ready.count < 6 {
+          let now = DispatchTime.now().uptimeNanoseconds
+          guard now < deadline else { break }
+          let remainingMilliseconds = min(2_000, (deadline - now + 999_999) / 1_000_000)
+          var descriptor = pollfd(fd: descriptorFD, events: Int16(POLLIN), revents: 0)
+          let available = Darwin.poll(&descriptor, 1, Int32(remainingMilliseconds))
+          if available < 0 && errno == EINTR { continue }
+          if available == 0 { break }
+          guard available > 0 else { throw ShellFixtureFailure.notReady }
+          var bytes = [UInt8](repeating: 0, count: 6 - ready.count)
+          let count = Darwin.read(descriptorFD, &bytes, bytes.count)
+          guard count > 0 else { throw ShellFixtureFailure.notReady }
+          ready.append(contentsOf: bytes.prefix(count))
+        }
+        continuation.resume(returning: ready)
+      } catch {
+        continuation.resume(throwing: error)
+      }
     }
   }
   try #require(String(decoding: ready, as: UTF8.self) == "ready\n")

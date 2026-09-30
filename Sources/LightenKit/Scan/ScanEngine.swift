@@ -36,11 +36,14 @@ public enum ScanStartFailure: Error, Sendable, Equatable {
   case unavailable(Int32)
 }
 
-/// Resumed by the last exiting worker, so waiting measures the real stop time.
+/// Records the last worker's completion before resuming its asynchronous waiters.
 final class FinishSignal: Sendable {
-  private let state = Mutex<(done: Bool, list: [CheckedContinuation<Void, Never>])>((false, []))
+  private let state = Mutex<
+    (done: Bool, completionInstant: ContinuousClock.Instant?, list: [CheckedContinuation<Void, Never>])
+  >((false, nil, []))
 
   var isDone: Bool { state.withLock { $0.done } }
+  var completionInstant: ContinuousClock.Instant? { state.withLock { $0.completionInstant } }
 
   func wait() async {
     await withCheckedContinuation { continuation in
@@ -55,6 +58,7 @@ final class FinishSignal: Sendable {
 
   func signal() {
     let list = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+      if state.completionInstant == nil { state.completionInstant = .now }
       state.done = true
       defer { state.list.removeAll() }
       return state.list
@@ -83,6 +87,7 @@ public final class ScanRun: Sendable {
   }
 
   public var runID: UUID { tree.runID }
+  var completionInstant: ContinuousClock.Instant? { finish.completionInstant }
 
   public func cancel() { walker.queue.cancel() }
 

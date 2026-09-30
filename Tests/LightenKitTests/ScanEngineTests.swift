@@ -192,9 +192,15 @@ private func duAllocated(_ root: String) -> Int64 {
     for file in 0..<50 { try write(root + "/d\(folder)/s\(file % 5)/f\(file)", bytes: 1) }
   }
   let run = try ScanEngine(configuration: ScanConfiguration(workers: 2)).start(root: root)
+  let cancelledAt = ContinuousClock.now
   run.cancel()
   let start = ContinuousClock.now
   await run.waitUntilFinished()
+  let resumed = ContinuousClock.now
+  let finished = try #require(run.completionInstant)
+  print(
+    "Scan cancellation: worker finish \(cancelledAt.duration(to: finished)); await resumption \(cancelledAt.duration(to: resumed)); scheduling delay \(finished.duration(to: resumed))"
+  )
   // Correctness bound for a loaded, shared test runner; the 250 ms p95 target is
   // measured on the release build with lighten-bench.
   #expect(ContinuousClock.now - start < .seconds(2))
