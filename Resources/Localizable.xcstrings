@@ -545,6 +545,22 @@
         }
       }
     },
+    "Checking removed app data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking removed app data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaldırılmış uygulama verileri denetleniyor"
+          }
+        }
+      }
+    },
     "Choose": {
       "localizations": {
         "en": {

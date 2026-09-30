@@ -62,6 +62,13 @@ struct CleanView: View {
               ForEach(Array(actionableRows.dropFirst(7))) { row in categoryCard(row) }
             }
           }
+          if store.discoveringRelated {
+            HStack(spacing: 8) {
+              ProgressView().controlSize(.small)
+              Text(String(localized: "Checking removed app data"))
+                .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+            }
+          }
           if !related.isEmpty { removedData }
           reportOnly
         }

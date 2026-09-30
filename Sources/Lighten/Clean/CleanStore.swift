@@ -48,12 +48,15 @@ final class CleanStore: ToolSummaryProviding {
   @ObservationIgnored private let availablePlanBuilder: AvailablePlanBuilder
   @ObservationIgnored private var scanTask: Task<Void, Never>?
   @ObservationIgnored private var scanGeneration = UUID()
+  @ObservationIgnored private var relatedTask: Task<Void, Never>?
+  @ObservationIgnored private var relatedGeneration: UUID?
   @ObservationIgnored private var preparationTask: Task<ActionPlan, Error>?
   @ObservationIgnored private var availablePreparationTask: Task<CatalogPlanOutcome, Error>?
   @ObservationIgnored private var observedPlanID: UUID?
   let tool = ToolStore()
   var candidates: [CleanCandidate] = []
   var relatedCandidates: [RelatedDataCandidate] = []
+  private(set) var discoveringRelated = false
   var rowStatuses: [String: CleanRowStatus] = [:]
   var selected: Set<UUID> = []
   var mode: ActionKind = .trash
@@ -114,6 +117,7 @@ final class CleanStore: ToolSummaryProviding {
   func startScan(actions: ActionStore? = nil) {
     guard phase != .scanning else { return }
     expirePreparation(actions: actions)
+    cancelRelatedDiscovery()
     let generation = UUID()
     scanGeneration = generation
     tool.phase = .scanning
@@ -128,11 +132,14 @@ final class CleanStore: ToolSummaryProviding {
 
   func waitForScan() async { await scanTask?.value }
 
+  func waitForRelatedDiscovery() async { await relatedTask?.value }
+
   func cancelScan(actions: ActionStore? = nil) {
     guard phase == .scanning else { return }
     scanGeneration = UUID()
     scanTask?.cancel()
     scanTask = nil
+    cancelRelatedDiscovery()
     expirePreparation(actions: actions)
     tool.phase = .partial
     selected = []
@@ -218,13 +225,39 @@ final class CleanStore: ToolSummaryProviding {
         rowStatuses[row.id] = .unavailable
       }
     }
-    let related = await discoverRelated()
     if Task.isCancelled || scanGeneration != generation { return }
-    relatedCandidates = related.filter { $0.classification != .installed }
     scannedAt = Date()
     tool.phase = .ready
     selected = Set(actionableCandidates.filter { $0.row.defaultSelected }.map(\.id))
     scanTask = nil
+    startRelatedDiscovery(scan: generation)
+  }
+
+  private func startRelatedDiscovery(scan: UUID) {
+    let token = UUID()
+    relatedGeneration = token
+    discoveringRelated = true
+    let discover = discoverRelated
+    relatedTask = Task(priority: .utility) { @concurrent [weak self] in
+      let related = await discover()
+      guard !Task.isCancelled else { return }
+      await self?.finishRelatedDiscovery(related, scan: scan, token: token)
+    }
+  }
+
+  private func finishRelatedDiscovery(_ related: [RelatedDataCandidate], scan: UUID, token: UUID) {
+    guard scanGeneration == scan, relatedGeneration == token else { return }
+    relatedCandidates = related.filter { $0.classification != .installed }
+    discoveringRelated = false
+    relatedGeneration = nil
+    relatedTask = nil
+  }
+
+  private func cancelRelatedDiscovery() {
+    relatedGeneration = nil
+    relatedTask?.cancel()
+    relatedTask = nil
+    discoveringRelated = false
   }
 
   func toggleCategory(_ rowID: String, actions: ActionStore) {
@@ -242,6 +275,7 @@ final class CleanStore: ToolSummaryProviding {
   }
 
   func deactivate(actions: ActionStore) {
+    cancelRelatedDiscovery()
     observeResult(actions: actions)
     let executing = actions.busy && actions.pending?.id != presentedPlanID
     expirePreparation(actions: actions, keepPresentedPlanID: executing)

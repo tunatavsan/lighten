@@ -96,6 +96,82 @@ private actor CleanPlanGate {
   }
 }
 
+private actor CleanDiscoverySequence {
+  let first = CleanScanGate()
+  let second = CleanScanGate()
+  private var calls = 0
+
+  func discover() async -> [RelatedDataCandidate] {
+    calls += 1
+    let current = calls
+    await (current == 1 ? first : second).pause()
+    return [
+      RelatedDataCandidate(
+        id: "discovery-\(current)", path: "/report-only-\(current)",
+        classification: .uncertain, reason: .nameOnly, snapshot: nil, receipt: nil)
+    ]
+  }
+}
+
+@Test("Clean catalog becomes ready while removed app discovery is delayed")
+@MainActor func cleanReadyBeforeRelatedDiscovery() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let gate = CleanScanGate()
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home,
+    discoverRelated: {
+      await gate.pause()
+      return []
+    })
+  store.startScan()
+  await store.waitForScan()
+  await gate.waitForArrival()
+  #expect(store.phase == .ready)
+  #expect(!store.busy)
+  #expect(store.actionableCandidates.count == 2)
+  #expect(!store.selected.isEmpty)
+  #expect(store.scannedAt != nil)
+  #expect(store.discoveringRelated)
+  await gate.release()
+  await store.waitForRelatedDiscovery()
+  #expect(!store.discoveringRelated)
+  #expect(store.phase == .ready)
+}
+
+@Test("A superseded removed app discovery cannot publish into a newer Clean scan")
+@MainActor func cleanStaleRelatedDiscoveryIsDiscarded() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let discovery = CleanDiscoverySequence()
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home,
+    discoverRelated: { await discovery.discover() })
+  store.startScan()
+  await store.waitForScan()
+  await discovery.first.waitForArrival()
+  // The main-actor waiter captures the first task before this continuation resumes.
+  var firstWaiter: Task<Void, Never>?
+  await withCheckedContinuation { started in
+    firstWaiter = Task {
+      started.resume()
+      await store.waitForRelatedDiscovery()
+    }
+  }
+  store.startScan()
+  await store.waitForScan()
+  await discovery.second.waitForArrival()
+  await discovery.first.release()
+  await firstWaiter?.value
+  #expect(store.relatedCandidates.isEmpty)
+  #expect(store.discoveringRelated)
+  #expect(store.phase == .ready)
+  await discovery.second.release()
+  await store.waitForRelatedDiscovery()
+  #expect(store.relatedCandidates.map(\.id) == ["discovery-2"])
+  #expect(!store.discoveringRelated)
+}
+
 @Test("Clean scan finds complete cache candidates using injected activity and home")
 @MainActor func cleanScanCandidates() async throws {
   let fixture = try CleanFixture()
@@ -243,6 +319,7 @@ private actor CleanPlanGate {
     discoverRelated: { [installed, uncertain] })
   store.startScan()
   await store.waitForScan()
+  await store.waitForRelatedDiscovery()
   #expect(store.relatedCandidates.map(\.id) == ["unknown"])
   #expect(store.toolSummary.count == store.actionableCandidates.count)
 }
