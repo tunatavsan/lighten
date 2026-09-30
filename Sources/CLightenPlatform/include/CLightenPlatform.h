@@ -27,6 +27,10 @@ const char *lighten_process_name(const LightenProcessSample *sample);
 // evidence in the current process table, -1: whole process table unavailable.
 // Never reads arguments. Process names are descriptive, never veto criteria.
 int lighten_process_activity(const char *root, char *process_name, size_t name_capacity);
+// 1: executable path from any UID is at/below root, 0: none observed, -1:
+// process table or a live executable/identity path could not be checked.
+// Uses proc_pidpath only; never reads arguments or the process environment.
+int lighten_application_activity(const char *root, char *process_name, size_t name_capacity);
 int lighten_path_is_under_root(const char *path, const char *root);
 
 enum {

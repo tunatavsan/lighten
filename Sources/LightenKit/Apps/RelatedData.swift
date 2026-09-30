@@ -636,6 +636,7 @@ public struct RelatedDataService: Sendable {
     guard app.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame else {
       throw PlanRejection(.lightenItself, path: app.path)
     }
+    _ = try packagePlan(app: app)
     let apps = inventory(including: app)
     guard apps.complete else { throw RelatedFailure.incompleteInventory }
     guard apps.applications.filter({ foldedAppID($0.bundleID) == foldedAppID(app.bundleID) }).count == 1,
@@ -669,17 +670,29 @@ public struct RelatedDataService: Sendable {
     guard app.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame else {
       throw PlanRejection(.lightenItself, path: app.path)
     }
+    let package = try packagePlan(app: app)
     var items: [PlanItem] = []
     for candidate in selectedRelated {
       items += try planInstalled(app: app, candidate: candidate).items
+    }
+    items += package.items
+    return ActionPlan(snapshotRunID: items.first?.snapshotRunID ?? package.snapshotRunID, kind: .trash, items: items)
+  }
+
+  func packagePlan(app: InstalledApplication) throws -> ActionPlan {
+    guard Self.currentUserOwns(app.path) else { throw PlanRejection(.needsAdministrator, path: app.path) }
+    let observation = NativeApplicationActivitySource.observe(applicationPath: app.path)
+    switch observation.state {
+    case .clearObservedProcesses: break
+    case .active: throw ProcessActivityFailure.active(processNames: observation.processNames)
+    case .unknown: throw ProcessActivityFailure.unavailable
     }
     let identity = try DescriptorFileSystem.identity(at: app.path)
     let package = try PlanService(homeDirectory: homeDirectory).makeSpacePlan(
       selections: [PlanService.Selection(path: app.path, device: identity.device, inode: identity.inode)],
       scanRootPath: (app.path as NSString).deletingLastPathComponent, runID: UUID())
     guard package.items.first?.applicationBundleID == app.bundleID else { throw RelatedFailure.changedItem }
-    items += package.items
-    return ActionPlan(snapshotRunID: items.first?.snapshotRunID ?? package.snapshotRunID, kind: .trash, items: items)
+    return package
   }
 
   func installedPolicy(app: InstalledApplication, relatedPath: String, inventory: BundleInventory) -> TreePolicy? {

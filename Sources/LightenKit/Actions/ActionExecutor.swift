@@ -64,6 +64,7 @@ public actor ActionExecutor {
   private let runningApplications: any RunningApplicationSource
   private let spaceActivity: any SpaceActivitySource
   private let mountedImages: any MountedImageSource
+  private let applicationActivity: any ApplicationActivitySource
   private let duplicates: DuplicateFileComparator
   private var busy = false
 
@@ -77,7 +78,8 @@ public actor ActionExecutor {
     runningApplications: any RunningApplicationSource = NativeRunningApplicationSource(),
     duplicates: DuplicateFileComparator = DuplicateFileComparator(),
     spaceActivity: any SpaceActivitySource = NativeSpaceActivitySource(),
-    mountedImages: any MountedImageSource = NativeMountedImageSource()
+    mountedImages: any MountedImageSource = NativeMountedImageSource(),
+    applicationActivity: any ApplicationActivitySource = NativeApplicationActivitySource()
   ) {
     self.journal = journal
     self.trash = trash
@@ -90,6 +92,7 @@ public actor ActionExecutor {
     self.duplicates = duplicates
     self.spaceActivity = spaceActivity
     self.mountedImages = mountedImages
+    self.applicationActivity = applicationActivity
   }
 
   public func execute(
@@ -143,9 +146,6 @@ public actor ActionExecutor {
     for item in plan.items where item.relatedProof != nil {
       try related.validate(item, plan: plan)
     }
-    for item in plan.items where item.installedRelatedProof != nil {
-      try related.validateInstalled(item, plan: plan)
-    }
     for item in plan.items where item.orphanRelatedProof != nil {
       try related.validateOrphan(item, plan: plan)
     }
@@ -157,10 +157,55 @@ public actor ActionExecutor {
       })
     else { throw ExecutionFailure.planAlreadyUsed }
     var preparationFailures: [UUID: String] = [:]
+    var ownerFailures: [String: String] = [:]
+    var ownerPackages: [String: PlanItem] = [:]
+    let installedItems = plan.items.filter { $0.installedRelatedProof != nil }
+    for item in installedItems {
+      guard let proof = item.installedRelatedProof,
+        ownerPackages[proof.appPath] == nil, ownerFailures[proof.appPath] == nil
+      else { continue }
+      do {
+        let package: PlanItem
+        if let included = plan.items.first(where: { $0.sourcePath == proof.appPath }) {
+          package = included
+        } else {
+          let app = InstalledApplication(bundleID: proof.bundleID, path: proof.appPath, version: nil)
+          guard let dependency = try related.packagePlan(app: app).items.first else {
+            throw RelatedFailure.changedItem
+          }
+          package = dependency
+        }
+        guard RelatedDataService.currentUserOwns(package.sourcePath),
+          package.policy == .wholeBundle, package.applicationBundleID == proof.bundleID,
+          installedItems.filter({ $0.installedRelatedProof?.appPath == proof.appPath }).allSatisfy({ data in
+            guard let binding = data.installedRelatedProof else { return false }
+            return binding.bundleID == package.applicationBundleID
+              && binding.appIdentity == package.inventory.first?.identity
+              && binding.infoIdentity
+                == package.inventory.first(where: {
+                  $0.path == package.sourcePath + "/Contents/Info.plist"
+                })?.identity
+          })
+        else { throw RelatedFailure.changedItem }
+        try guardService.validate(package)
+        try await validateApplication(package)
+        try await validateSpaceActivity(package)
+        ownerPackages[proof.appPath] = package
+      } catch {
+        ownerFailures[proof.appPath] = String(describing: error)
+      }
+    }
     var preparedItems: [PlanItem] = []
     var deltas: [UUID: (Int, Int64)] = [:]
     for item in plan.items {
       do {
+        if let owner = item.installedRelatedProof?.appPath ?? ownerPackages[item.sourcePath]?.sourcePath,
+          let detail = ownerFailures[owner]
+        {
+          throw SpaceValidationFailure(detail: detail)
+        }
+        if let detail = ownerFailures[item.sourcePath] { throw SpaceValidationFailure(detail: detail) }
+        if item.installedRelatedProof != nil { try related.validateInstalled(item, plan: plan) }
         if item.policy == .spaceTrash || item.policy == .wholeBundle {
           let refreshed = try guardService.refreshedSpaceItem(item)
           try await validateApplication(refreshed)
@@ -181,11 +226,14 @@ public actor ActionExecutor {
     }
     let executionPlan = ActionPlan(
       schema: plan.schema, id: plan.id, snapshotRunID: plan.snapshotRunID,
-      kind: plan.kind, createdAt: plan.createdAt, items: preparedItems)
+      kind: plan.kind, createdAt: plan.createdAt,
+      items: preparedItems.filter { ownerPackages[$0.sourcePath] != nil }
+        + preparedItems.filter { ownerPackages[$0.sourcePath] == nil })
     // The complete immutable inventory is durable before any OS mutation.
     try await journal.append(JournalRecord(kind: .intent, planID: plan.id, plan: executionPlan))
 
     var results: [ItemActionResult] = []
+    var movedOwners: [String: MovedApplicationOwner] = [:]
     for item in executionPlan.items {
       do {
         if let detail = preparationFailures[item.id] { throw SpaceValidationFailure(detail: detail) }
@@ -196,9 +244,8 @@ public actor ActionExecutor {
           try related.validate(item, plan: plan)
         }
         if let proof = item.installedRelatedProof {
-          guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
-          else { throw RelatedFailure.runningOrUnknown }
-          try related.validateInstalled(item, plan: plan)
+          if let detail = ownerFailures[proof.appPath] { throw SpaceValidationFailure(detail: detail) }
+          try await validateInstalledData(item, plan: executionPlan, packages: ownerPackages, moved: movedOwners)
         }
         if let proof = item.orphanRelatedProof {
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
@@ -210,7 +257,11 @@ public actor ActionExecutor {
         }
         try await validateApplication(item)
         try await validateSpaceActivity(item)
-        try guardService.validate(item)
+        if let owner = item.installedRelatedProof.flatMap({ movedOwners[$0.appPath] }) {
+          try guardService.validate(item, planID: plan.id, movedOwner: owner)
+        } else {
+          try guardService.validate(item)
+        }
         try await beforeMutation?(item)
         // The hook models the final window. Never move on its prior validation.
         if item.catalogProof != nil { try await validateCatalogActivity(item, in: plan) }
@@ -220,9 +271,8 @@ public actor ActionExecutor {
           try related.validate(item, plan: plan)
         }
         if let proof = item.installedRelatedProof {
-          guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
-          else { throw RelatedFailure.runningOrUnknown }
-          try related.validateInstalled(item, plan: plan)
+          if let detail = ownerFailures[proof.appPath] { throw SpaceValidationFailure(detail: detail) }
+          try await validateInstalledData(item, plan: executionPlan, packages: ownerPackages, moved: movedOwners)
         }
         if let proof = item.orphanRelatedProof {
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
@@ -234,9 +284,14 @@ public actor ActionExecutor {
         }
         try await validateApplication(item)
         try await validateSpaceActivity(item)
-        try guardService.validate(item)
+        if let owner = item.installedRelatedProof.flatMap({ movedOwners[$0.appPath] }) {
+          try guardService.validate(item, planID: plan.id, movedOwner: owner)
+        } else {
+          try guardService.validate(item)
+        }
       } catch {
         let detail = String(describing: error)
+        if ownerPackages[item.sourcePath] != nil { ownerFailures[item.sourcePath] = detail }
         do {
           try await journal.append(
             JournalRecord(
@@ -260,6 +315,7 @@ public actor ActionExecutor {
         returnedPath = try await trash.moveToTrash(path: item.sourcePath)
       } catch {
         let detail = String(describing: error)
+        if ownerPackages[item.sourcePath] != nil { ownerFailures[item.sourcePath] = detail }
         // A throwing path-based OS call does not prove that the source stayed put.
         guard let original = item.inventory.first?.identity,
           (try? DescriptorFileSystem.identity(at: item.sourcePath)) == original
@@ -302,6 +358,10 @@ public actor ActionExecutor {
               kind: .applied, planID: plan.id, itemID: item.id,
               returnedTrashPath: returnedPath, movedIdentity: moved
             ))
+          if ownerPackages[item.sourcePath] != nil {
+            movedOwners[item.sourcePath] = try MovedApplicationOwner(
+              planID: plan.id, package: item, path: returnedPath, identity: moved)
+          }
           results.append(
             ItemActionResult(
               itemID: item.id, outcome: .applied,
@@ -357,6 +417,12 @@ public actor ActionExecutor {
       return
     }
     guard item.policy == .wholeBundle else { return }
+    let executableActivity = await applicationActivity.activity(applicationPath: item.sourcePath)
+    switch executableActivity.state {
+    case .clearObservedProcesses: break
+    case .active: throw ProcessActivityFailure.active(processNames: executableActivity.processNames)
+    case .unknown: throw ProcessActivityFailure.unavailable
+    }
     guard let expected = item.applicationBundleID,
       ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath) == expected
     else { throw RelatedFailure.changedItem }
@@ -366,6 +432,31 @@ public actor ActionExecutor {
     }
     for id in everyID where await runningApplications.isRunning(bundleID: id) != false {
       throw RelatedFailure.runningOrUnknown
+    }
+  }
+
+  private func validateInstalledData(
+    _ item: PlanItem, plan: ActionPlan, packages: [String: PlanItem], moved: [String: MovedApplicationOwner]
+  ) async throws {
+    guard let proof = item.installedRelatedProof, let package = packages[proof.appPath] else {
+      throw RelatedFailure.changedItem
+    }
+    guard await runningApplications.isRunning(bundleID: proof.bundleID) == false else {
+      throw RelatedFailure.runningOrUnknown
+    }
+    if let owner = moved[proof.appPath] {
+      let mapped = try owner.mapped(item, planID: plan.id)
+      try await validateApplication(owner.movedPackage)
+      try related.validateInstalled(mapped, plan: plan)
+      try guardService.validate(item, planID: plan.id, movedOwner: owner)
+    } else {
+      // Related-data-only selections still require a fresh, movable package.
+      try guardService.validate(package)
+      let app = InstalledApplication(bundleID: proof.bundleID, path: proof.appPath, version: nil)
+      _ = try related.packagePlan(app: app)
+      try await validateApplication(package)
+      try await validateSpaceActivity(package)
+      try related.validateInstalled(item, plan: plan)
     }
   }
 

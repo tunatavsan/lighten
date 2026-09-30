@@ -12,6 +12,12 @@ public struct ActionGuard: Sendable {
     self.homeDirectory = homeDirectory
   }
 
+  func validate(_ item: PlanItem, planID: UUID, movedOwner: MovedApplicationOwner) throws {
+    let mapped = try movedOwner.mapped(item, planID: planID)
+    try validate(movedOwner.movedPackage)
+    try validate(mapped)
+  }
+
   public func validate(_ item: PlanItem) throws {
     let policy = item.policy
     let relatedPolicy = policy == .relatedTrash || policy == .relatedContainer || policy == .relatedGroupContainer
