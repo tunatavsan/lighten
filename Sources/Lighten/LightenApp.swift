@@ -90,6 +90,7 @@ private struct LightenRootView: View {
         HistoryView(actions: actions)
       case .settings:
         LightenSettingsView(
+          space: space,
           retrySpace: {
             space.startScan()
             section = .space

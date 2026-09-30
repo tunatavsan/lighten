@@ -7,11 +7,20 @@ struct SpaceView: View {
     case map, list
   }
 
+  nonisolated private struct LayoutObservation: Equatable, Sendable {
+    let appearance: UUID?
+    let ready: Bool
+    let width: Double
+    let height: Double
+  }
+
   static let otherID = ScanItemID(node: -1, slot: -3)
   @Bindable var store: SpaceStore
   @Bindable var actions: ActionStore
   let showHistory: () -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.colorSchemeContrast) private var colorContrast
   @State private var hoveredTileID: ScanItemID?
   @State private var mapDirection: CGFloat = 1
   @State private var compactSurface: CompactSurface = .map
@@ -264,7 +273,9 @@ struct SpaceView: View {
   }
 
   private var mapColumn: some View {
-    VStack(spacing: 0) {
+    let appearance = store.appearanceToken
+    let ready = store.layout != nil
+    return VStack(spacing: 0) {
       GeometryReader { geometry in
         ZStack(alignment: .topLeading) {
           if let layout = store.layout {
@@ -281,17 +292,42 @@ struct SpaceView: View {
           store.updateLayout(width: geometry.size.width, height: geometry.size.height)
         }
       }
-      .background(LightenStyle.surface)
-      HStack(spacing: 14) {
-        legendSwatch(LightenStyle.folderTile, String(localized: "Folders"))
-        legendSwatch(LightenStyle.fileTile, String(localized: "Files"))
-        Spacer()
-        if store.phase == .partial || store.phase == .scanning || store.phase == .cancelled {
-          Text(String(localized: "Incomplete areas show a known minimum"))
-            .foregroundStyle(LightenStyle.muted)
+      .onGeometryChange(for: LayoutObservation.self) { geometry in
+        LayoutObservation(
+          appearance: appearance, ready: ready,
+          width: geometry.size.width, height: geometry.size.height)
+      } action: { observation in
+        if observation.ready {
+          store.spaceDidLayout(
+            appearance: observation.appearance, width: observation.width, height: observation.height)
         }
       }
-      .font(.system(size: 11))
+      .background(LightenStyle.surface)
+      VStack(alignment: .leading, spacing: 6) {
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 10) {
+            ForEach(LightenStyle.SizeBucket.allCases, id: \.rawValue) { bucket in
+              legendSwatch(bucket.color, bucket.label)
+            }
+          }
+          .fixedSize(horizontal: true, vertical: false)
+          LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: 3), alignment: .leading
+          ) {
+            ForEach(LightenStyle.SizeBucket.allCases, id: \.rawValue) { bucket in
+              legendSwatch(bucket.color, bucket.label)
+            }
+          }
+        }
+        HStack(spacing: 14) {
+          Label(String(localized: "Folders"), systemImage: "folder")
+          Label(String(localized: "Files"), systemImage: "doc")
+          Label(String(localized: "Hatched: known minimum"), systemImage: "line.3.horizontal.decrease")
+          Spacer(minLength: 0)
+        }
+        .foregroundStyle(LightenStyle.muted)
+      }
+      .font(.system(size: 10))
       .padding(.horizontal, 12).padding(.vertical, 8)
     }
   }
@@ -320,22 +356,43 @@ struct SpaceView: View {
     } label: {
       Rectangle()
         .fill(isOther ? LightenStyle.surface : color(for: item))
+        .overlay {
+          if item?.partial == true {
+            PartialHatching().stroke(hatchColor(for: item).opacity(0.18), lineWidth: 1)
+          }
+        }
         .overlay(
           Rectangle().strokeBorder(
             store.selectedID == tile.id
               ? LightenStyle.accent
               : hoveredTileID == tile.id ? LightenStyle.accent.opacity(0.6) : LightenStyle.separator,
-            lineWidth: store.selectedID == tile.id ? 2 : hoveredTileID == tile.id ? 1.5 : 0.7)
+            lineWidth: store.selectedID == tile.id
+              ? 2 : hoveredTileID == tile.id ? 1.5 : colorContrast == .increased ? 1.5 : 0.7)
         )
+        .overlay {
+          if isOther {
+            Rectangle().strokeBorder(LightenStyle.separator, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+          }
+          if store.selectedID == tile.id || hoveredTileID == tile.id {
+            Rectangle().inset(by: 2).strokeBorder(tileTextColor(for: item), lineWidth: 1)
+          }
+        }
+        .overlay(alignment: .topTrailing) {
+          if tile.width >= 28, tile.height >= 22, let item {
+            Image(systemName: item.isProtected || item.kind == .systemVolume ? "lock.fill" : SpaceText.symbol(item))
+              .font(.system(size: 10)).foregroundStyle(tileTextColor(for: item))
+              .padding(5)
+          }
+        }
         .overlay(alignment: .topLeading) {
           if tile.width >= 95, tile.height >= 46 {
             VStack(alignment: .leading, spacing: 2) {
               Text(name).font(.system(size: 13, weight: .medium)).lineLimit(1)
               Text(sizeLabel(size))
-                .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+                .font(.system(size: 11))
                 .monospacedDigit().lineLimit(1)
             }
-            .foregroundStyle(LightenStyle.text)
+            .foregroundStyle(tileTextColor(for: item))
             .padding(10)
           }
         }
@@ -366,7 +423,19 @@ struct SpaceView: View {
   private func color(for item: SpaceItem?) -> Color {
     guard let item else { return LightenStyle.surface }
     if item.isProtected || item.kind == .systemVolume { return LightenStyle.surface }
-    return item.kind == .directory || item.kind == .package ? LightenStyle.folderTile : LightenStyle.fileTile
+    return LightenStyle.SizeBucket.forBytes(item.bytes(store.metric).knownLowerBound).color
+  }
+
+  private func tileTextColor(for item: SpaceItem?) -> Color {
+    guard let item, !item.isProtected, item.kind != .systemVolume else { return LightenStyle.text }
+    return LightenStyle.SizeBucket.forBytes(item.bytes(store.metric).knownLowerBound).textColor
+  }
+
+  private func hatchColor(for item: SpaceItem?) -> Color {
+    guard let item else { return LightenStyle.separator }
+    let bucket = LightenStyle.SizeBucket.forBytes(item.bytes(store.metric).knownLowerBound)
+    let text = colorScheme == .dark ? bucket.darkTextHex : bucket.lightTextHex
+    return text == 0 ? .white : .black
   }
 
   private var sidePane: some View {
@@ -424,6 +493,7 @@ struct SpaceView: View {
       List(selection: $store.selectedID) {
         ForEach(visibleItems) { item in
           HStack(spacing: 8) {
+            Rectangle().fill(color(for: item)).frame(width: 4)
             Image(systemName: SpaceText.symbol(item))
               .foregroundStyle(LightenStyle.muted)
               .frame(width: 17)
@@ -486,6 +556,11 @@ struct SpaceView: View {
               inspectorMetric(String(localized: "Logical"), item.logical)
               inspectorMetric(String(localized: "Allocated"), item.allocated)
             }
+            if store.isShowingCache {
+              Text(String(localized: "Refreshing previous scan. Actions become available after checking changes."))
+                .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            }
             if let state = SpaceText.state(item) {
               Text(state).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
                 .fixedSize(horizontal: false, vertical: true)
@@ -507,7 +582,7 @@ struct SpaceView: View {
                   withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) { actions.add(item) }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(actions.basket[item.path] != nil)
+                .disabled(store.isShowingCache || actions.basket[item.path] != nil)
               }
             }
           }
@@ -547,7 +622,7 @@ struct SpaceView: View {
           Button(String(localized: "Review removal")) {
             Task { await actions.prepare(scanRoot: store.selectedRoot.path, runID: store.tree?.runID) }
           }
-          .buttonStyle(.borderedProminent).disabled(actions.busy)
+          .buttonStyle(.borderedProminent).disabled(actions.busy || store.isShowingCache)
         }
         Button(String(localized: "History"), action: showHistory)
       }
@@ -604,7 +679,13 @@ struct SpaceView: View {
       let count = result.items.filter { $0.outcome == outcome }.count
       return count > 0 ? "\(count) \(label)" : nil
     }
+    let deltas = result.items.compactMap { item -> String? in
+      guard let added = item.addedFileCount, let bytes = item.logicalByteDelta else { return nil }
+      let change = (bytes >= 0 ? "+" : "−") + format(bytes == Int64.min ? Int64.max : abs(bytes))
+      return "\(added) \(String(localized: "new files")), \(change)"
+    }
     return "\(String(localized: "Last result")): \(counts.joined(separator: " · "))"
+      + (deltas.isEmpty ? "" : " · " + deltas.joined(separator: "; "))
   }
 }
 
@@ -620,4 +701,17 @@ func sizeLabel(_ bytes: ByteAggregate?) -> String {
 func format(_ bytes: Int64?) -> String {
   guard let bytes else { return String(localized: "Unknown") }
   return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+}
+
+private struct PartialHatching: Shape {
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    var x = -rect.height
+    while x < rect.width {
+      path.move(to: CGPoint(x: x, y: rect.height))
+      path.addLine(to: CGPoint(x: x + rect.height, y: 0))
+      x += 8
+    }
+    return path
+  }
 }

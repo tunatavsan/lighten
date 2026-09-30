@@ -20,6 +20,7 @@ final class SpaceStore {
   @ObservationIgnored private var scanBaseline: ScanReplayBaseline?
   private(set) var rootSummary: SpaceItem?
   private(set) var firstLayoutMilliseconds: Double?
+  private(set) var appearanceToken: UUID?
   private(set) var cacheUsageBytes: Int64 = 0
   private(set) var cacheMessage: String?
 
@@ -46,11 +47,14 @@ final class SpaceStore {
   func spaceDidAppear() {
     appearedAt = .now
     firstLayoutMilliseconds = nil
-    if layout != nil { recordFirstLayout() }
+    appearanceToken = UUID()
   }
 
-  private func recordFirstLayout() {
-    guard firstLayoutMilliseconds == nil, let appearedAt else { return }
+  func spaceDidLayout(appearance: UUID?, width: Double, height: Double) {
+    guard width.isFinite, height.isFinite, width > 0, height > 0,
+      appearance == appearanceToken, appearance != nil, current != nil, layout != nil,
+      firstLayoutMilliseconds == nil, let appearedAt
+    else { return }
     let duration = appearedAt.duration(to: .now).components
     firstLayoutMilliseconds = Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1e15
   }
@@ -422,7 +426,6 @@ final class SpaceStore {
       }.value
       guard !Task.isCancelled, layoutKey == key else { return }
       layout = result
-      recordFirstLayout()
     }
   }
 }

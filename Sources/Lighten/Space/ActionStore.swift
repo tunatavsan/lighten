@@ -9,6 +9,20 @@ struct ActionItemSummary: Sendable {
   let reason: String
   let logicalBytes: Int64?
   let allocatedBytes: Int64?
+  let warning: ProtectiveWarning?
+
+  nonisolated init(
+    id: UUID, label: String, path: String, reason: String, logicalBytes: Int64?, allocatedBytes: Int64?,
+    warning: ProtectiveWarning? = nil
+  ) {
+    self.id = id
+    self.label = label
+    self.path = path
+    self.reason = reason
+    self.logicalBytes = logicalBytes
+    self.allocatedBytes = allocatedBytes
+    self.warning = warning
+  }
 }
 
 struct BasketEntry: Sendable, Equatable {
@@ -49,6 +63,7 @@ struct HistoryMetadata: Sendable {
 final class ActionStore {
   @ObservationIgnored private let journal: JSONLActionJournal
   @ObservationIgnored private let executor: ActionExecutor
+  @ObservationIgnored private let planService: PlanService
   @ObservationIgnored private let historyService: ActionHistory
   @ObservationIgnored private var claimedPlan: ActionPlan?
   @ObservationIgnored private var alternatePlanID: UUID?
@@ -56,9 +71,10 @@ final class ActionStore {
   init(
     journal: JSONLActionJournal = JSONLActionJournal(),
     trash: any TrashMoving = MacOSTrashService(),
-    historyService: ActionHistory? = nil
+    historyService: ActionHistory? = nil, planService: PlanService = PlanService()
   ) {
     self.journal = journal
+    self.planService = planService
     self.executor = ActionExecutor(
       journal: journal, trash: trash,
       activity: MacOSProcessActivitySource(), related: .system,
@@ -80,7 +96,7 @@ final class ActionStore {
   var message: String?
 
   func add(_ item: SpaceItem) {
-    guard item.canSelect else { return }
+    guard item.canSelect, item.inode != 0 else { return }
     basket[item.path] = BasketEntry(
       path: item.path, label: item.name, device: item.device, inode: item.inode, logical: item.logical)
   }
@@ -119,45 +135,27 @@ final class ActionStore {
       PlanService.Selection(path: $0.path, device: $0.device, inode: $0.inode)
     }
     let reason = String(localized: "Selected in Space")
-    let outcome = await Task.detached { () -> Result<(ActionPlan, [ActionItemSummary]), PlanRejections> in
-      do throws(PlanRejections) {
-        let plan = try PlanService().makeSpacePlan(
-          selections: selections, scanRootPath: scanRoot, runID: runID ?? UUID())
-        let summary = plan.items.map { item in
-          let (logical, allocated) = PlanItemSize.measure(item)
-          return ActionItemSummary(
-            id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
-            path: item.sourcePath, reason: reason, logicalBytes: logical, allocatedBytes: allocated)
-        }
-        return .success((plan, summary))
-      } catch {
-        return .failure(error)
+    let planner = planService
+    let outcome = await Task.detached {
+      await planner.makeAvailableSpacePlan(selections: selections, scanRootPath: scanRoot, runID: runID ?? UUID())
+    }.value
+    guard let plan = outcome.plan else {
+      pending = nil
+      message = outcome.rejections.map { SpaceText.rejection($0) }.joined(separator: "\n")
+      return
+    }
+    let summary = await Task.detached {
+      plan.items.map { item in
+        let (logical, allocated) = PlanItemSize.measure(item)
+        return ActionItemSummary(
+          id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
+          path: item.sourcePath, reason: reason, logicalBytes: logical, allocatedBytes: allocated,
+          warning: ProtectiveWarning.evaluate(item, homeDirectory: planner.homeDirectory))
       }
     }.value
-    switch outcome {
-    case .success(let (plan, summary)):
-      var running: [PlanRejection] = []
-      for item in plan.items {
-        guard let bundleID = item.applicationBundleID else { continue }
-        for id in [bundleID] + (item.nestedApplicationIDs ?? [])
-        where await MacOSRunningApplicationSource().isRunning(bundleID: id) != false {
-          running.append(PlanRejection(.applicationRunning, path: item.sourcePath))
-          break
-        }
-      }
-      guard running.isEmpty else {
-        pending = nil
-        message = running.map { SpaceText.rejection($0) }.joined(separator: "\n")
-        return
-      }
-      // Planning is complete before publishing the confirmation synchronously.
-      busy = false
-      present(plan: plan, items: summary)
-      message = nil
-    case .failure(let refused):
-      pending = nil
-      message = refused.rejections.map { SpaceText.rejection($0) }.joined(separator: "\n")
-    }
+    busy = false
+    present(plan: plan, items: summary, rejectedItems: outcome.rejections)
+    message = nil
   }
 
   /// Other modules supply their own guarded plan and reason summary.
@@ -217,7 +215,13 @@ final class ActionStore {
         ? IrreversibleConfirmation(planID: plan.id, method: .catalogDelete) : nil
       result = try await executor.execute(plan, confirmation: confirmation)
       resultKind = plan.kind
-      basket = [:]
+      for item in result?.items ?? [] where item.outcome == .applied {
+        if let path = plan.items.first(where: { $0.id == item.itemID })?.sourcePath {
+          for selected in basket.keys.filter({ $0 == path || $0.hasPrefix(path + "/") }) {
+            basket.removeValue(forKey: selected)
+          }
+        }
+      }
       message = nil
     } catch {
       message = FailureText.describe(error)

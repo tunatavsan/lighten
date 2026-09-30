@@ -1,3 +1,4 @@
+import AppKit
 import LightenKit
 import SwiftUI
 
@@ -50,6 +51,13 @@ struct ConfirmationView: View {
             VStack(alignment: .leading, spacing: 3) {
               Text(item.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
               Text(item.reason).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+              if let warning = item.warning {
+                Label(String(localized: "Check before removing"), systemImage: "exclamationmark.triangle.fill")
+                  .font(.system(size: 11, weight: .semibold)).foregroundStyle(LightenStyle.warning)
+                Text(SpaceText.warning(warning))
+                  .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
               Text(item.path).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
                 .lineLimit(1).truncationMode(.middle).help(item.path)
             }
@@ -277,6 +285,18 @@ struct HistoryView: View {
         Text(FailureText.describe(detail))
           .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
           .fixedSize(horizontal: false, vertical: true)
+      }
+      if item.detail == String(describing: UndoFailure.trashItemMissing) {
+        HStack {
+          Text(SpaceText.trashMissing())
+            .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 4)
+          Button(String(localized: "Show Trash in Finder")) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash"))
+          }
+          .buttonStyle(.link)
+        }
       }
       if item.state == .inTrash && !item.canUndo {
         Text(String(localized: "Cannot restore yet. Resolve the reason above, then refresh History."))

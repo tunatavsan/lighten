@@ -2,8 +2,10 @@ import AppKit
 import SwiftUI
 
 struct LightenSettingsView: View {
+  @State private var cacheStore = SpaceStore()
   @State private var settingsOpenFailed = false
   @State private var access: FullDiskAccessState?
+  var space: SpaceStore?
   var retrySpace: (() -> Void)?
   var retryClean: (() -> Void)?
   var retryDuplicates: (() -> Void)?
@@ -51,6 +53,25 @@ struct LightenSettingsView: View {
           .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
           .fixedSize(horizontal: false, vertical: true)
         }
+        let space = space ?? cacheStore
+        Group {
+          Divider()
+          Text(String(localized: "Scan cache")).font(.system(size: 16, weight: .semibold))
+          HStack {
+            Text(format(space.cacheUsageBytes)).monospacedDigit()
+            Spacer()
+            Button(String(localized: "Clear scan cache")) { Task { await space.clearScanCache() } }
+          }
+          Text(
+            String(
+              localized: "Previous scan pictures help Space open quickly. Clearing them does not remove your files.")
+          )
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+          .fixedSize(horizontal: false, vertical: true)
+          if let message = space.cacheMessage {
+            Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+          }
+        }
         if retrySpace != nil || retryClean != nil || retryDuplicates != nil || retryApps != nil {
           Divider()
           Text(String(localized: "Retry a scan"))
@@ -76,7 +97,10 @@ struct LightenSettingsView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
     .navigationTitle(String(localized: "Settings"))
-    .task { refreshAccess() }
+    .task {
+      refreshAccess()
+      (space ?? cacheStore).loadCacheUsage()
+    }
     .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
       refreshAccess()
     }

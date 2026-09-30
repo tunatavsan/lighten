@@ -3,6 +3,34 @@ import LightenKit
 
 /// Every refusal and every incomplete size says why, in the person's language.
 enum SpaceText {
+  static func trashMissing(turkish: Bool? = nil) -> String {
+    FailureText.text(
+      "This item is no longer at its recorded Trash location. Lighten cannot restore it.",
+      "Bu öğe artık kayıtlı Çöp konumunda değil. Lighten öğeyi geri yükleyemez.", turkish: turkish)
+  }
+
+  static func warning(_ warning: ProtectiveWarning, turkish: Bool? = nil) -> String {
+    let copy: (String, String) =
+      switch warning {
+      case .valuableData:
+        (
+          "This item may contain a virtual machine, backup, or build archive; check what you need before moving it to Trash.",
+          "Bu öğe bir sanal makine, yedek veya derleme arşivi içerebilir; Çöp’e taşımadan önce ihtiyacınız olanları kontrol edin."
+        )
+      case .secrets:
+        (
+          "This item contains names associated with keys or secrets; check before moving it to Trash.",
+          "Bu öğede anahtar veya gizli bilgilerle ilişkili dosya adları var; Çöp’e taşımadan önce kontrol edin."
+        )
+      case .copyUnknown:
+        (
+          "This item contains mostly personal files and another copy is not known; check before moving it to Trash.",
+          "Bu öğe çoğunlukla kişisel dosyalar içeriyor ve başka bir kopyası bilinmiyor; Çöp’e taşımadan önce kontrol edin."
+        )
+      }
+    return FailureText.text(copy.0, copy.1, turkish: turkish)
+  }
+
   static func name(_ item: SpaceItem) -> String {
     switch item.kind {
     case .smallFiles: "\(item.summarizedFiles) \(String(localized: "smaller files"))"
@@ -67,6 +95,19 @@ enum SpaceText {
   static func rejection(_ rejection: PlanRejection) -> String { Self.rejection(rejection, turkish: nil) }
 
   static func rejection(_ rejection: PlanRejection, turkish: Bool?) -> String {
+    if let code = rejection.ruleID {
+      switch code {
+      case "incompleteInventory", "invalidReceipt", "ownerPresent", "changedItem", "runningOrUnknown",
+        "ambiguousOwner", "unsupportedInstalledData":
+        return FailureText.describe(code, turkish: turkish) + " — " + rejection.path
+      case "ios-wrapper":
+        return FailureText.text(
+          "This iPhone or iPad application cannot be removed here. Use Show in Finder.",
+          "Bu iPhone veya iPad uygulaması buradan kaldırılamaz. Finder’da Göster'i kullanın.", turkish: turkish)
+          + " — " + rejection.path
+      default: break
+      }
+    }
     let catalogCopy: (String, String)? =
       switch rejection.ruleID {
       case "apple-system-cache":
@@ -202,6 +243,7 @@ enum SpaceText {
       }
     let text = FailureText.text(copy.0, copy.1, turkish: turkish)
     let rule = rejection.ruleID.flatMap { id in NeverRule.all.first { $0.id == id }?.reason }
-    return "\(text)\(rule.map { " \($0)" } ?? "") — \(rejection.path)"
+    let process = rejection.reason == .processActive ? rejection.ruleID.map { " (" + $0 + ")" } ?? "" : ""
+    return "\(text)\(process)\(rule.map { " \($0)" } ?? "") — \(rejection.path)"
   }
 }

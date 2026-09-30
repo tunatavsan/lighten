@@ -545,6 +545,22 @@
         }
       }
     },
+    "Check before removing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check before removing"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaldırmadan önce kontrol edin"
+          }
+        }
+      }
+    },
     "Checking removed app data": {
       "localizations": {
         "en": {
@@ -733,6 +749,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sepeti temizle"
+          }
+        }
+      }
+    },
+    "Clear scan cache": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear scan cache"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tarama önbelleğini temizle"
           }
         }
       }
@@ -1249,6 +1281,22 @@
         }
       }
     },
+    "Hatched: known minimum": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hatched: known minimum"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taralı: bilinen en az boyut"
+          }
+        }
+      }
+    },
     "History": {
       "localizations": {
         "en": {
@@ -1357,22 +1405,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sepette"
-          }
-        }
-      }
-    },
-    "Incomplete areas show a known minimum": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Incomplete areas show a known minimum"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Eksik alanlar bilinen en az değeri gösterir"
           }
         }
       }
@@ -2497,6 +2529,22 @@
         }
       }
     },
+    "Previous scan pictures help Space open quickly. Clearing them does not remove your files.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous scan pictures help Space open quickly. Clearing them does not remove your files."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki tarama görüntüleri Space’in hızlı açılmasını sağlar. Bunları temizlemek dosyalarınızı kaldırmaz."
+          }
+        }
+      }
+    },
     "Previously associated · review in Clean": {
       "localizations": {
         "en": {
@@ -2749,6 +2797,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kaldırma sonrası kalan verileri incelemek için Uygulamalar’ı yenileyin."
+          }
+        }
+      }
+    },
+    "Refreshing previous scan. Actions become available after checking changes.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refreshing previous scan. Actions become available after checking changes."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki tarama güncelleniyor. Değişiklikler kontrol edildikten sonra işlemler kullanılabilir."
           }
         }
       }
@@ -3133,6 +3197,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "İlgili verileri incelemek için yeniden tarayın"
+          }
+        }
+      }
+    },
+    "Scan cache": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan cache"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tarama önbelleği"
           }
         }
       }
@@ -3565,6 +3645,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Paylaşılan · yalnızca rapor"
+          }
+        }
+      }
+    },
+    "Show Trash in Finder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Trash in Finder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çöp’ü Finder’da göster"
           }
         }
       }
@@ -4765,6 +4861,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "macOS sistem birimi"
+          }
+        }
+      }
+    },
+    "new files": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "new files"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "yeni dosya"
           }
         }
       }

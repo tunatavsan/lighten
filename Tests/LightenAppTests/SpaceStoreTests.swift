@@ -7,6 +7,37 @@ import Testing
 
 @Suite("Space scan state")
 struct SpaceStoreTests {
+  @MainActor @Test("Space timing waits for positive current-appearance geometry after treemap calculation")
+  func firstLayoutRequiresGeometryEndpoint() async throws {
+    let root = "/private/tmp/LightenQA-" + UUID().uuidString
+    try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    try Data(repeating: 1, count: 4096).write(to: URL(fileURLWithPath: root + "/data.bin"))
+    let store = SpaceStore(cache: nil)
+    store.selectRoot(URL(fileURLWithPath: root))
+    store.startScan()
+    try await waitForPhase(store, .complete)
+    store.spaceDidAppear()
+    store.updateLayout(width: 300, height: 200)
+    _ = try await waitForLayout(store)
+    #expect(store.firstLayoutMilliseconds == nil)
+    let firstAppearance = try #require(store.appearanceToken)
+    store.spaceDidLayout(appearance: firstAppearance, width: 0, height: 200)
+    #expect(store.firstLayoutMilliseconds == nil)
+    store.spaceDidLayout(appearance: firstAppearance, width: 300, height: 200)
+    let measured = try #require(store.firstLayoutMilliseconds)
+    store.spaceDidLayout(appearance: firstAppearance, width: 300, height: 200)
+    #expect(store.firstLayoutMilliseconds == measured)
+    // A ready cached layout at another appearance still needs its geometry callback.
+    store.spaceDidAppear()
+    #expect(store.layout != nil)
+    #expect(store.firstLayoutMilliseconds == nil)
+    store.spaceDidLayout(appearance: firstAppearance, width: 300, height: 200)
+    #expect(store.firstLayoutMilliseconds == nil)
+    store.spaceDidLayout(appearance: store.appearanceToken, width: 300, height: 200)
+    #expect(store.firstLayoutMilliseconds != nil)
+  }
+
   private actor RecordingMover: TrashMoving {
     let destination: String
     private(set) var moves = 0
