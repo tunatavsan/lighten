@@ -111,7 +111,8 @@ func processFixtureCleanupKillsUnresponsiveShell() async throws {
   let home = try activityFixture()
   defer { try? FileManager.default.removeItem(atPath: home) }
   let pid = try await withShell(
-    at: home, command: "trap '' TERM; print ready; read -r line; while true; do :; done"
+    at: home,
+    command: "zmodload zsh/zselect; trap '' TERM; print ready; read -r line; while true; do zselect -t 100; done"
   ) { pid in pid }
   #expect(Darwin.kill(pid, 0) == -1 && errno == ESRCH)
 }
