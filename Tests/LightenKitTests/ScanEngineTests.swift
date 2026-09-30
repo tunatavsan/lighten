@@ -194,16 +194,15 @@ private func duAllocated(_ root: String) -> Int64 {
   let run = try ScanEngine(configuration: ScanConfiguration(workers: 2)).start(root: root)
   let cancelledAt = ContinuousClock.now
   run.cancel()
-  let start = ContinuousClock.now
   await run.waitUntilFinished()
   let resumed = ContinuousClock.now
   let finished = try #require(run.completionInstant)
   print(
     "Scan cancellation: worker finish \(cancelledAt.duration(to: finished)); await resumption \(cancelledAt.duration(to: resumed)); scheduling delay \(finished.duration(to: resumed))"
   )
-  // Correctness bound for a loaded, shared test runner; the 250 ms p95 target is
-  // measured on the release build with lighten-bench.
-  #expect(ContinuousClock.now - start < .seconds(2))
+  // Bound the workers' stop time; resuming this test can be delayed by other tests.
+  // The 250 ms p95 target is measured on the release build with lighten-bench.
+  #expect(cancelledAt.duration(to: finished) < .seconds(2))
   #expect(run.tree.wasCancelled)
   let fresh = try await scan(root)
   #expect(!fresh.tree.wasCancelled)
