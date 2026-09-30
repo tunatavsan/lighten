@@ -43,23 +43,35 @@ struct ConfirmationView: View {
       }
       .padding(20)
       Divider()
-      List(presentation.items, id: \.id) { item in
-        HStack(alignment: .top, spacing: 12) {
-          Image(systemName: "doc").foregroundStyle(LightenStyle.muted)
-          VStack(alignment: .leading, spacing: 3) {
-            Text(item.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
-            Text(item.reason).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-            Text(item.path).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-              .lineLimit(1).truncationMode(.middle).help(item.path)
+      List {
+        ForEach(presentation.items, id: \.id) { item in
+          HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "doc").foregroundStyle(LightenStyle.muted)
+            VStack(alignment: .leading, spacing: 3) {
+              Text(item.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
+              Text(item.reason).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+              Text(item.path).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+                .lineLimit(1).truncationMode(.middle).help(item.path)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+              Text(format(item.logicalBytes)).font(.system(size: 13, weight: .medium))
+              Text(String(localized: "Logical")).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+            }
+            .monospacedDigit()
           }
-          Spacer(minLength: 8)
-          VStack(alignment: .trailing, spacing: 2) {
-            Text(format(item.logicalBytes)).font(.system(size: 13, weight: .medium))
-            Text(String(localized: "Logical")).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          }
-          .monospacedDigit()
+          .padding(.vertical, 3)
         }
-        .padding(.vertical, 3)
+        if !presentation.rejectedItems.isEmpty {
+          Section(String(localized: "Skipped items — will stay in place")) {
+            ForEach(Array(presentation.rejectedItems.enumerated()), id: \.offset) { _, rejection in
+              Text(SpaceText.rejection(rejection))
+                .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            }
+          }
+        }
       }
       Divider()
       HStack {

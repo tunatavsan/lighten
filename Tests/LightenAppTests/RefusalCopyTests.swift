@@ -75,3 +75,24 @@ import Testing
   #expect(!FailureText.describe("processActivityUnavailable", turkish: false).isEmpty)
   #expect(!FailureText.describe("processActivityUnavailable", turkish: true).isEmpty)
 }
+
+@Test(
+  "Catalog refusals explain their specific reason and next step in both languages",
+  arguments: ["apple-system-cache", "minimum-age", "age-unavailable"])
+@MainActor func cleanCatalogRefusalTranslations(ruleID: String) {
+  let refusal = PlanRejection(.unavailable, path: "/fixture/catalog-child", ruleID: ruleID)
+  let english = SpaceText.rejection(refusal, turkish: false)
+  let turkish = SpaceText.rejection(refusal, turkish: true)
+  #expect(english != turkish)
+  #expect(english.contains(refusal.path) && turkish.contains(refusal.path))
+  #expect(english.split(separator: ".").count >= 2)
+  #expect(turkish.split(separator: ".").count >= 2)
+  switch ruleID {
+  case "apple-system-cache":
+    #expect(english.contains("Apple system cache") && turkish.contains("Apple sistem önbelleği"))
+  case "minimum-age":
+    #expect(english.contains("recently modified") && turkish.contains("yakın zamanda değiştirilmiş"))
+  default:
+    #expect(english.contains("could not be verified") && turkish.contains("doğrulanamadı"))
+  }
+}

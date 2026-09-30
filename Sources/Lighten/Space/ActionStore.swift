@@ -23,14 +23,17 @@ struct ActionPresentation: Identifiable, Sendable {
   let plan: ActionPlan
   let items: [ActionItemSummary]
   let permanentPlanBuilder: (@MainActor @Sendable () async -> Void)?
+  let rejectedItems: [PlanRejection]
 
   init(
     plan: ActionPlan, items: [ActionItemSummary],
-    permanentPlanBuilder: (@MainActor @Sendable () async -> Void)? = nil
+    permanentPlanBuilder: (@MainActor @Sendable () async -> Void)? = nil,
+    rejectedItems: [PlanRejection] = []
   ) {
     self.plan = plan
     self.items = items
     self.permanentPlanBuilder = permanentPlanBuilder
+    self.rejectedItems = rejectedItems
   }
 
   var id: UUID { plan.id }
@@ -158,14 +161,15 @@ final class ActionStore {
   /// Other modules supply their own guarded plan and reason summary.
   func present(
     plan: ActionPlan, items: [ActionItemSummary],
-    permanentPlanBuilder: (@MainActor @Sendable () async -> Void)? = nil
+    permanentPlanBuilder: (@MainActor @Sendable () async -> Void)? = nil,
+    rejectedItems: [PlanRejection] = []
   ) {
     guard !busy, Set(plan.items.map(\.id)) == Set(items.map(\.id)),
       !preparingAlternate || pending?.plan.id == alternatePlanID
     else { return }
     pending = ActionPresentation(
       plan: plan, items: items,
-      permanentPlanBuilder: plan.kind == .trash ? permanentPlanBuilder : nil)
+      permanentPlanBuilder: plan.kind == .trash ? permanentPlanBuilder : nil, rejectedItems: rejectedItems)
   }
 
   func requestPermanent(_ presentation: ActionPresentation) async {

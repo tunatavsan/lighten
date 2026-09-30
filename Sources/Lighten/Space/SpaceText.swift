@@ -67,6 +67,25 @@ enum SpaceText {
   static func rejection(_ rejection: PlanRejection) -> String { Self.rejection(rejection, turkish: nil) }
 
   static func rejection(_ rejection: PlanRejection, turkish: Bool?) -> String {
+    let catalogCopy: (String, String)? =
+      switch rejection.ruleID {
+      case "apple-system-cache":
+        ("Apple system cache. Inspect it in Finder.", "Apple sistem önbelleği. Finder’da inceleyin.")
+      case "minimum-age":
+        (
+          "This item includes recently modified files. Keep it until the category’s minimum age is reached.",
+          "Bu öğe yakın zamanda değiştirilmiş dosyalar içeriyor. Kategorinin asgari yaşına ulaşılana kadar saklayın."
+        )
+      case "age-unavailable":
+        (
+          "The age of this item could not be verified. Inspect it in Finder, then scan again.",
+          "Bu öğenin yaşı doğrulanamadı. Finder’da inceleyip yeniden tarayın."
+        )
+      default: nil
+      }
+    if let catalogCopy {
+      return FailureText.text(catalogCopy.0, catalogCopy.1, turkish: turkish) + " — " + rejection.path
+    }
     let copy: (String, String) =
       switch rejection.reason {
       case .bulkRoot:

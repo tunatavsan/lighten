@@ -293,16 +293,18 @@ private actor ScopedCleanActivity: ProcessActivitySource {
   }
 }
 
-@Test("An active app cache pauses only its child and other app cache remains selectable")
-@MainActor func cleanGenericActivityScope() async throws {
+@Test("An active app cache or log pauses only its child", arguments: ["Library/Caches", "Library/Logs"])
+@MainActor func cleanGenericActivityScope(relativeRoot: String) async throws {
   let fixture = try CleanFixture()
   defer { fixture.remove() }
-  let caches = fixture.home + "/Library/Caches"
+  let caches = fixture.home + "/" + relativeRoot
   let activePath = caches + "/qa.lighten.active"
   let clearPath = caches + "/qa.lighten.clear"
   for path in [activePath, clearPath] {
     try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
     try Data("fixture".utf8).write(to: URL(fileURLWithPath: path + "/payload"))
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-30 * 86_400)], ofItemAtPath: path + "/payload")
   }
   let activity = ScopedCleanActivity(blockedPath: activePath)
   let store = CleanStore(activity: activity, homeDirectory: fixture.home, discoverRelated: { [] })
@@ -316,6 +318,107 @@ private actor ScopedCleanActivity: ProcessActivitySource {
   let roots = await activity.roots
   #expect(!roots.contains(caches))
   #expect(roots.contains(activePath) && roots.contains(clearPath))
+}
+
+@Test("Clean reviews remaining selected items when one source disappears")
+@MainActor func cleanUnavailableSelectionRetainsOthers() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, discoverRelated: { [] })
+  let actions = fixture.actions()
+  store.startScan()
+  await store.waitForScan()
+  let chosen = store.actionableCandidates
+  let candidateCount = store.candidates.count
+  #expect(chosen.count == 2)
+  store.selected = Set(chosen.map(\.id))
+  let disappeared = try #require(chosen.first)
+  try FileManager.default.removeItem(atPath: disappeared.entry.path)
+  await store.prepare(actions: actions)
+  let presentation = try #require(actions.pending)
+  #expect(presentation.plan.items.count == 1)
+  #expect(!presentation.plan.items.contains { $0.sourcePath == disappeared.entry.path })
+  #expect(presentation.permanentPlanBuilder != nil)
+  #expect(presentation.rejectedItems.map(\.path) == [disappeared.entry.path])
+  await actions.requestPermanent(presentation)
+  let permanent = try #require(actions.pending)
+  #expect(permanent.plan.kind == .catalogDelete)
+  #expect(permanent.id != presentation.id)
+  #expect(permanent.plan.items.count == 1)
+  #expect(permanent.plan.items.allSatisfy { $0.catalogProof?.method == .catalogDelete && $0.policy == nil })
+  #expect(permanent.rejectedItems.map(\.path) == [disappeared.entry.path])
+  #expect(store.scannedAt != nil)
+  #expect(store.candidates.count == candidateCount)
+}
+
+@Test("Clean retains refusal paths when all selected sources disappear")
+@MainActor func cleanAllUnavailableSelections() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let store = CleanStore(activity: ClearCleanActivity(), homeDirectory: fixture.home, discoverRelated: { [] })
+  let actions = fixture.actions()
+  store.startScan()
+  await store.waitForScan()
+  let chosen = store.actionableCandidates
+  store.selected = Set(chosen.map(\.id))
+  for candidate in chosen { try FileManager.default.removeItem(atPath: candidate.entry.path) }
+  await store.prepare(actions: actions)
+  #expect(actions.pending == nil)
+  #expect(chosen.allSatisfy { store.message?.contains($0.entry.path) == true })
+  #expect(!store.busy)
+}
+
+@Test("Report-only Clean rows explain Apple cache and recent content refusals")
+@MainActor func cleanEligibilityRefusalCopy() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let apple = fixture.home + "/Library/Caches/CloudKit"
+  let recent = fixture.home + "/Library/Logs/qa.lighten.recent"
+  for path in [apple, recent] {
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+    try Data("fixture".utf8).write(to: URL(fileURLWithPath: path + "/payload"))
+  }
+  let store = CleanStore(activity: ClearCleanActivity(), homeDirectory: fixture.home, discoverRelated: { [] })
+  store.startScan()
+  await store.waitForScan()
+  let appleCandidate = try #require(store.candidates.first { $0.entry.path == apple })
+  let recentCandidate = try #require(store.candidates.first { $0.entry.path == recent })
+  #expect(!appleCandidate.canAct && !recentCandidate.canAct)
+  #expect(appleCandidate.refusal?.contains("Apple system cache") == true)
+  #expect(appleCandidate.refusal?.contains(apple) == true)
+  #expect(recentCandidate.refusal?.contains("recently modified files") == true)
+  #expect(recentCandidate.refusal?.contains(recent) == true)
+}
+
+@Test("Leaving Clean suppresses both a late available plan and its skipped reasons")
+@MainActor func cleanAvailablePreparationInvalidation() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let gate = CleanPlanGate()
+  let refusal = PlanRejection(.unavailable, path: fixture.home + "/disappeared")
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, discoverRelated: { [] },
+    availablePlanBuilder: { _, _, _ in
+      CatalogPlanOutcome(plan: try await gate.plan(), rejections: [refusal])
+    })
+  let actions = fixture.actions()
+  store.startScan()
+  await store.waitForScan()
+  store.selected = Set(store.actionableCandidates.map(\.id))
+  let plan = try fixture.catalog.plan(
+    selections: store.actionableCandidates.map {
+      CatalogSelection(snapshot: $0.snapshot, selectedIDs: [$0.id], rowID: $0.row.id)
+    })
+  let preparation = Task { await store.prepare(actions: actions) }
+  await gate.waitForArrival()
+  store.deactivate(actions: actions)
+  await gate.release(plan)
+  await preparation.value
+  #expect(actions.pending == nil)
+  #expect(store.presentedPlanID == nil)
+  #expect(store.message == nil)
+  #expect(!store.busy)
 }
 
 @Test("Permanent cleanup is rebuilt only after the secondary confirmation choice")

@@ -3521,6 +3521,22 @@
         }
       }
     },
+    "Skipped items — will stay in place": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skipped items — will stay in place"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atlanan öğeler — yerinde kalacak"
+          }
+        }
+      }
+    },
     "Small files are summarized. Select their folder instead.": {
       "localizations": {
         "en": {

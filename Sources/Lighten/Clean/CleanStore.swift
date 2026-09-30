@@ -36,6 +36,8 @@ enum CleanRowStatus: Sendable {
 final class CleanStore: ToolSummaryProviding {
   typealias Scanner = @Sendable (String, String) async throws -> ScanSnapshot
   typealias PlanBuilder = @Sendable (CleanCatalog, [CatalogSelection], ActionKind) async throws -> ActionPlan
+  typealias AvailablePlanBuilder =
+    @Sendable (CleanCatalog, [CatalogSelection], ActionKind) async throws -> CatalogPlanOutcome
 
   @ObservationIgnored private let activity: any ProcessActivitySource
   @ObservationIgnored private let catalog: CleanCatalog?
@@ -43,10 +45,11 @@ final class CleanStore: ToolSummaryProviding {
   @ObservationIgnored let homeDirectory: String
   @ObservationIgnored private let scanner: Scanner
   @ObservationIgnored private let discoverRelated: @Sendable () async -> [RelatedDataCandidate]
-  @ObservationIgnored private let planBuilder: PlanBuilder
+  @ObservationIgnored private let availablePlanBuilder: AvailablePlanBuilder
   @ObservationIgnored private var scanTask: Task<Void, Never>?
   @ObservationIgnored private var scanGeneration = UUID()
   @ObservationIgnored private var preparationTask: Task<ActionPlan, Error>?
+  @ObservationIgnored private var availablePreparationTask: Task<CatalogPlanOutcome, Error>?
   @ObservationIgnored private var observedPlanID: UUID?
   let tool = ToolStore()
   var candidates: [CleanCandidate] = []
@@ -66,9 +69,8 @@ final class CleanStore: ToolSummaryProviding {
     discoverRelated: @escaping @Sendable () async -> [RelatedDataCandidate] = {
       await RelatedDataService.system.discover()
     },
-    planBuilder: @escaping PlanBuilder = { catalog, selections, kind in
-      try await Task.detached(priority: .utility) { try catalog.plan(selections: selections, kind: kind) }.value
-    }
+    planBuilder: PlanBuilder? = nil,
+    availablePlanBuilder: AvailablePlanBuilder? = nil
   ) {
     self.activity = activity
     self.homeDirectory = homeDirectory
@@ -81,7 +83,15 @@ final class CleanStore: ToolSummaryProviding {
     }
     self.scanner = scanner
     self.discoverRelated = discoverRelated
-    self.planBuilder = planBuilder
+    self.availablePlanBuilder =
+      availablePlanBuilder ?? { catalog, selections, kind in
+        if let planBuilder {
+          return CatalogPlanOutcome(plan: try await planBuilder(catalog, selections, kind), rejections: [])
+        }
+        return await Task.detached(priority: .userInitiated) {
+          catalog.planAvailable(selections: selections, kind: kind)
+        }.value
+      }
   }
 
   var rows: [CatalogRow] { catalog?.rows ?? [] }
@@ -143,8 +153,9 @@ final class CleanStore: ToolSummaryProviding {
     }
     for row in catalog.rows {
       if Task.isCancelled || scanGeneration != generation { return }
+      let childScoped = row.relativeRoot == "Library/Caches" || row.relativeRoot == "Library/Logs"
       let rowActivity =
-        row.relativeRoot == "Library/Caches"
+        childScoped
         ? ProcessActivity(state: .clearObservedCurrentUID)
         : await activity.activity(for: row, rootPath: catalog.root(for: row))
       let activityState = rowActivity.state
@@ -157,12 +168,17 @@ final class CleanStore: ToolSummaryProviding {
         for entry in direct {
           if let node = nodes[entry.id] {
             let candidateActivity =
-              row.relativeRoot == "Library/Caches"
-              ? await activity.activity(for: row, rootPath: entry.path) : rowActivity
+              childScoped
+              ? await activity.activity(for: row, rootPath: catalog.activityRoot(for: row, candidatePath: entry.path))
+              : rowActivity
             if Task.isCancelled || scanGeneration != generation { return }
-            var allowed = catalog.allowsCandidate(path: entry.path, row: row, kind: .trash)
+            let rejection = await Task.detached(priority: .utility) {
+              catalog.candidateRejection(path: entry.path, row: row, kind: .trash)
+            }.value
+            if Task.isCancelled || scanGeneration != generation { return }
+            var allowed = rejection == nil
             var exactLogical: Int64?
-            var refusal: String?
+            var refusal = rejection.map(SpaceText.rejection)
             var requiresFullDiskAccess = false
             if allowed && candidateActivity.state == .clearObservedCurrentUID
               && (node.partial || node.protected || !entry.issues.isEmpty)
@@ -178,8 +194,9 @@ final class CleanStore: ToolSummaryProviding {
                   (error as? PlanRejections)?.rejections.contains { $0.reason == .unreadableFolder } == true
                 refusal =
                   (error as? PlanRejections).map {
-                    $0.rejections.map { SpaceText.rejection($0) }.joined(separator: "\n")
+                    $0.rejections.map(SpaceText.rejection).joined(separator: "\n")
                   }
+                  ?? (error as? PlanRejection).map(SpaceText.rejection)
                   ?? FailureText.describe(error)
               }
               if Task.isCancelled || scanGeneration != generation { return }
@@ -234,6 +251,8 @@ final class CleanStore: ToolSummaryProviding {
     tool.preparation.invalidatePreparation()
     preparationTask?.cancel()
     preparationTask = nil
+    availablePreparationTask?.cancel()
+    availablePreparationTask = nil
     if let presentedPlanID, actions?.pending?.id == presentedPlanID { actions?.pending = nil }
     if !keepPresentedPlanID { presentedPlanID = nil }
     message = nil
@@ -290,18 +309,25 @@ final class CleanStore: ToolSummaryProviding {
     }
     guard let token = tool.preparation.begin() else { return }
     let selectedIDs = selected
-    defer { tool.preparation.finish(token) }
+    defer {
+      if tool.preparation.accepts(token) { availablePreparationTask = nil }
+      tool.preparation.finish(token)
+    }
     do {
       let groups = Dictionary(grouping: chosen, by: { $0.row.id })
       let selections = groups.values.compactMap { group -> CatalogSelection? in
         guard let first = group.first else { return nil }
         return CatalogSelection(snapshot: first.snapshot, selectedIDs: Set(group.map(\.id)), rowID: first.row.id)
       }
-      let builder = planBuilder
-      let task = Task { @concurrent in try await builder(catalog, selections, kind) }
-      preparationTask = task
-      let plan = try await task.value
+      let builder = availablePlanBuilder
+      let task = Task(priority: .userInitiated) { @concurrent in try await builder(catalog, selections, kind) }
+      availablePreparationTask = task
+      let outcome = try await task.value
       guard tool.preparation.accepts(token), selected == selectedIDs, !task.isCancelled else { return }
+      guard let plan = outcome.plan else {
+        message = outcome.rejections.map(SpaceText.rejection).joined(separator: "\n")
+        return
+      }
       let turkish = Bundle.main.preferredLocalizations.first?.hasPrefix("tr") == true
       let summaries = plan.items.map { item in
         let candidate = chosen.first { $0.entry.path == item.sourcePath }
@@ -320,7 +346,8 @@ final class CleanStore: ToolSummaryProviding {
           await self.prepare(actions: actions, kind: .catalogDelete)
         }
       }
-      actions.present(plan: plan, items: summaries, permanentPlanBuilder: permanentBuilder)
+      actions.present(
+        plan: plan, items: summaries, permanentPlanBuilder: permanentBuilder, rejectedItems: outcome.rejections)
       guard actions.pending?.id == plan.id else { return }
       presentedPlanID = plan.id
       message = nil
