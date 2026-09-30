@@ -248,7 +248,9 @@ final class ParallelWalker: Sendable {
         var protectedRule: String?
         do {
           if fileRuleSuffixes.contains(where: { Self.hasASCIISuffix(entry.name, $0) }),
-            let state = job.protection, let rule = automaton.match(automaton.step(state, entry.name))
+            let state = job.protection,
+            let rule = automaton.scanMatch(
+              automaton.step(state, entry.name), path: job.path + "/" + entry.name, homeDirectory: homeDirectory)
           {
             protectedRule = rule.id
           }
@@ -345,7 +347,11 @@ final class ParallelWalker: Sendable {
         parent.depth == 0 && firmlinks != nil && firmlinks?.contains(entry.name) == false
         ? automaton.state(forPath: "/System/Volumes/Data/" + entry.name)
         : automaton.step(state, entry.name)
-      if let rule = automaton.match(next) {
+      let visiblePath =
+        parent.depth == 0 && firmlinks != nil
+        ? (firmlinks?.contains(entry.name) == true ? "/" + entry.name : "/System/Volumes/Data/" + entry.name)
+        : parent.path + "/" + entry.name
+      if let rule = automaton.scanMatch(next, path: visiblePath, homeDirectory: homeDirectory) {
         switch rule.id {
         case "ssh", "keychains":
           child.reason = .protectedNotTraversed

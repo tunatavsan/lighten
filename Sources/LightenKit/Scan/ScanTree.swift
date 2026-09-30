@@ -65,6 +65,11 @@ public struct SpaceItem: Sendable, Identifiable, Equatable {
   /// a fresh exact inventory and can still refuse with a reason.
   public var canSelect: Bool {
     guard parentID != nil, !isProtected else { return false }
+    let folded = path.lowercased(with: Locale(identifier: "en_US_POSIX"))
+    if let range = folded.range(of: "/library/application support/mobilesync") {
+      let tail = folded[range.upperBound...].split(separator: "/")
+      guard tail.count == 2, tail[0] == "backup" else { return false }
+    }
     switch kind {
     case .directory, .package, .file: break
     case .symlink, .other, .smallFiles, .systemVolume: return false
@@ -87,6 +92,12 @@ public struct SpaceGroup: Sendable {
   public let items: [SpaceItem]
   public let other: [SpaceItem]
   public let otherBytes: ByteAggregate
+
+  public init(items: [SpaceItem], other: [SpaceItem], otherBytes: ByteAggregate) {
+    self.items = items
+    self.other = other
+    self.otherBytes = otherBytes
+  }
 }
 
 /// Compact, lock-protected scan tree. Nodes are directories, packages and

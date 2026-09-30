@@ -51,7 +51,7 @@ public struct HistoryReadout: Sendable {
 }
 
 public enum UndoFailure: Error, Sendable, Equatable {
-  case corruptHistory, unknownItem, noAppliedRecord, changedTrashItem
+  case corruptHistory, unknownItem, noAppliedRecord, changedTrashItem, trashItemMissing
   case unsafeParent, nameOccupied
   case renameFailed(Int32)
   case alreadyRunning
@@ -165,6 +165,9 @@ public actor ActionHistory {
         }
         var canUndo = false
         var detail = terminal?.detail
+        if state == .uncertain, let trashPath = applied?.returnedTrashPath, Self.trashItemMissing(trashPath) {
+          detail = String(describing: UndoFailure.trashItemMissing)
+        }
         if state == .inTrash, let exact = exactItems[item.id], let exactPlan = exactUndoPlan {
           do {
             try preflightRestore(plan: exactPlan, item: exact, records: events)
@@ -248,7 +251,9 @@ public actor ActionHistory {
           outcomes[item.id] = UndoItemResult(itemID: item.id, outcome: .restored, detail: nil, failure: nil)
         } catch let failure as UndoFailure {
           try await self.recordUndoFailure(plan: plan, item: item, records: records, failure: failure)
-          let outcome: UndoOutcome = failure == .changedTrashItem || failure == .nameOccupied ? .skipped : .failed
+          let outcome: UndoOutcome =
+            failure == .changedTrashItem || failure == .trashItemMissing || failure == .nameOccupied
+            ? .skipped : .failed
           outcomes[item.id] = UndoItemResult(
             itemID: item.id, outcome: outcome,
             detail: String(describing: failure), failure: failure)
@@ -259,6 +264,9 @@ public actor ActionHistory {
   }
 
   private nonisolated func preflightRestore(plan: ActionPlan, item: PlanItem, records: [JournalRecord]) throws {
+    if let path = records.last(where: { $0.kind == .applied })?.returnedTrashPath, Self.trashItemMissing(path) {
+      throw UndoFailure.trashItemMissing
+    }
     guard let applied = records.last(where: { $0.kind == .applied }),
       let trashPath = applied.returnedTrashPath, let moved = applied.movedIdentity,
       Self.verifiedTrashItem(at: trashPath, item: item, moved: moved)
@@ -325,6 +333,7 @@ public actor ActionHistory {
       let trashPath = applied.returnedTrashPath,
       let moved = applied.movedIdentity
     else { throw UndoFailure.noAppliedRecord }
+    if Self.trashItemMissing(trashPath) { throw UndoFailure.trashItemMissing }
     guard Self.verifiedTrashItem(at: trashPath, item: item, moved: moved) else {
       throw UndoFailure.changedTrashItem
     }
@@ -402,6 +411,11 @@ public actor ActionHistory {
   }
 
   private nonisolated func permittedRestoreAncestor(_ path: String, item: PlanItem, plan: ActionPlan) -> Bool {
+    if plan.kind == .trash, item.policy == .spaceTrash || item.policy == .wholeBundle {
+      return ProtectionPolicy.spaceTrashPermits(
+        ProtectionPolicy.rules(for: path, homeDirectory: homeDirectory), path: path,
+        rootPath: item.sourcePath, homeDirectory: homeDirectory, ancestor: true)
+    }
     guard let rule = ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory) else { return true }
     guard rule.id == "group-containers", plan.kind == .trash, item.policy == .relatedGroupContainer,
       let proof = item.installedRelatedProof,
@@ -413,6 +427,12 @@ public actor ActionHistory {
       path == location.parent(homeDirectory: homeDirectory)
     else { return false }
     return true
+  }
+
+  private static func trashItemMissing(_ path: String) -> Bool {
+    guard (try? DescriptorFileSystem.validatedComponents(path)) != nil else { return false }
+    var details = stat()
+    return lstat(path, &details) != 0 && errno == ENOENT
   }
 
   private static func verifiedTrashItem(at path: String, item: JournalItemSummary, moved: FileIdentity) -> Bool {

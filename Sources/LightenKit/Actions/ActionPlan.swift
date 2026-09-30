@@ -80,9 +80,20 @@ public enum PlanFailure: Error, Sendable, Equatable {
 
 public struct PlanService: Sendable {
   public let homeDirectory: String
+  private let runningApplications: any RunningApplicationSource
+  private let spaceActivity: any SpaceActivitySource
+  private let mountedImages: any MountedImageSource
 
-  public init(homeDirectory: String = NSHomeDirectory()) {
+  public init(
+    homeDirectory: String = NSHomeDirectory(),
+    runningApplications: any RunningApplicationSource = NativeRunningApplicationSource(),
+    spaceActivity: any SpaceActivitySource = NativeSpaceActivitySource(),
+    mountedImages: any MountedImageSource = NativeMountedImageSource()
+  ) {
     self.homeDirectory = homeDirectory
+    self.runningApplications = runningApplications
+    self.spaceActivity = spaceActivity
+    self.mountedImages = mountedImages
   }
 
   /// Planning walks the complete snapshot and performs descriptor checks.
@@ -166,13 +177,81 @@ public struct PlanService: Sendable {
     }
   }
 
-  /// Builds a Trash plan for Space selections. All refusals are collected so
-  /// the person sees every reason and path at once.
+  public struct AvailableSpacePlan: Sendable {
+    public let plan: ActionPlan?
+    public let rejections: [PlanRejection]
+
+    public init(plan: ActionPlan?, rejections: [PlanRejection]) {
+      self.plan = plan
+      self.rejections = rejections
+    }
+  }
+
+  /// Preserves the original all-or-nothing throwing API for existing callers.
   public func makeSpacePlan(
     selections: [Selection], scanRootPath: String, runID: UUID,
     isCancelled: @Sendable () -> Bool = { false }
   ) throws(PlanRejections) -> ActionPlan {
-    guard !selections.isEmpty else { throw PlanRejections(rejections: []) }
+    let result = collectSpacePlan(
+      selections: selections, scanRootPath: scanRootPath, runID: runID, isCancelled: isCancelled)
+    guard result.rejections.isEmpty, let plan = result.plan else {
+      throw PlanRejections(rejections: result.rejections)
+    }
+    return plan
+  }
+
+  /// Each refused selection stays visible while the other selections form one
+  /// executable plan. Process and image observations never grant file authority.
+  public func makeAvailableSpacePlan(
+    selections: [Selection], scanRootPath: String, runID: UUID,
+    isCancelled: @Sendable () -> Bool = { false }
+  ) async -> AvailableSpacePlan {
+    let collected = collectSpacePlan(
+      selections: selections, scanRootPath: scanRootPath, runID: runID, isCancelled: isCancelled)
+    guard let plan = collected.plan else { return collected }
+    var items: [PlanItem] = []
+    var rejections = collected.rejections
+    for item in plan.items {
+      let identifiers =
+        [item.applicationBundleID].compactMap { $0 } + (item.nestedApplicationIDs ?? [])
+        + ProtectionPolicy.relatedApplicationIDs(for: item.inventory, homeDirectory: homeDirectory)
+      var refusal: PlanRejection?
+      for id in Set(identifiers) where await runningApplications.isRunning(bundleID: id) != false {
+        refusal = PlanRejection(.applicationRunning, path: item.sourcePath, ruleID: id)
+        break
+      }
+      if refusal == nil {
+        let observation = await spaceActivity.activity(rootPath: item.sourcePath)
+        switch observation.state {
+        case .clearObservedCurrentUID: break
+        case .active:
+          refusal = PlanRejection(
+            .processActive, path: item.sourcePath, ruleID: observation.processNames.joined(separator: ", "))
+        case .unknown: refusal = PlanRejection(.activityUnavailable, path: item.sourcePath)
+        }
+      }
+      if refusal == nil {
+        for path in ProtectionPolicy.sparseImageRoots(in: item.inventory, homeDirectory: homeDirectory) {
+          switch await mountedImages.state(imagePath: path) {
+          case .detached: break
+          case .attached: refusal = PlanRejection(.mountedImage, path: path)
+          case .unknown: refusal = PlanRejection(.imageStateUnavailable, path: path)
+          }
+          if refusal != nil { break }
+        }
+      }
+      if let refusal { rejections.append(refusal) } else { items.append(item) }
+    }
+    return AvailableSpacePlan(
+      plan: items.isEmpty ? nil : ActionPlan(id: plan.id, snapshotRunID: runID, kind: .trash, items: items),
+      rejections: rejections)
+  }
+
+  private func collectSpacePlan(
+    selections: [Selection], scanRootPath: String, runID: UUID,
+    isCancelled: @Sendable () -> Bool
+  ) -> AvailableSpacePlan {
+    guard !selections.isEmpty else { return AvailableSpacePlan(plan: nil, rejections: []) }
     let sorted = selections.sorted { $0.path < $1.path }
     var roots: [Selection] = []
     for selection in sorted
@@ -205,13 +284,14 @@ public struct PlanService: Sendable {
           PlanItem(
             id: result.entries[0].id, sourcePath: root.path, volumeID: result.volumeID, inventory: result.entries,
             ancestors: result.ancestors, policy: result.policy, applicationBundleID: bundleID,
-            nestedApplicationIDs: result.policy == .wholeBundle ? result.nestedApplicationIDs : nil))
+            nestedApplicationIDs: result.nestedApplicationIDs))
       } catch {
         rejections.append(error)
       }
     }
-    guard rejections.isEmpty else { throw PlanRejections(rejections: rejections) }
-    return ActionPlan(snapshotRunID: runID, kind: .trash, items: items)
+    return AvailableSpacePlan(
+      plan: items.isEmpty ? nil : ActionPlan(snapshotRunID: runID, kind: .trash, items: items),
+      rejections: rejections)
   }
 
   private func isDescendant(

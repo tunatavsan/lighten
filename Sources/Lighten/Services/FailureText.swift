@@ -24,6 +24,16 @@ enum FailureText {
     let code = raw.split(separator: "(").first.map(String.init) ?? raw
     let copy: (String, String) =
       switch code {
+      case "mountedImage":
+        (
+          "The disk image is attached. Eject it in Finder, then try again.",
+          "Disk imajı bağlı. Finder’da çıkarıp yeniden deneyin."
+        )
+      case "imageStateUnavailable":
+        (
+          "The disk image’s attachment state could not be checked. Try again before moving it.",
+          "Disk imajının bağlılık durumu denetlenemedi. Taşımadan önce yeniden deneyin."
+        )
       case "processActivityUnavailable":
         (
           "Process activity could not be checked. Scan again before cleaning.",

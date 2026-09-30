@@ -40,13 +40,14 @@ struct DescriptorScan {
     ) throws {
       try Task.checkCancellation()
       // The automaton matches the same rules case-folded, a superset of ProtectionPolicy.
-      let protected = automaton.match(state) != nil
-      let found = issues(path: path, identity: identity, readable: readable, protected: protected)
+      let protected = automaton.scanMatch(state, path: path, homeDirectory: homeDirectory) != nil
+      let genericallyProtected = automaton.match(state) != nil
+      let found = issues(path: path, identity: identity, readable: readable, protected: genericallyProtected)
       let id = UUID()
       entries.append(
         ScanEntry(id: id, parentID: parentID, path: path, identity: identity, issues: found, readable: readable))
       progress?(entries.count, path)
-      guard identity.kind == .directory, found.isEmpty else { return }
+      guard identity.kind == .directory, !protected, found.allSatisfy({ $0 == .protected }) else { return }
       let fd = open()
       var opened = stat()
       let names: [String]?

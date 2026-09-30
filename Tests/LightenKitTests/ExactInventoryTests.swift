@@ -99,7 +99,7 @@ private func rejection(_ path: String, home: String) -> PlanRejection? {
   #expect(try DescriptorFileSystem.identity(at: folder) == item.inventory[0].identity)
 }
 
-@Test func protectedDescendantsAndAppsAreRefusedWithPath() throws {
+@Test func protectedDescendantsRefuseButIntactNestedAppsCanMove() throws {
   let home = try inventoryRoot()
   defer { try? FileManager.default.removeItem(atPath: home) }
   try put(home + "/photos/Library.photoslibrary/database/db")
@@ -109,9 +109,9 @@ private func rejection(_ path: String, home: String) -> PlanRejection? {
   #expect(photos?.ruleID == "photos-library")
 
   try makeApp(home + "/downloads-copy/Tool.app", bundleID: "qa.lighten.tool")
-  let app = rejection(home + "/downloads-copy", home: home)
-  #expect(app?.reason == .containsApplication)
-  #expect(app?.path == home + "/downloads-copy/Tool.app")
+  let app = try plan(home + "/downloads-copy", home: home)
+  #expect(app.items.first?.nestedApplicationIDs == ["qa.lighten.tool"])
+  try ActionGuard(homeDirectory: home).validate(try #require(app.items.first))
 }
 
 @Test func wholeAppIsOneBundleAndItsInteriorIsNeverSelectable() throws {
@@ -127,7 +127,7 @@ private func rejection(_ path: String, home: String) -> PlanRejection? {
   #expect(rejection(app + "/Contents/Resources/en.lproj", home: home)?.reason == .insidePackage)
 }
 
-@Test func wholeBundleExceptionAppliesOnlyWhenThePackageIsTheRoot() throws {
+@Test func wholeBundleClaimsRequireAnApplicationRootAndNestedIDs() throws {
   let home = try inventoryRoot()
   defer { try? FileManager.default.removeItem(atPath: home) }
   let app = home + "/Apps/Tool.app"
@@ -136,9 +136,9 @@ private func rejection(_ path: String, home: String) -> PlanRejection? {
   let asFolder = PlanItem(
     id: item.id, sourcePath: item.sourcePath, volumeID: item.volumeID, inventory: item.inventory,
     ancestors: item.ancestors, policy: .spaceTrash)
-  #expect(throws: GuardFailure.protectedItem) { try ActionGuard(homeDirectory: home).validate(asFolder) }
+  #expect(throws: GuardFailure.changedInventory) { try ActionGuard(homeDirectory: home).validate(asFolder) }
 
-  // The same app beneath a selected folder keeps its application rules.
+  // The same intact app can move beneath a selected folder when its ID is recorded.
   let parentPath = home + "/Apps"
   let parent = ScanEntry(
     parentID: nil, path: parentPath, identity: try DescriptorFileSystem.identity(at: parentPath), issues: [],
@@ -153,8 +153,9 @@ private func rejection(_ path: String, home: String) -> PlanRejection? {
     ] + item.inventory.dropFirst()
   let container = PlanItem(
     id: parent.id, sourcePath: parentPath, volumeID: item.volumeID, inventory: reparented,
-    ancestors: try DescriptorFileSystem.ancestorIdentities(of: parentPath), policy: .spaceTrash)
-  #expect(throws: GuardFailure.protectedItem) { try ActionGuard(homeDirectory: home).validate(container) }
+    ancestors: try DescriptorFileSystem.ancestorIdentities(of: parentPath), policy: .spaceTrash,
+    nestedApplicationIDs: ["qa.lighten.tool"])
+  try ActionGuard(homeDirectory: home).validate(container)
   let containerClaim = PlanItem(
     id: parent.id, sourcePath: parentPath, volumeID: item.volumeID, inventory: reparented,
     ancestors: container.ancestors, policy: .wholeBundle)
@@ -235,9 +236,9 @@ private func rejection(_ path: String, home: String) -> PlanRejection? {
   let home = try inventoryRoot()
   defer { try? FileManager.default.removeItem(atPath: home) }
   try put(home + "/Frameworks/Kit.framework/Resources/en.lproj/Localizable.strings")
-  let framework = rejection(home + "/Frameworks/Kit.framework", home: home)
-  #expect(framework?.reason == .containsProtectedItem)
-  #expect(framework?.ruleID == "localization-bundles")
+  let framework = try plan(home + "/Frameworks/Kit.framework", home: home)
+  #expect(framework.items.first?.policy == .spaceTrash)
+  try ActionGuard(homeDirectory: home).validate(try #require(framework.items.first))
 
   try put(home + "/Frameworks/Plain.bundle/Contents/Resources/data")
   let bundle = try #require(try plan(home + "/Frameworks/Plain.bundle", home: home).items.first)

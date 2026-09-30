@@ -1,12 +1,18 @@
 import Foundation
 
 public struct NeverRule: Sendable {
+  public enum Scope: String, Codable, Sendable {
+    case never, explicitTrashOnly
+  }
+
+  public let scope: Scope
   public let id: String
   public let pattern: String
   public let reason: String
   public let evidence: String?
 
-  public init(id: String, pattern: String, reason: String, evidence: String? = nil) {
+  public init(id: String, pattern: String, reason: String, evidence: String? = nil, scope: Scope = .never) {
+    self.scope = scope
     self.id = id
     self.pattern = pattern
     self.reason = reason
@@ -56,52 +62,62 @@ public struct NeverRule: Sendable {
     NeverRule(
       id: "xcode-archives",
       pattern: "~/Library/Developer/Xcode/Archives/**",
-      reason: "Xcode archives and their debug symbols may be required for distribution and crash analysis."
+      reason: "Xcode archives and their debug symbols may be required for distribution and crash analysis.",
+      scope: .explicitTrashOnly
     ),
     NeverRule(
       id: "xcode-debug-symbols",
       pattern: "~/**/*.dSYM/**",
-      reason: "Debug symbol bundles may be required to symbolicate crash reports."
+      reason: "Debug symbol bundles may be required to symbolicate crash reports.",
+      scope: .explicitTrashOnly
     ),
     NeverRule(
       id: "docker-disk-image",
       pattern: "~/Library/Containers/com.docker.docker/Data/vms/**/Docker.raw",
-      reason: "Docker disk images contain container volumes, images, and other user data."
+      reason: "Docker disk images contain container volumes, images, and other user data.",
+      scope: .explicitTrashOnly
     ),
     NeverRule(
       id: "orbstack-disk-image",
       pattern: "~/Library/Group Containers/*.orbstack/data.img",
-      reason: "OrbStack disk images contain virtual machines, containers, and volumes."
+      reason: "OrbStack disk images contain virtual machines, containers, and volumes.",
+      scope: .explicitTrashOnly
     ),
     NeverRule(
       id: "parallels-images",
       pattern: "~/**/*.pvm/**",
-      reason: "Parallels virtual machine bundles contain complete guest systems and user data."
+      reason: "Parallels virtual machine bundles contain complete guest systems and user data.",
+      scope: .explicitTrashOnly
     ),
     NeverRule(
       id: "utm-images",
       pattern: "~/**/*.utm/**",
-      reason: "UTM virtual machine bundles contain complete guest systems and user data."
+      reason: "UTM virtual machine bundles contain complete guest systems and user data.",
+      scope: .explicitTrashOnly
     ),
     NeverRule(
       id: "vmware-images",
       pattern: "~/**/*.vmwarevm/**",
-      reason: "VMware virtual machine bundles contain complete guest systems and user data."
+      reason: "VMware virtual machine bundles contain complete guest systems and user data.",
+      scope: .explicitTrashOnly
     ),
     NeverRule(
       id: "sparse-bundles",
       pattern: "~/**/*.sparsebundle/**",
-      reason: "Sparse bundles may contain encrypted disks, backups, virtual machines, or other user data."
+      reason: "Sparse bundles may contain encrypted disks, backups, virtual machines, or other user data.",
+      scope: .explicitTrashOnly
     ),
     NeverRule(
       id: "sparse-images",
       pattern: "~/**/*.sparseimage",
-      reason: "Sparse disk images may contain encrypted disks, backups, virtual machines, or other user data."
+      reason: "Sparse disk images may contain encrypted disks, backups, virtual machines, or other user data.",
+      scope: .explicitTrashOnly
     ),
     NeverRule(
       id: "maven-repository",
       pattern: "~/.m2/repository/**",
-      reason: "The Maven local repository may contain locally built artifacts that cannot be downloaded again."
+      reason: "The Maven local repository may contain locally built artifacts that cannot be downloaded again.",
+      scope: .explicitTrashOnly
     ),
     NeverRule(
       id: "mail",
@@ -127,7 +143,8 @@ public struct NeverRule: Sendable {
       id: "mobile-sync",
       pattern: "~/Library/Application Support/MobileSync/**",
       reason: "iPhone and iPad backups may be the only available copies of device data.",
-      evidence: "Manage these backups in Finder."
+      evidence: "Manage these backups in Finder.",
+      scope: .explicitTrashOnly
     ),
     NeverRule(
       id: "container-documents",

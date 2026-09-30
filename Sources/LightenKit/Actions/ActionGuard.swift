@@ -48,11 +48,18 @@ public struct ActionGuard: Sendable {
         !ExactInventory(homeDirectory: homeDirectory).isBulkRoot(item.sourcePath)
       else { throw GuardFailure.unsupportedItem }
     }
-    if policy == .catalogTrash || policy == .catalogBuildOutput || relatedPolicy {
+    if policy == .wholeBundle {
+      guard item.inventory.first?.identity?.kind == .directory,
+        ExactInventory.isApplicationName(item.sourcePath), item.applicationBundleID != nil
+      else { throw GuardFailure.unsupportedItem }
+    }
+    if policy == .catalogTrash || policy == .catalogBuildOutput || relatedPolicy
+      || policy == .spaceTrash || policy == .wholeBundle
+    {
       var identifiers: [String] = []
       for entry in item.inventory
       where entry.identity?.kind == .directory && ExactInventory.isApplicationName(entry.path) {
-        if entry.id == item.id && relatedPolicy,
+        if entry.id == item.id && (relatedPolicy || policy == .wholeBundle),
           ApplicationIdentity.bundleIdentifier(ofApplicationAt: entry.path) == nil
         {
           continue
@@ -60,7 +67,7 @@ public struct ActionGuard: Sendable {
         guard let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: entry.path) else {
           throw GuardFailure.unsupportedItem
         }
-        identifiers.append(id)
+        if entry.id != item.id || policy != .wholeBundle { identifiers.append(id) }
       }
       guard identifiers.sorted() == (item.nestedApplicationIDs ?? []).sorted() else {
         throw GuardFailure.changedInventory
@@ -97,9 +104,13 @@ public struct ActionGuard: Sendable {
     for ancestor in item.ancestors {
       let current: FileIdentity
       do { current = try DescriptorFileSystem.identity(at: ancestor.path) } catch { throw GuardFailure.changedAncestor }
-      let protected = ProtectionPolicy.rule(for: ancestor.path, homeDirectory: homeDirectory)
-      guard current.sameStableDirectory(as: ancestor.identity),
-        protected == nil || (policy == .relatedGroupContainer && protected?.id == "group-containers")
+      let rules = ProtectionPolicy.rules(for: ancestor.path, homeDirectory: homeDirectory)
+      let permitted =
+        (policy == .spaceTrash || policy == .wholeBundle)
+        ? ProtectionPolicy.spaceTrashPermits(
+          rules, path: ancestor.path, rootPath: item.sourcePath, homeDirectory: homeDirectory, ancestor: true)
+        : rules.allSatisfy { policy == .relatedGroupContainer && $0.id == "group-containers" }
+      guard current.sameStableDirectory(as: ancestor.identity), permitted
       else {
         throw GuardFailure.changedAncestor
       }
@@ -139,11 +150,14 @@ public struct ActionGuard: Sendable {
       // Case-folded matching covers ProtectionPolicy's exact and alias checks.
       let rules = automaton.matches(state, path: entry.path, homeDirectory: homeDirectory)
       if !rules.isEmpty {
-        // Whole-bundle exception: only beneath a package that is itself the operation root.
         let exempt =
           ((entry.id != item.id && entry.path.hasPrefix(item.sourcePath + "/"))
-            || (entry.id == item.id && policy == .relatedGroupContainer))
-          && policy.map { ExactInventory.permits(rules, policy: $0) } == true
+            || (entry.id == item.id
+              && (policy == .relatedGroupContainer || policy == .spaceTrash || policy == .wholeBundle)))
+          && policy.map {
+            ExactInventory.permits(
+              rules, policy: $0, path: entry.path, rootPath: item.sourcePath, homeDirectory: homeDirectory)
+          } == true
         if !exempt { throw GuardFailure.protectedItem }
       }
       // Tree policies move symlinks as leaves (never followed) and packages as contents.
@@ -153,7 +167,9 @@ public struct ActionGuard: Sendable {
         || expected.device != root.identity?.device
         || (expected.kind == .symbolicLink
           && (policy == nil || (entry.id == item.id && policy != .catalogTrash && policy != .catalogBuildOutput)))
-        || expected.kind == .other
+        || (expected.kind == .other
+          && (entry.id == item.id || (policy != .spaceTrash && policy != .wholeBundle)
+            || !Self.isMovableSpecialLeaf(entry.path)))
         || expected.flags & UInt32(SF_DATALESS | UF_DATAVAULT) != 0
       {
         throw GuardFailure.unsupportedItem
@@ -171,6 +187,52 @@ public struct ActionGuard: Sendable {
       }
     }
   }
+
+  private static func isMovableSpecialLeaf(_ path: String) -> Bool {
+    guard let (fd, name) = try? DescriptorFileSystem.openParent(of: path) else { return false }
+    defer { close(fd) }
+    var details = stat()
+    guard fstatat(fd, name, &details, AT_SYMLINK_NOFOLLOW_ANY) == 0 else { return false }
+    return details.st_mode & S_IFMT == S_IFSOCK || details.st_mode & S_IFMT == S_IFIFO
+  }
+
+  /// Refreshes only explicit Space trees. The old immutable root still binds the
+  /// operation, while every new descendant receives all current safety checks.
+  public func refreshedSpaceItem(_ item: PlanItem) throws -> PlanItem {
+    guard item.policy == .spaceTrash || item.policy == .wholeBundle,
+      item.catalogProof == nil, item.relatedProof == nil, item.installedRelatedProof == nil,
+      item.orphanRelatedProof == nil, item.duplicateProof == nil,
+      item.inventory.first?.id == item.id, item.inventory.first?.path == item.sourcePath,
+      Set(item.inventory.map(\.path)).count == item.inventory.count,
+      Set(item.inventory.map(\.id)).count == item.inventory.count,
+      let original = item.inventory.first?.identity,
+      let current = try? DescriptorFileSystem.identity(at: item.sourcePath),
+      original.matchesStableTrashIdentity(current)
+    else { throw GuardFailure.changedItem }
+    let result = try ExactInventory(homeDirectory: homeDirectory).collect(
+      rootPath: item.sourcePath, expected: (original.device, original.inode), policy: item.policy)
+    guard result.volumeID == item.volumeID,
+      result.ancestors.count == item.ancestors.count,
+      zip(result.ancestors, item.ancestors).allSatisfy({ current, old in
+        current.path == old.path && current.identity.sameStableDirectory(as: old.identity)
+      })
+    else { throw GuardFailure.changedAncestor }
+    let oldIDs = Dictionary(uniqueKeysWithValues: item.inventory.map { ($0.path, $0.id) })
+    let ids = Dictionary(uniqueKeysWithValues: result.entries.map { ($0.id, oldIDs[$0.path] ?? $0.id) })
+    let entries = result.entries.map { entry in
+      ScanEntry(
+        id: ids[entry.id]!, parentID: entry.parentID.flatMap { ids[$0] }, path: entry.path,
+        identity: entry.identity, observedAt: entry.observedAt, issues: entry.issues, readable: entry.readable)
+    }
+    let refreshed = PlanItem(
+      id: item.id, sourcePath: item.sourcePath, volumeID: result.volumeID,
+      inventory: entries, ancestors: item.ancestors, policy: result.policy,
+      applicationBundleID: item.applicationBundleID, nestedApplicationIDs: result.nestedApplicationIDs,
+      snapshotRunID: item.snapshotRunID)
+    try validate(refreshed)
+    return refreshed
+  }
+
 }
 
 extension FileIdentity {

@@ -45,19 +45,21 @@ public struct FileIdentity: Codable, Sendable, Equatable {
 
   func matchesStableTrashIdentity(_ other: FileIdentity) -> Bool {
     guard let birthSeconds, let birthNanoseconds,
-      let modificationSeconds, let modificationNanoseconds,
-      let otherBirthSeconds = other.birthSeconds,
-      let otherBirthNanoseconds = other.birthNanoseconds,
+      let otherBirthSeconds = other.birthSeconds, let otherBirthNanoseconds = other.birthNanoseconds,
+      device == other.device, inode == other.inode, kind == other.kind,
+      birthSeconds == otherBirthSeconds, birthNanoseconds == otherBirthNanoseconds,
+      flags == other.flags
+    else { return false }
+    if kind == .directory { return true }
+    guard let modificationSeconds, let modificationNanoseconds,
       let otherModificationSeconds = other.modificationSeconds,
       let otherModificationNanoseconds = other.modificationNanoseconds
     else { return false }
-    return device == other.device && inode == other.inode && kind == other.kind
-      && birthSeconds == otherBirthSeconds && birthNanoseconds == otherBirthNanoseconds
-      && modificationSeconds == otherModificationSeconds
+    return modificationSeconds == otherModificationSeconds
       && modificationNanoseconds == otherModificationNanoseconds
       && logicalBytes == other.logicalBytes && linkCount == other.linkCount
-      && flags == other.flags
   }
+
 }
 
 public enum EntryKind: String, Codable, Sendable {

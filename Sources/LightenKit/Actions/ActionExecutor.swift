@@ -14,13 +14,18 @@ public struct ItemActionResult: Codable, Sendable {
   public let itemID: UUID
   public let outcome: ActionOutcome
   public let detail: String?
+  public let addedFileCount: Int?
+  public let logicalByteDelta: Int64?
   public let deletedCount: Int
   public let deletedLogicalBytes: Int64
 
   public init(
     itemID: UUID, outcome: ActionOutcome, detail: String? = nil,
-    deletedCount: Int = 0, deletedLogicalBytes: Int64 = 0
+    deletedCount: Int = 0, deletedLogicalBytes: Int64 = 0,
+    addedFileCount: Int? = nil, logicalByteDelta: Int64? = nil
   ) {
+    self.addedFileCount = addedFileCount
+    self.logicalByteDelta = logicalByteDelta
     self.itemID = itemID
     self.outcome = outcome
     self.detail = detail
@@ -57,6 +62,8 @@ public actor ActionExecutor {
   private let catalog: CleanCatalog?
   private let related: RelatedDataService
   private let runningApplications: any RunningApplicationSource
+  private let spaceActivity: any SpaceActivitySource
+  private let mountedImages: any MountedImageSource
   private let duplicates: DuplicateFileComparator
   private var busy = false
 
@@ -67,8 +74,10 @@ public actor ActionExecutor {
     activity: any ProcessActivitySource = UnknownProcessActivitySource(),
     catalog: CleanCatalog? = try? CleanCatalog(),
     related: RelatedDataService = RelatedDataService(),
-    runningApplications: any RunningApplicationSource = UnknownRunningApplicationSource(),
-    duplicates: DuplicateFileComparator = DuplicateFileComparator()
+    runningApplications: any RunningApplicationSource = NativeRunningApplicationSource(),
+    duplicates: DuplicateFileComparator = DuplicateFileComparator(),
+    spaceActivity: any SpaceActivitySource = NativeSpaceActivitySource(),
+    mountedImages: any MountedImageSource = NativeMountedImageSource()
   ) {
     self.journal = journal
     self.trash = trash
@@ -79,6 +88,8 @@ public actor ActionExecutor {
     self.related = related
     self.runningApplications = runningApplications
     self.duplicates = duplicates
+    self.spaceActivity = spaceActivity
+    self.mountedImages = mountedImages
   }
 
   public func execute(
@@ -145,12 +156,39 @@ public actor ActionExecutor {
         $0.kind == .intent && $0.planID == plan.id
       })
     else { throw ExecutionFailure.planAlreadyUsed }
-    // The complete immutable inventory is durable before any OS mutation.
-    try await journal.append(JournalRecord(kind: .intent, planID: plan.id, plan: plan))
-
-    var results: [ItemActionResult] = []
+    var preparationFailures: [UUID: String] = [:]
+    var preparedItems: [PlanItem] = []
+    var deltas: [UUID: (Int, Int64)] = [:]
     for item in plan.items {
       do {
+        if item.policy == .spaceTrash || item.policy == .wholeBundle {
+          let refreshed = try guardService.refreshedSpaceItem(item)
+          try await validateApplication(refreshed)
+          try await validateSpaceActivity(refreshed)
+          preparedItems.append(refreshed)
+          let oldPaths = Set(item.inventory.filter { $0.identity?.kind != .directory }.map(\.path))
+          let added = refreshed.inventory.filter {
+            $0.identity?.kind != .directory && !oldPaths.contains($0.path)
+          }.count
+          deltas[item.id] = (added, Self.logicalBytes(refreshed) - Self.logicalBytes(item))
+        } else {
+          preparedItems.append(item)
+        }
+      } catch {
+        preparationFailures[item.id] = String(describing: error)
+        preparedItems.append(item)
+      }
+    }
+    let executionPlan = ActionPlan(
+      schema: plan.schema, id: plan.id, snapshotRunID: plan.snapshotRunID,
+      kind: plan.kind, createdAt: plan.createdAt, items: preparedItems)
+    // The complete immutable inventory is durable before any OS mutation.
+    try await journal.append(JournalRecord(kind: .intent, planID: plan.id, plan: executionPlan))
+
+    var results: [ItemActionResult] = []
+    for item in executionPlan.items {
+      do {
+        if let detail = preparationFailures[item.id] { throw SpaceValidationFailure(detail: detail) }
         if item.catalogProof != nil { try await validateCatalogActivity(item, in: plan) }
         if let proof = item.relatedProof {
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
@@ -171,6 +209,7 @@ public actor ActionExecutor {
           try validateDuplicate(item, proof: proof)
         }
         try await validateApplication(item)
+        try await validateSpaceActivity(item)
         try guardService.validate(item)
         try await beforeMutation?(item)
         // The hook models the final window. Never move on its prior validation.
@@ -194,6 +233,7 @@ public actor ActionExecutor {
           try validateDuplicate(item, proof: proof)
         }
         try await validateApplication(item)
+        try await validateSpaceActivity(item)
         try guardService.validate(item)
       } catch {
         let detail = String(describing: error)
@@ -262,7 +302,10 @@ public actor ActionExecutor {
               kind: .applied, planID: plan.id, itemID: item.id,
               returnedTrashPath: returnedPath, movedIdentity: moved
             ))
-          results.append(ItemActionResult(itemID: item.id, outcome: .applied))
+          results.append(
+            ItemActionResult(
+              itemID: item.id, outcome: .applied,
+              addedFileCount: deltas[item.id]?.0, logicalByteDelta: deltas[item.id]?.1))
         } catch {
           results.append(ItemActionResult(itemID: item.id, outcome: .uncertain, detail: "applied journal failure"))
           break
@@ -300,7 +343,7 @@ public actor ActionExecutor {
   }
 
   private func validateApplication(_ item: PlanItem) async throws {
-    if item.policy == .catalogTrash || item.policy == .catalogBuildOutput
+    if item.policy == .spaceTrash || item.policy == .catalogTrash || item.policy == .catalogBuildOutput
       || item.policy == .relatedTrash || item.policy == .relatedContainer || item.policy == .relatedGroupContainer
     {
       for id in item.nestedApplicationIDs ?? [] {
@@ -324,6 +367,37 @@ public actor ActionExecutor {
     for id in everyID where await runningApplications.isRunning(bundleID: id) != false {
       throw RelatedFailure.runningOrUnknown
     }
+  }
+
+  private func validateSpaceActivity(_ item: PlanItem) async throws {
+    guard item.policy == .spaceTrash || item.policy == .wholeBundle else { return }
+    for id in ProtectionPolicy.relatedApplicationIDs(
+      for: item.inventory, homeDirectory: guardService.homeDirectory)
+    where await runningApplications.isRunning(bundleID: id) != false {
+      throw RelatedFailure.runningOrUnknown
+    }
+    let observed = await spaceActivity.activity(rootPath: item.sourcePath)
+    switch observed.state {
+    case .clearObservedCurrentUID: break
+    case .active: throw ProcessActivityFailure.active(processNames: observed.processNames)
+    case .unknown: throw ProcessActivityFailure.unavailable
+    }
+    for path in ProtectionPolicy.sparseImageRoots(in: item.inventory, homeDirectory: guardService.homeDirectory) {
+      switch await mountedImages.state(imagePath: path) {
+      case .detached: break
+      case .attached: throw SpaceValidationFailure(detail: "mountedImage")
+      case .unknown: throw SpaceValidationFailure(detail: "imageStateUnavailable")
+      }
+    }
+  }
+
+  private static func logicalBytes(_ item: PlanItem) -> Int64 {
+    var total: Int64 = 0
+    for entry in item.inventory where entry.identity?.kind != .directory {
+      let (next, overflow) = total.addingReportingOverflow(max(0, entry.identity?.logicalBytes ?? 0))
+      total = overflow ? Int64.max : next
+    }
+    return total
   }
 
   private func validateDuplicatePlan(_ plan: ActionPlan) throws {
@@ -533,4 +607,9 @@ public enum KnownPathFileSystem {
     }
     return DescriptorFileSystem.identity(from: details)
   }
+}
+
+private struct SpaceValidationFailure: Error, CustomStringConvertible {
+  let detail: String
+  var description: String { detail }
 }

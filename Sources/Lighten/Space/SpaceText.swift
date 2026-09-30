@@ -168,6 +168,23 @@ enum SpaceText {
           "Your account cannot move this item from its folder. Check the folder’s permissions in Finder.",
           "Hesabınız bu öğeyi klasöründen taşıyamıyor. Klasörün izinlerini Finder’da kontrol edin."
         )
+      case .processActive:
+        (
+          "A related process is using this item. Quit it before cleaning.",
+          "İlişkili bir işlem bu öğeyi kullanıyor. Temizlemeden önce kapatın."
+        )
+      case .activityUnavailable:
+        (
+          "Related process activity could not be checked. Try again before cleaning.",
+          "İlişkili işlem etkinliği kontrol edilemedi. Temizlemeden önce yeniden deneyin."
+        )
+      case .mountedImage:
+        ("This disk image is mounted. Eject it before cleaning.", "Bu disk imajı bağlı. Temizlemeden önce çıkarın.")
+      case .imageStateUnavailable:
+        (
+          "Disk image state could not be checked. Inspect it in Disk Utility.",
+          "Disk imajının durumu kontrol edilemedi. Disk İzlencesi’nde inceleyin."
+        )
       case .applicationRunning:
         ("The app is running. Quit it before cleaning.", "Uygulama çalışıyor. Temizlemeden önce kapatın.")
       case .lightenItself:

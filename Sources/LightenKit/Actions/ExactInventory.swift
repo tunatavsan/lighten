@@ -38,6 +38,7 @@ public enum RejectionReason: String, Codable, Sendable, Equatable {
   case differentVolume
   case needsAdministrator
   case userPermissionDenied
+  case processActive, activityUnavailable, mountedImage, imageStateUnavailable
   case applicationRunning
   case lightenItself
   case tooManyItems
@@ -68,7 +69,13 @@ public struct PlanRejections: Error, Sendable, Equatable {
 public struct ExactInventory: Sendable {
   public static let applicationRules: Set<String> = ["universal-thinning", "localization-bundles"]
 
-  static func permits(_ rules: [NeverRule], policy: TreePolicy) -> Bool {
+  static func permits(
+    _ rules: [NeverRule], policy: TreePolicy, path: String, rootPath: String, homeDirectory: String
+  ) -> Bool {
+    if policy == .spaceTrash || policy == .wholeBundle {
+      return ProtectionPolicy.spaceTrashPermits(
+        rules, path: path, rootPath: rootPath, homeDirectory: homeDirectory)
+    }
     let exemptions: Set<String>
     switch policy {
     case .spaceTrash: exemptions = []
@@ -121,11 +128,6 @@ public struct ExactInventory: Sendable {
     }
     if isBulkRoot(rootPath) { throw PlanRejection(.bulkRoot, path: rootPath) }
     if ScanService.isInsidePackage(rootPath) { throw PlanRejection(.insidePackage, path: rootPath) }
-    if let rule = ProtectionPolicy.rule(for: rootPath, homeDirectory: homeDirectory),
-      !(requestedPolicy == .relatedGroupContainer && rule.id == "group-containers")
-    {
-      throw PlanRejection(.protectedItem, path: rootPath, ruleID: rule.id)
-    }
     let root: FileIdentity
     do { root = try DescriptorFileSystem.identity(at: rootPath) } catch {
       throw PlanRejection(.changedSinceScan, path: rootPath)
@@ -153,6 +155,9 @@ public struct ExactInventory: Sendable {
       throw PlanRejection(.differentVolume, path: rootPath)
     }
     let parent = (rootPath as NSString).deletingLastPathComponent
+    if let parentIdentity = try? DescriptorFileSystem.identity(at: parent), parentIdentity.device != root.device {
+      throw PlanRejection(.mountPoint, path: rootPath)
+    }
     if access(parent, W_OK) != 0 || (root.kind == .directory && access(rootPath, W_OK) != 0) {
       var details = stat()
       let owned = lstat(rootPath, &details) == 0 && details.st_uid == geteuid()
@@ -165,6 +170,25 @@ public struct ExactInventory: Sendable {
     // Catalog Trash permissions come from a later manifest-proof validation.
     let wholeBundle = root.kind == .directory && Self.isApplicationName(rootPath)
     let policy: TreePolicy = requestedPolicy ?? (wholeBundle ? .wholeBundle : .spaceTrash)
+    let rootRules = ProtectionPolicy.rules(for: rootPath, homeDirectory: homeDirectory)
+    let permittedRoot =
+      (policy == .spaceTrash || policy == .wholeBundle)
+      ? ProtectionPolicy.spaceTrashPermits(rootRules, path: rootPath, rootPath: rootPath, homeDirectory: homeDirectory)
+      : rootRules.allSatisfy { policy == .relatedGroupContainer && $0.id == "group-containers" }
+    if !permittedRoot, let rule = rootRules.first {
+      throw PlanRejection(.protectedItem, path: rootPath, ruleID: rule.id)
+    }
+    for ancestor in ancestors {
+      let rules = ProtectionPolicy.rules(for: ancestor.path, homeDirectory: homeDirectory)
+      let permitted =
+        (policy == .spaceTrash || policy == .wholeBundle)
+        ? ProtectionPolicy.spaceTrashPermits(
+          rules, path: ancestor.path, rootPath: rootPath, homeDirectory: homeDirectory, ancestor: true)
+        : rules.allSatisfy { policy == .relatedGroupContainer && $0.id == "group-containers" }
+      if !permitted, let rule = rules.first {
+        throw PlanRejection(.protectedItem, path: ancestor.path, ruleID: rule.id)
+      }
+    }
     var nested: [String] = []
     if wholeBundle {
       if policy == .catalogTrash || policy == .catalogBuildOutput {
@@ -224,7 +248,7 @@ public struct ExactInventory: Sendable {
       let childState = automaton.step(state, name)
       let rules = automaton.matches(childState, path: childPath, homeDirectory: homeDirectory)
       if let rule = rules.first,
-        !Self.permits(rules, policy: policy)
+        !Self.permits(rules, policy: policy, path: childPath, rootPath: rootPath, homeDirectory: homeDirectory)
       {
         let package = Self.enclosingPackage(of: childPath, below: rootPath)
         let inApplication = Self.applicationRules.contains(rule.id) && Self.isApplicationName(package)
@@ -239,10 +263,14 @@ public struct ExactInventory: Sendable {
       entries.append(entry)
       if entries.count > limit { throw PlanRejection(.tooManyItems, path: rootPath) }
       switch child.kind {
-      case .other: throw PlanRejection(.specialFile, path: childPath)
+      case .other:
+        guard policy == .spaceTrash || policy == .wholeBundle,
+          details.st_mode & S_IFMT == S_IFSOCK || details.st_mode & S_IFMT == S_IFIFO
+        else { throw PlanRejection(.specialFile, path: childPath) }
+        continue
       case .symbolicLink, .regular: continue
       case .directory:
-        if policy != .spaceTrash, Self.isApplicationName(childPath) {
+        if Self.isApplicationName(childPath) {
           // A nested app (a helper or bundled tool) must also be closed before the move.
           guard let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: childPath) else {
             throw PlanRejection(.missingMetadata, path: childPath)

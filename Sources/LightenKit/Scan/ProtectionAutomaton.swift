@@ -82,6 +82,12 @@ public struct ProtectionAutomaton: Sendable {
     return nil
   }
 
+  /// Scan display protection excludes explicitly selectable Trash-only areas.
+  public func scanMatch(_ state: State, path: String, homeDirectory: String) -> NeverRule? {
+    guard match(state) != nil || !uncompiled.isEmpty else { return nil }
+    return ProtectionPolicy.scanRule(for: path, homeDirectory: homeDirectory)
+  }
+
   /// Every rule accepting this exact state, in `NeverRule.all` order.
   public func matches(_ state: State) -> [NeverRule] {
     rules.indices.compactMap { index in
