@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 
@@ -5,6 +6,55 @@ import Testing
 
 @Suite("Safety document")
 struct SafetyDocumentTests {
+  @Test(
+    "Catalog Trash exceptions never authorize permanent deletion",
+    arguments: ["localization", "application", "symbols"])
+  func wholeCandidateTrashKeepsPermanentStrict(_ content: String) async throws {
+    let resolved = try #require(realpath(NSTemporaryDirectory(), nil))
+    defer { free(resolved) }
+    let home = String(cString: resolved) + "/LightenQA-" + UUID().uuidString
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let catalog = try CleanCatalog(homeDirectory: home)
+    let rowID = content == "symbols" ? "xcode-derived-data" : "pip-http-v2"
+    let row = try #require(catalog.row(id: rowID))
+    let root = catalog.root(for: row)
+    let candidate = root + "/LightenQA-" + UUID().uuidString
+    let descendant =
+      switch content {
+      case "localization": "Resources/en.lproj/Localizable.strings"
+      case "application": "LightenQA-product.app/Contents/MacOS/tool"
+      default: "LightenQA-symbols.dSYM/Contents/Resources/DWARF/tool"
+      }
+    let protectedPath = candidate + "/" + descendant
+    try FileManager.default.createDirectory(
+      atPath: (protectedPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    try Data("fixture contents".utf8).write(to: URL(fileURLWithPath: protectedPath))
+    if content == "application" {
+      let metadata = try PropertyListSerialization.data(
+        fromPropertyList: ["CFBundleIdentifier": "qa.lighten." + UUID().uuidString], format: .xml, options: 0)
+      try metadata.write(to: URL(fileURLWithPath: candidate + "/LightenQA-product.app/Contents/Info.plist"))
+    }
+    let snapshot = try await ScanService(homeDirectory: home).scan(rootPath: root)
+    let selectedID = try #require(snapshot.entries.first { $0.path == candidate }).id
+    let trash = try catalog.plan(snapshot: snapshot, selectedIDs: [selectedID], rowID: rowID, kind: .trash)
+    #expect(trash.items.count == 1)
+    #expect(trash.items[0].inventory.contains { $0.path == protectedPath })
+    #expect(trash.items[0].policy == (content == "symbols" ? .catalogBuildOutput : .catalogTrash))
+    #expect(throws: PlanFailure.unsafeSelection) {
+      try PlanService(homeDirectory: home).makePlan(
+        snapshot: snapshot, selectedIDs: [selectedID], kind: .catalogDelete)
+    }
+    if content == "symbols" {
+      #expect(throws: CatalogFailure.self) {
+        try catalog.plan(snapshot: snapshot, selectedIDs: [selectedID], rowID: rowID, kind: .catalogDelete)
+      }
+    } else {
+      #expect(throws: PlanFailure.unsafeSelection) {
+        try catalog.plan(snapshot: snapshot, selectedIDs: [selectedID], rowID: rowID, kind: .catalogDelete)
+      }
+    }
+  }
+
   @Test("Checked-in safety document matches NeverRule.all")
   func checkedInDocumentMatchesRules() throws {
     let generated = SafetyDocument.markdown()
