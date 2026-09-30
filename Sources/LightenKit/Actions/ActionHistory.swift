@@ -266,7 +266,7 @@ public actor ActionHistory {
     for ancestor in item.ancestors {
       guard let current = try? DescriptorFileSystem.identity(at: ancestor.path),
         current.sameStableDirectory(as: ancestor.identity),
-        ProtectionPolicy.rule(for: ancestor.path, homeDirectory: homeDirectory) == nil
+        permittedRestoreAncestor(ancestor.path, item: item, plan: plan)
       else { throw UndoFailure.unsafeParent }
     }
     let parentFD: Int32
@@ -334,7 +334,7 @@ public actor ActionHistory {
         current.inode == ancestor.identity.inode,
         current.kind == .directory,
         current.flags == ancestor.identity.flags,
-        ProtectionPolicy.rule(for: ancestor.path, homeDirectory: homeDirectory) == nil
+        permittedRestoreAncestor(ancestor.path, item: item, plan: plan)
       else { throw UndoFailure.unsafeParent }
     }
     let (parentFD, name): (Int32, String)
@@ -369,7 +369,7 @@ public actor ActionHistory {
     for ancestor in item.ancestors {
       guard let current = try? DescriptorFileSystem.identity(at: ancestor.path),
         current.sameStableDirectory(as: ancestor.identity),
-        ProtectionPolicy.rule(for: ancestor.path, homeDirectory: homeDirectory) == nil
+        permittedRestoreAncestor(ancestor.path, item: item, plan: plan)
       else { throw UndoFailure.unsafeParent }
     }
     let (freshFD, freshName): (Int32, String)
@@ -399,6 +399,20 @@ public actor ActionHistory {
       JournalRecord(
         kind: .reversed, planID: planID, itemID: itemID
       ))
+  }
+
+  private nonisolated func permittedRestoreAncestor(_ path: String, item: PlanItem, plan: ActionPlan) -> Bool {
+    guard let rule = ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory) else { return true }
+    guard rule.id == "group-containers", plan.kind == .trash, item.policy == .relatedGroupContainer,
+      let proof = item.installedRelatedProof,
+      item.relatedProof == nil, item.orphanRelatedProof == nil, item.catalogProof == nil, item.duplicateProof == nil,
+      proof.relatedPath == item.sourcePath, proof.relatedIdentity == item.inventory.first?.identity,
+      proof.snapshotRunID == (item.snapshotRunID ?? plan.snapshotRunID),
+      let (location, domain) = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory),
+      location == .groupContainers, RelatedDataService.validBundleID(domain),
+      path == location.parent(homeDirectory: homeDirectory)
+    else { return false }
+    return true
   }
 
   private static func verifiedTrashItem(at path: String, item: JournalItemSummary, moved: FileIdentity) -> Bool {

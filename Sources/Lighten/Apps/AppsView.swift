@@ -74,7 +74,9 @@ struct AppsView: View {
         if store.scannedAt != nil && !store.inventoryComplete {
           Label(
             String(
-              localized: "Application inventory is incomplete. Other locations and unreadable apps remain unknown."),
+              localized:
+                "Application inventory is incomplete. Other locations and unreadable apps remain unknown."
+            ),
             systemImage: "exclamationmark.circle"
           )
           .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
@@ -84,9 +86,12 @@ struct AppsView: View {
         if store.reports.isEmpty && !store.busy {
           ContentUnavailableView(
             store.scannedAt == nil
-              ? String(localized: "Scan installed apps") : String(localized: "No applications found"),
+              ? String(localized: "Scan installed apps")
+              : String(localized: "No applications found"),
             systemImage: "app.dashed",
-            description: Text(String(localized: "Inspect applications in /Applications and your Applications folder."))
+            description: Text(
+              String(
+                localized: "Inspect applications in /Applications and your Applications folder."))
           )
           .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if store.busy && store.reports.isEmpty {
@@ -156,7 +161,8 @@ struct AppsView: View {
         }
         if let message = store.message {
           Divider()
-          Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning).padding(.top, 9)
+          Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning).padding(
+            .top, 9)
         }
         if let result = actions.result, result.planID == store.presentedPlanID {
           Text(resultLine(result))
@@ -185,8 +191,10 @@ struct AppsView: View {
   private var applicationList: some View {
     Group {
       if filtered.isEmpty {
-        ContentUnavailableView(String(localized: "No matching applications"), systemImage: "magnifyingglass")
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ContentUnavailableView(
+          String(localized: "No matching applications"), systemImage: "magnifyingglass"
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
         ScrollView {
           LazyVStack(spacing: 5) {
@@ -242,9 +250,13 @@ struct AppsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         Spacer(minLength: 4)
         VStack(alignment: .trailing, spacing: 2) {
-          Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
-            .font(.system(size: 11, weight: .medium)).monospacedDigit()
-          if !store.measuringPaths.contains(app.path) && app.partial && app.logical.knownLowerBound > 0 {
+          Text(
+            store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app)
+          )
+          .font(.system(size: 11, weight: .medium)).monospacedDigit()
+          if !store.measuringPaths.contains(app.path) && app.partial
+            && app.logical.knownLowerBound > 0
+          {
             Text(String(localized: "At least"))
               .font(.system(size: 9)).foregroundStyle(LightenStyle.muted)
           }
@@ -282,25 +294,31 @@ struct AppsView: View {
           .frame(maxWidth: .infinity, alignment: .leading)
         }
         HStack(alignment: .firstTextBaseline) {
-          Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
-            .font(.system(size: 23, weight: .semibold)).monospacedDigit()
+          Text(
+            store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app)
+          )
+          .font(.system(size: 23, weight: .semibold)).monospacedDigit()
           Text(
             app.partial && app.logical.knownLowerBound == 0
               ? String(localized: "Size unavailable")
-              : app.partial ? String(localized: "Known lower bound") : String(localized: "Logical size")
+              : app.partial
+                ? String(localized: "Known lower bound") : String(localized: "Logical size")
           )
           .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
           Spacer()
         }
         Text(
           String(
-            localized: "Protected package contents are measured from metadata. Trash size is not freed disk space.")
+            localized:
+              "Protected package contents are measured from metadata. Trash size is not freed disk space."
+          )
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         VStack(alignment: .leading, spacing: 5) {
           metadataRow(String(localized: "Bundle ID"), app.bundleID ?? String(localized: "Unknown"))
           metadataRow(String(localized: "Version"), app.version ?? String(localized: "Unknown"))
-          metadataRow(String(localized: "Signer"), app.signerTeamID ?? String(localized: "Unavailable"))
+          metadataRow(
+            String(localized: "Signer"), app.signerTeamID ?? String(localized: "Unavailable"))
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
@@ -313,7 +331,9 @@ struct AppsView: View {
         }
         if app.manualUninstallerSuggested {
           Label(
-            String(localized: "This app contains a system extension or helper. Check the vendor's uninstaller."),
+            String(
+              localized:
+                "This app contains a system extension or helper. Check the vendor's uninstaller."),
             systemImage: "info.circle"
           )
           .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
@@ -350,9 +370,13 @@ struct AppsView: View {
             .font(.system(size: 13, weight: .medium))
           Text(
             reason
-              ?? String(localized: "The app moves as one package. Its data below stays unless you select it too.")
+              ?? String(
+                localized:
+                  "The app moves as one package. Its data below stays unless you select it too.")
           )
-          .font(.system(size: 11)).foregroundStyle(reason == nil ? LightenStyle.muted : LightenStyle.warning)
+          .font(.system(size: 11)).foregroundStyle(
+            reason == nil ? LightenStyle.muted : LightenStyle.warning
+          )
           .fixedSize(horizontal: false, vertical: true)
         }
         Spacer(minLength: 0)
@@ -373,7 +397,10 @@ struct AppsView: View {
       Text(String(localized: "Related data"))
         .font(.system(size: 15, weight: .semibold))
       Text(
-        String(localized: "Data is separate from the app. Exact names show a possible link, not guaranteed ownership.")
+        String(
+          localized:
+            "Data is separate from the app. Exact names show a possible link, not guaranteed ownership."
+        )
       )
       .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       .fixedSize(horizontal: false, vertical: true)
@@ -419,7 +446,9 @@ struct AppsView: View {
         Text(candidate.path).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
           .lineLimit(1).truncationMode(.middle).help(candidate.path)
         Text(relatedReason(candidate, eligible: eligible))
-          .font(.system(size: 10)).foregroundStyle(eligible ? LightenStyle.muted : LightenStyle.warning)
+          .font(.system(size: 10)).foregroundStyle(
+            eligible ? LightenStyle.muted : LightenStyle.warning
+          )
           .fixedSize(horizontal: false, vertical: true)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -457,7 +486,8 @@ struct AppsView: View {
     case .protected: String(localized: "Protected · report only")
     case .shared: String(localized: "Shared · report only")
     case .uncertain: String(localized: "Association uncertain · report only")
-    case .historicallyVerifiedAbsent: String(localized: "Previously associated · review in Clean")
+    case .historicallyVerifiedAbsent, .orphanVerified:
+      String(localized: "Previously associated · review in Clean")
     }
   }
 

@@ -10,7 +10,7 @@ public struct ApplicationReport: Identifiable, Sendable {
   public let allocated: ByteAggregate
   public let knownItemCount: Int
   public let partial: Bool
-  public let related: [RelatedDataCandidate]
+  public var related: [RelatedDataCandidate]
   public let manualUninstallerSuggested: Bool
   /// Resolved location when the listed path is a symbolic link to an app.
   public var linkTarget: String?
@@ -33,6 +33,7 @@ public struct ApplicationDiscovery: Sendable {
   public enum Event: Sendable {
     case inventory(BundleInventory, [ApplicationReport])
     case measured([ApplicationReport])
+    case orphans([RelatedDataCandidate])
     case completed(BundleInventory, [ApplicationReport])
   }
 
@@ -119,24 +120,15 @@ public struct ApplicationDiscovery: Sendable {
     if Task.isCancelled { return (inventory, reports) }
     let relatedCandidates = await related.discover()
     if Task.isCancelled { return (inventory, reports) }
+    emit(
+      .orphans(
+        relatedCandidates.filter {
+          $0.classification == .orphanVerified || $0.classification == .historicallyVerifiedAbsent
+        }))
     reports = reports.map { app in
       let candidates: [RelatedDataCandidate]
       if let id = app.bundleID {
-        var matched = relatedCandidates.filter { candidate in
-          candidate.path == related.homeDirectory + "/Library/Caches/" + id
-            || candidate.path == related.homeDirectory + "/Library/Preferences/" + id + ".plist"
-        }
-        for path in [
-          related.homeDirectory + "/Library/Caches/" + id,
-          related.homeDirectory + "/Library/Preferences/" + id + ".plist",
-          related.homeDirectory + "/Library/Logs/" + id,
-          related.homeDirectory + "/Library/Application Support/" + id,
-          related.homeDirectory + "/Library/Containers/" + id,
-        ] where !matched.contains(where: { $0.path == path }) {
-          if let candidate = Self.reportOnlyCandidate(path: path, homeDirectory: related.homeDirectory) {
-            matched.append(candidate)
-          }
-        }
+        let matched = relatedCandidates.filter { $0.bundleID == id }
         candidates = matched
       } else {
         candidates = []
@@ -160,23 +152,23 @@ public struct ApplicationDiscovery: Sendable {
     return (inventory, reports)
   }
 
-  private static func reportOnlyCandidate(path: String, homeDirectory: String) -> RelatedDataCandidate? {
-    let identity: FileIdentity
-    do {
-      identity = try DescriptorFileSystem.identity(at: path)
-    } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT {
-      return nil
-    } catch {
-      return RelatedDataCandidate(
-        id: path, path: path, classification: .uncertain,
-        reason: .candidateAreaUnreadable, snapshot: nil, receipt: nil)
+  /// Measures just one explicitly supplied bundle and its standard data locations.
+  public func report(path: String) async -> ApplicationReport? {
+    guard let app = related.application(at: path) else { return nil }
+    async let observation = related.focusedObservation(for: app)
+    let size = await Self.measure(path: path, homeDirectory: related.homeDirectory)
+    let data = await observation
+    return ApplicationReport(
+      path: path, bundleID: app.bundleID, version: app.version,
+      signerTeamID: data.signerTeamID,
+      logical: size.logical, allocated: size.allocated, knownItemCount: size.count, partial: size.partial,
+      related: data.candidates, manualUninstallerSuggested: false)
+  }
+
+  public func discoverOrphans() async -> [RelatedDataCandidate] {
+    await related.discover().filter {
+      $0.classification == .orphanVerified || $0.classification == .historicallyVerifiedAbsent
     }
-    let protected = ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory) != nil
-    return RelatedDataCandidate(
-      id: path, path: path,
-      classification: protected ? .protected : .uncertain,
-      reason: protected ? .protected : identity.kind == .symbolicLink ? .recordUnsafe : .nameOnly,
-      snapshot: nil, receipt: nil)
   }
 
   static let concurrentPackages = 4
@@ -186,6 +178,12 @@ public struct ApplicationDiscovery: Sendable {
   public static func measure(path: String, homeDirectory: String) async -> (
     logical: ByteAggregate, allocated: ByteAggregate, count: Int, partial: Bool
   ) {
+    if let identity = try? DescriptorFileSystem.identity(at: path), identity.kind == .regular {
+      return (
+        ByteAggregate(knownLowerBound: identity.logicalBytes, completeTotal: identity.logicalBytes),
+        ByteAggregate(knownLowerBound: identity.allocatedBytes, completeTotal: identity.allocatedBytes), 1, false
+      )
+    }
     let configuration = ScanConfiguration(workers: 4, homeDirectory: homeDirectory)
     guard let run = try? ScanEngine(configuration: configuration).start(root: path) else {
       return (

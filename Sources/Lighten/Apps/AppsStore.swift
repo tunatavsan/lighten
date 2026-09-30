@@ -36,16 +36,18 @@ final class AppsStore {
     events: @escaping @Sendable () -> AsyncStream<ApplicationDiscovery.Event> = {
       ApplicationDiscovery(related: .system).events()
     },
-    planBuilder: @escaping @Sendable (ApplicationReport, RelatedDataCandidate) async throws -> ActionPlan = {
-      report, candidate in
-      guard let bundleID = report.bundleID,
-        let app = RelatedDataService.system.inventory().applications.first(where: {
-          $0.path == report.path && $0.bundleID == bundleID
-        })
-      else { throw RelatedFailure.ambiguousOwner }
-      return try RelatedDataService.system.planInstalled(app: app, candidate: candidate)
-    },
-    appPlanBuilder: @escaping @Sendable (String) async -> Result<ActionPlan, PlanRejections> = { path in
+    planBuilder:
+      @escaping @Sendable (ApplicationReport, RelatedDataCandidate) async throws -> ActionPlan = {
+        report, candidate in
+        guard let bundleID = report.bundleID,
+          let app = RelatedDataService.system.inventory().applications.first(where: {
+            $0.path == report.path && $0.bundleID == bundleID
+          })
+        else { throw RelatedFailure.ambiguousOwner }
+        return try RelatedDataService.system.planInstalled(app: app, candidate: candidate)
+      },
+    appPlanBuilder: @escaping @Sendable (String) async -> Result<ActionPlan, PlanRejections> = {
+      path in
       await Task.detached { () -> Result<ActionPlan, PlanRejections> in
         do throws(PlanRejections) {
           guard let identity = try? DescriptorFileSystem.identity(at: path) else {
@@ -53,7 +55,9 @@ final class AppsStore {
           }
           return .success(
             try PlanService().makeSpacePlan(
-              selections: [PlanService.Selection(path: path, device: identity.device, inode: identity.inode)],
+              selections: [
+                PlanService.Selection(path: path, device: identity.device, inode: identity.inode)
+              ],
               scanRootPath: "", runID: UUID()))
         } catch {
           return .failure(error)
@@ -107,6 +111,7 @@ final class AppsStore {
                 self.measuredCount += 1
               }
             }
+          case .orphans: break
           case .completed(let inventory, let reports):
             self.reports = reports
             self.measuringPaths = []
@@ -189,17 +194,22 @@ final class AppsStore {
       return
         "\(String(localized: "This is a link to an app stored elsewhere. It is shown for identification only.")) \(target)"
     }
-    guard let bundleID = report.bundleID else { return String(localized: "App identity unavailable") }
+    guard let bundleID = report.bundleID else {
+      return String(localized: "App identity unavailable")
+    }
     if bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame {
       return String(localized: "Lighten does not remove itself.")
     }
-    if runningIDs.contains(bundleID) { return String(localized: "The app is running. Quit it first.") }
+    if runningIDs.contains(bundleID) {
+      return String(localized: "The app is running. Quit it first.")
+    }
     if runningUnknownIDs.contains(bundleID) || !runningCheckedIDs.contains(bundleID) {
       return String(localized: "Whether the app is running is unknown.")
     }
     let parent = (report.path as NSString).deletingLastPathComponent
     if Darwin.access(parent, W_OK) != 0 || Darwin.access(report.path, W_OK) != 0 {
-      return String(localized: "Administrator permission is needed. Use Show in Finder to remove it there.")
+      return String(
+        localized: "Administrator permission is needed. Use Show in Finder to remove it there.")
     }
     return nil
   }
@@ -292,7 +302,8 @@ final class AppsStore {
           }
         }
         if plans.count == 1 { return plans[0] }
-        return ActionPlan(snapshotRunID: plans[0].snapshotRunID, kind: .trash, items: plans.flatMap(\.items))
+        return ActionPlan(
+          snapshotRunID: plans[0].snapshotRunID, kind: .trash, items: plans.flatMap(\.items))
       }
       preparationTask = task
       let plan = try await task.value
@@ -324,7 +335,9 @@ final class AppsStore {
           reason: isPackage
             ? String(localized: "Whole application package")
             : String(
-              localized: "Selected app data. Preferences and support files may contain personal settings or documents."),
+              localized:
+                "Selected app data. Preferences and support files may contain personal settings or documents."
+            ),
           logicalBytes: isPackage ? logical : node?.logical.completeTotal ?? logical,
           allocatedBytes: node?.allocated.completeTotal)
       }
@@ -337,7 +350,9 @@ final class AppsStore {
       }
     } catch {
       if preparationGeneration == id {
-        message = String(localized: "Could not prepare app data. Scan again.") + " " + FailureText.describe(error)
+        message =
+          String(localized: "Could not prepare app data. Scan again.") + " "
+          + FailureText.describe(error)
       }
     }
   }

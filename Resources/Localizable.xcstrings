@@ -209,6 +209,22 @@
         }
       }
     },
+    "Another user owns this data. Inspect it in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another user owns this data. Inspect it in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu verinin sahibi başka bir kullanıcı. Finder’da inceleyin."
+          }
+        }
+      }
+    },
     "Another volume is mounted here and is not included.": {
       "localizations": {
         "en": {
@@ -1901,6 +1917,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Varsayılan olarak hiçbir dosya kaldırılmak üzere seçilmez."
+          }
+        }
+      }
+    },
+    "No installed app with this identifier was found. Review before moving to Trash.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No installed app with this identifier was found. Review before moving to Trash."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu kimlikle kurulu bir uygulama bulunamadı. Çöp’e taşımadan önce inceleyin."
           }
         }
       }
@@ -3741,6 +3773,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ad tek başına eski sahipliği kanıtlamaz. Bu veriyi Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "The name and signing team suggest a match. Review this data before selecting it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The name and signing team suggest a match. Review this data before selecting it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ad ve imza ekibi bir eşleşmeye işaret ediyor. Seçmeden önce bu veriyi inceleyin."
           }
         }
       }

@@ -35,7 +35,8 @@ func readOnlyDiscoveryPreservesReceiptStore(existingReceipt: Bool) async throws 
   let candidates = await observer.discover()
   let candidate = try #require(candidates.first { $0.path == cachePath })
   #expect(candidate.classification == .installed)
-  #expect(candidate.snapshot != nil)
+  #expect(candidate.observation?.logical.completeTotal == Int64("cached bytes".utf8.count))
+  #expect(candidate.snapshot?.entries.count == 1)
   #expect(!candidates.contains { $0.id == "receipt-write" })
   #expect((try? Data(contentsOf: URL(fileURLWithPath: receiptPath))) == beforeData)
   #expect((try? DescriptorFileSystem.identity(at: receiptPath)) == beforeIdentity)
@@ -48,5 +49,6 @@ func readOnlyDiscoveryPreservesReceiptStore(existingReceipt: Bool) async throws 
   #expect(plan.items.first?.installedRelatedProof?.bundleID == bundleID)
   try FileManager.default.removeItem(atPath: appPath)
   let absent = try #require((await observer.discover()).first { $0.path == cachePath })
-  #expect(absent.classification == (existingReceipt ? .historicallyVerifiedAbsent : .uncertain))
+  #expect(absent.classification == (existingReceipt ? .historicallyVerifiedAbsent : .orphanVerified))
+  #expect(!absent.defaultSelected)
 }

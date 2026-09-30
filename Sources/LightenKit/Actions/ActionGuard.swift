@@ -14,25 +14,49 @@ public struct ActionGuard: Sendable {
 
   public func validate(_ item: PlanItem) throws {
     let policy = item.policy
+    let relatedPolicy = policy == .relatedTrash || policy == .relatedContainer || policy == .relatedGroupContainer
+    if relatedPolicy {
+      guard item.catalogProof == nil, item.duplicateProof == nil,
+        [item.relatedProof != nil, item.installedRelatedProof != nil, item.orphanRelatedProof != nil]
+          .filter({ $0 }).count == 1
+      else { throw GuardFailure.unsupportedItem }
+      let related = RelatedDataService(homeDirectory: homeDirectory, writeVerifiedReceipts: false)
+      let run =
+        item.snapshotRunID ?? item.installedRelatedProof?.snapshotRunID
+        ?? item.relatedProof?.snapshotRunID ?? item.orphanRelatedProof?.snapshotRunID ?? UUID()
+      let plan = ActionPlan(snapshotRunID: run, kind: .trash, items: [item])
+      do { try related.validateScope(item, plan: plan) } catch { throw GuardFailure.unsupportedItem }
+      guard let (location, _) = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory),
+        policy
+          == (location == .containers
+            ? .relatedContainer : location == .groupContainers ? .relatedGroupContainer : .relatedTrash)
+      else { throw GuardFailure.unsupportedItem }
+    }
     // Catalog tree policies require a matching, bundled Trash authority.
     if policy == .catalogTrash || policy == .catalogBuildOutput {
       guard let proof = item.catalogProof, proof.method == .trash,
-        item.relatedProof == nil, item.installedRelatedProof == nil, item.duplicateProof == nil,
+        item.relatedProof == nil, item.installedRelatedProof == nil, item.orphanRelatedProof == nil,
+        item.duplicateProof == nil,
         let catalog = try? CleanCatalog(homeDirectory: homeDirectory),
         let row = try? catalog.validate(
           item, in: ActionPlan(snapshotRunID: proof.snapshotRunID, kind: .trash, items: [item])),
         policy == (row.class == "buildOutput" ? .catalogBuildOutput : .catalogTrash)
       else { throw GuardFailure.unsupportedItem }
-    } else if policy != nil {
+    } else if policy != nil && !relatedPolicy {
       guard item.catalogProof == nil, item.relatedProof == nil, item.installedRelatedProof == nil,
-        item.duplicateProof == nil,
+        item.orphanRelatedProof == nil, item.duplicateProof == nil,
         !ExactInventory(homeDirectory: homeDirectory).isBulkRoot(item.sourcePath)
       else { throw GuardFailure.unsupportedItem }
     }
-    if policy == .catalogTrash || policy == .catalogBuildOutput {
+    if policy == .catalogTrash || policy == .catalogBuildOutput || relatedPolicy {
       var identifiers: [String] = []
       for entry in item.inventory
       where entry.identity?.kind == .directory && ExactInventory.isApplicationName(entry.path) {
+        if entry.id == item.id && relatedPolicy,
+          ApplicationIdentity.bundleIdentifier(ofApplicationAt: entry.path) == nil
+        {
+          continue
+        }
         guard let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: entry.path) else {
           throw GuardFailure.unsupportedItem
         }
@@ -73,8 +97,9 @@ public struct ActionGuard: Sendable {
     for ancestor in item.ancestors {
       let current: FileIdentity
       do { current = try DescriptorFileSystem.identity(at: ancestor.path) } catch { throw GuardFailure.changedAncestor }
+      let protected = ProtectionPolicy.rule(for: ancestor.path, homeDirectory: homeDirectory)
       guard current.sameStableDirectory(as: ancestor.identity),
-        ProtectionPolicy.rule(for: ancestor.path, homeDirectory: homeDirectory) == nil
+        protected == nil || (policy == .relatedGroupContainer && protected?.id == "group-containers")
       else {
         throw GuardFailure.changedAncestor
       }
@@ -116,7 +141,8 @@ public struct ActionGuard: Sendable {
       if !rules.isEmpty {
         // Whole-bundle exception: only beneath a package that is itself the operation root.
         let exempt =
-          entry.id != item.id && entry.path.hasPrefix(item.sourcePath + "/")
+          ((entry.id != item.id && entry.path.hasPrefix(item.sourcePath + "/"))
+            || (entry.id == item.id && policy == .relatedGroupContainer))
           && policy.map { ExactInventory.permits(rules, policy: $0) } == true
         if !exempt { throw GuardFailure.protectedItem }
       }

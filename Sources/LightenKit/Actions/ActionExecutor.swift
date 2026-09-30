@@ -110,7 +110,7 @@ public actor ActionExecutor {
       plan.items.allSatisfy({ item in
         [
           item.catalogProof != nil, item.relatedProof != nil,
-          item.installedRelatedProof != nil, item.duplicateProof != nil,
+          item.installedRelatedProof != nil, item.orphanRelatedProof != nil, item.duplicateProof != nil,
         ]
         .filter { $0 }.count <= 1
       })
@@ -134,6 +134,9 @@ public actor ActionExecutor {
     }
     for item in plan.items where item.installedRelatedProof != nil {
       try related.validateInstalled(item, plan: plan)
+    }
+    for item in plan.items where item.orphanRelatedProof != nil {
+      try related.validateOrphan(item, plan: plan)
     }
     let existing = try await journal.readSummary()
     guard existing.issues.isEmpty else { throw ExecutionFailure.corruptHistory }
@@ -159,6 +162,11 @@ public actor ActionExecutor {
           else { throw RelatedFailure.runningOrUnknown }
           try related.validateInstalled(item, plan: plan)
         }
+        if let proof = item.orphanRelatedProof {
+          guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
+          else { throw RelatedFailure.runningOrUnknown }
+          try related.validateOrphan(item, plan: plan)
+        }
         if let proof = item.duplicateProof {
           try validateDuplicate(item, proof: proof)
         }
@@ -176,6 +184,11 @@ public actor ActionExecutor {
           guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
           else { throw RelatedFailure.runningOrUnknown }
           try related.validateInstalled(item, plan: plan)
+        }
+        if let proof = item.orphanRelatedProof {
+          guard await runningApplications.isRunning(bundleID: proof.bundleID) == false
+          else { throw RelatedFailure.runningOrUnknown }
+          try related.validateOrphan(item, plan: plan)
         }
         if let proof = item.duplicateProof {
           try validateDuplicate(item, proof: proof)
@@ -287,7 +300,9 @@ public actor ActionExecutor {
   }
 
   private func validateApplication(_ item: PlanItem) async throws {
-    if item.policy == .catalogTrash || item.policy == .catalogBuildOutput {
+    if item.policy == .catalogTrash || item.policy == .catalogBuildOutput
+      || item.policy == .relatedTrash || item.policy == .relatedContainer || item.policy == .relatedGroupContainer
+    {
       for id in item.nestedApplicationIDs ?? [] {
         if id.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame {
           throw ExecutionFailure.selfRemoval
@@ -317,7 +332,7 @@ public actor ActionExecutor {
       guard plan.kind == .trash,
         plan.items.allSatisfy({
           $0.duplicateProof != nil && $0.catalogProof == nil && $0.relatedProof == nil
-            && $0.installedRelatedProof == nil
+            && $0.installedRelatedProof == nil && $0.orphanRelatedProof == nil
             && $0.inventory.count == 1 && $0.inventory.first?.identity?.kind == .regular
         })
       else { throw ExecutionFailure.invalidPlan }

@@ -15,6 +15,7 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   public let catalogProof: CatalogProof?
   public let relatedProof: RelatedProof?
   public let installedRelatedProof: InstalledRelatedProof?
+  public let orphanRelatedProof: OrphanRelatedProof?
   public let duplicateProof: DuplicateProof?
   /// Absent in records written before tree policies existed; absent means strict.
   public let policy: TreePolicy?
@@ -28,7 +29,8 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     inventory: [ScanEntry], ancestors: [PathIdentity], catalogProof: CatalogProof? = nil,
     relatedProof: RelatedProof? = nil, installedRelatedProof: InstalledRelatedProof? = nil,
     duplicateProof: DuplicateProof? = nil, policy: TreePolicy? = nil, applicationBundleID: String? = nil,
-    nestedApplicationIDs: [String]? = nil, snapshotRunID: UUID? = nil
+    nestedApplicationIDs: [String]? = nil, snapshotRunID: UUID? = nil,
+    orphanRelatedProof: OrphanRelatedProof? = nil
   ) {
     self.id = id
     self.sourcePath = sourcePath
@@ -39,6 +41,7 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     self.catalogProof = catalogProof
     self.relatedProof = relatedProof
     self.installedRelatedProof = installedRelatedProof
+    self.orphanRelatedProof = orphanRelatedProof
     self.duplicateProof = duplicateProof
     self.policy = policy
     self.applicationBundleID = applicationBundleID

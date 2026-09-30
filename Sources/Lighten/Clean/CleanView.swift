@@ -282,6 +282,12 @@ struct CleanView: View {
       String(localized: "Shared Group Containers may contain data from several apps. Inspect the folder in Finder.")
     case .installedElsewhere:
       String(localized: "An app with this identifier is installed elsewhere. Review the app in Applications.")
+    case .orphanVerified:
+      String(localized: "No installed app with this identifier was found. Review before moving to Trash.")
+    case .foreignOwner:
+      String(localized: "Another user owns this data. Inspect it in Finder.")
+    case .mediumMatch:
+      String(localized: "The name and signing team suggest a match. Review this data before selecting it.")
     }
   }
 

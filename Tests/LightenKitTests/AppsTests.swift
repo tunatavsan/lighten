@@ -90,6 +90,8 @@ func inventoryPrecedesMeasurement() async throws {
       #expect(metadata.first?.logical.completeTotal == nil)
     case .measured:
       #expect(sawInventory)
+    case .orphans:
+      #expect(sawInventory)
     case .completed(let inventory, let reports):
       #expect(inventory.complete)
       finished = reports
@@ -247,8 +249,8 @@ func appCaseAliasesBlockAbsenceAndAction() async throws {
   #expect(fixture.service.inventory().contains(fixture.bundleID))
 }
 
-@Test("Other exact-name data is visible as report-only, never inherited Trash authority")
-func appOtherDataStaysReportOnly() async throws {
+@Test("Exact standard app data is actionable through fresh related proof")
+func appOtherDataUsesRelatedProof() async throws {
   let fixture = try AppsFixture()
   defer { fixture.remove() }
   let support = fixture.home + "/Library/Application Support/" + fixture.bundleID
@@ -261,14 +263,13 @@ func appOtherDataStaysReportOnly() async throws {
   try FileManager.default.createSymbolicLink(atPath: logs, withDestinationPath: "/missing-log")
   let (_, reports) = await ApplicationDiscovery(related: fixture.service).discover()
   let app = try #require(reports.first { $0.path == fixture.app })
-  #expect(app.related.first { $0.path == support }?.classification == .uncertain)
-  #expect(app.related.first { $0.path == container }?.classification == .uncertain)
+  #expect(app.related.first { $0.path == support }?.classification == .installed)
+  #expect(app.related.first { $0.path == container }?.classification == .installed)
   #expect(app.related.first { $0.path == logs }?.reason == .recordUnsafe)
-  for path in [support, container, logs] {
+  for path in [support, container] {
     let candidate = try #require(app.related.first { $0.path == path })
-    #expect(throws: RelatedFailure.self) {
-      try fixture.service.planInstalled(app: fixture.installedApp(), candidate: candidate)
-    }
+    let plan = try fixture.service.planInstalled(app: fixture.installedApp(), candidate: candidate)
+    #expect(plan.items[0].installedRelatedProof != nil)
   }
 }
 
