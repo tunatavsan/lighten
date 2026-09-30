@@ -903,3 +903,203 @@ func catalogPermanentItemActivityAndNestedUnknownChild() async throws {
   #expect(FileManager.default.fileExists(atPath: nested + "/c"))
   #expect(FileManager.default.fileExists(atPath: fixture.candidate + "/a"))
 }
+
+private actor CandidateScopedActivity: ProcessActivitySource {
+  let clearPath: String
+  private var observedPaths: [String] = []
+
+  init(clearPath: String) { self.clearPath = clearPath }
+  func activity(for rowID: String) -> ProcessActivity { ProcessActivity(state: .unknown) }
+  func activity(for row: CatalogRow, rootPath: String) -> ProcessActivity {
+    observedPaths.append(rootPath)
+    return ProcessActivity(state: rootPath == clearPath ? .clearObservedCurrentUID : .active)
+  }
+  func paths() -> [String] { observedPaths }
+}
+
+@Test("Log candidates use their own activity root and current content age at execution")
+func catalogLogsUseCandidateActivityAndFreshContentAge() async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let catalog = try CleanCatalog(homeDirectory: fixture.home)
+  let row = try #require(catalog.row(id: "user-app-logs"))
+  let root = catalog.root(for: row)
+  let oldLogs = root + "/qa.lighten.old"
+  let activeSibling = root + "/qa.lighten.active"
+  try FileManager.default.createDirectory(atPath: oldLogs + "/archive", withIntermediateDirectories: true)
+  try FileManager.default.createDirectory(atPath: activeSibling, withIntermediateDirectories: true)
+  let log = oldLogs + "/archive/history.log"
+  try Data("older diagnostics".utf8).write(to: URL(fileURLWithPath: log))
+  let oldDate = Date(timeIntervalSinceNow: -30 * 86_400)
+  try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: log)
+  // The candidate folder was just created. Its old contents, rather than that
+  // folder's fresh mtime, make this candidate eligible.
+  #expect(catalog.allowsCandidate(path: oldLogs, row: row))
+  #expect(catalog.activityRoot(for: row, candidatePath: oldLogs) == oldLogs)
+  let tool = try #require(catalog.row(id: "pip-http-v2"))
+  #expect(catalog.activityRoot(for: tool, candidatePath: fixture.candidate) == fixture.root)
+  let snapshot = try await ScanService(homeDirectory: fixture.home).scan(rootPath: root)
+  let id = try #require(snapshot.entries.first { $0.path == oldLogs }).id
+  let plan = try catalog.plan(snapshot: snapshot, selectedIDs: [id], rowID: row.id, kind: .trash)
+  let item = try #require(plan.items.first)
+  try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: log)
+  #expect(catalog.candidateRejection(path: oldLogs, row: row)?.ruleID == "minimum-age")
+  #expect(throws: CatalogFailure.self) { try catalog.validate(item, in: plan) }
+  try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: log)
+  let freshPlan = try catalog.plan(snapshot: snapshot, selectedIDs: [id], rowID: row.id, kind: .trash)
+  let trash = fixture.home + "/Trash"
+  try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: true)
+  let activity = CandidateScopedActivity(clearPath: oldLogs)
+  let result = try await ActionExecutor(
+    journal: CleanJournal(), trash: LocalTrash(directory: trash),
+    guardService: ActionGuard(homeDirectory: fixture.home), activity: activity, catalog: catalog
+  ).execute(freshPlan)
+  #expect(result.items.map(\.outcome) == [.applied])
+  #expect(await activity.paths() == [oldLogs, oldLogs])
+  #expect(FileManager.default.fileExists(atPath: activeSibling))
+}
+
+@Test("Age checks use symlink metadata and reject unbounded trees")
+func catalogAgeIsNoFollowAndBounded() throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let catalog = try CleanCatalog(homeDirectory: fixture.home)
+  let row = try #require(catalog.row(id: "user-app-logs"))
+  let root = catalog.root(for: row)
+  let candidate = root + "/qa.lighten.link"
+  try FileManager.default.createDirectory(atPath: candidate, withIntermediateDirectories: true)
+  let oldTarget = fixture.home + "/old-target"
+  try Data("outside the log candidate".utf8).write(to: URL(fileURLWithPath: oldTarget))
+  try FileManager.default.setAttributes(
+    [.modificationDate: Date(timeIntervalSinceNow: -30 * 86_400)], ofItemAtPath: oldTarget)
+  #expect(symlink(oldTarget, candidate + "/recent-link") == 0)
+  #expect(catalog.candidateRejection(path: candidate, row: row)?.ruleID == "minimum-age")
+  #expect(catalog.newestContentModification(at: candidate, limit: 1) == nil)
+  #expect(catalog.newestContentModification(at: candidate, limit: 2) != nil)
+  #expect(try Data(contentsOf: URL(fileURLWithPath: oldTarget)) == Data("outside the log candidate".utf8))
+}
+
+@Test("Application-suffixed cache directories remain ordinary; actual and linked bundles stay distinct")
+func catalogPlainApplicationSuffixIsNotPackageAuthority() async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let catalog = try CleanCatalog(homeDirectory: fixture.home)
+  let row = try #require(catalog.row(id: "user-app-caches"))
+  let root = catalog.root(for: row)
+  let plain = root + "/qa.lighten.cache.app"
+  try FileManager.default.createDirectory(atPath: plain + "/nested.app", withIntermediateDirectories: true)
+  try Data("cache".utf8).write(to: URL(fileURLWithPath: plain + "/nested.app/data"))
+  let snapshot = try await ScanService(homeDirectory: fixture.home).scan(rootPath: root)
+  let entry = try #require(snapshot.entries.first { $0.path == plain })
+  #expect(!entry.issues.contains(.packageBoundary))
+  #expect(snapshot.entries.contains { $0.path == plain + "/nested.app/data" })
+  #expect(!ExactInventory.isApplicationName(plain))
+  let plan = try catalog.plan(snapshot: snapshot, selectedIDs: [entry.id], rowID: row.id, kind: .trash)
+  #expect(plan.items[0].policy == .catalogTrash)
+  #expect(plan.items[0].nestedApplicationIDs?.isEmpty == true)
+  try ActionGuard(homeDirectory: fixture.home).validate(plan.items[0])
+
+  let actual = root + "/qa.lighten.package.app"
+  try FileManager.default.createDirectory(atPath: actual + "/Contents", withIntermediateDirectories: true)
+  let metadata = try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": "qa.lighten.package"], format: .xml, options: 0)
+  try metadata.write(to: URL(fileURLWithPath: actual + "/Contents/Info.plist"))
+  #expect(ExactInventory.isApplicationName(actual))
+  #expect(ScanService.isPackage(actual))
+  let link = root + "/qa.lighten.link.app"
+  #expect(symlink(actual, link) == 0)
+  #expect(!ExactInventory.isApplicationName(link))
+  #expect(!ScanService.isPackage(link))
+  let fresh = try await ScanService(homeDirectory: fixture.home).scan(rootPath: root)
+  let actualID = try #require(fresh.entries.first { $0.path == actual }).id
+  let actualPlan = try catalog.plan(snapshot: fresh, selectedIDs: [actualID], rowID: row.id, kind: .trash)
+  #expect(actualPlan.items[0].nestedApplicationIDs == ["qa.lighten.package"])
+  try ActionGuard(homeDirectory: fixture.home).validate(actualPlan.items[0])
+}
+
+@Test(
+  "Known Apple daemon cache names are report-only with an explicit reason",
+  arguments: [
+    "CloudKit", "FamilyCircle", "PassKit", "askpermissiond", "GameKit", "SiriTTS", "GeoServices", "familycircled",
+  ])
+func catalogAppleDaemonCachesAreReportOnly(_ name: String) async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let catalog = try CleanCatalog(homeDirectory: fixture.home)
+  let row = try #require(catalog.row(id: "user-app-caches"))
+  let root = catalog.root(for: row)
+  let cache = root + "/" + name
+  try FileManager.default.createDirectory(atPath: cache, withIntermediateDirectories: true)
+  try Data("system cache".utf8).write(to: URL(fileURLWithPath: cache + "/data"))
+  #expect(!catalog.allowsCandidate(path: cache, row: row))
+  let refusal = try #require(catalog.candidateRejection(path: cache, row: row))
+  #expect(refusal.reason == .protectedItem)
+  #expect(refusal.ruleID == "apple-system-cache")
+  let snapshot = try await ScanService(homeDirectory: fixture.home).scan(rootPath: root)
+  let id = try #require(snapshot.entries.first { $0.path == cache }).id
+  let outcome = catalog.planAvailable(selections: [
+    CatalogSelection(snapshot: snapshot, selectedIDs: [id], rowID: row.id)
+  ])
+  #expect(outcome.plan == nil)
+  #expect(outcome.rejections == [refusal])
+}
+
+@Test(
+  "One stale candidate is skipped while other categories share a plan", arguments: [ActionKind.trash, .catalogDelete])
+func catalogAvailablePlanKeepsValidCategories(_ kind: ActionKind) async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let catalog = try CleanCatalog(homeDirectory: fixture.home)
+  let stale = fixture.root + "/LightenQA-" + UUID().uuidString
+  try FileManager.default.createDirectory(atPath: stale, withIntermediateDirectories: true)
+  try Data("changed later".utf8).write(to: URL(fileURLWithPath: stale + "/data"))
+  let other = try #require(catalog.row(id: "homebrew-downloads"))
+  let otherRoot = catalog.root(for: other)
+  try FileManager.default.createDirectory(atPath: otherRoot, withIntermediateDirectories: true)
+  let archive = otherRoot + "/LightenQA-" + UUID().uuidString
+  try Data("archive".utf8).write(to: URL(fileURLWithPath: archive))
+  let first = try await ScanService(homeDirectory: fixture.home).scan(rootPath: fixture.root)
+  let second = try await ScanService(homeDirectory: fixture.home).scan(rootPath: otherRoot)
+  let goodID = try #require(first.entries.first { $0.path == fixture.candidate }).id
+  let staleID = try #require(first.entries.first { $0.path == stale }).id
+  let otherID = try #require(second.entries.first { $0.path == archive }).id
+  try FileManager.default.removeItem(atPath: stale)
+  let selections = [
+    CatalogSelection(snapshot: first, selectedIDs: [goodID, staleID], rowID: "pip-http-v2"),
+    CatalogSelection(snapshot: second, selectedIDs: [otherID], rowID: other.id),
+  ]
+  #expect(throws: (any Error).self) { try catalog.plan(selections: selections, kind: kind) }
+  let outcome = catalog.planAvailable(selections: selections, kind: kind)
+  let plan = try #require(outcome.plan)
+  #expect(plan.kind == kind)
+  #expect(Set(plan.items.map(\.sourcePath)) == [fixture.candidate, archive])
+  #expect(Set(plan.items.compactMap(\.snapshotRunID)) == [first.runID, second.runID])
+  #expect(outcome.rejections.count == 1)
+  #expect(outcome.rejections[0].path == stale)
+  #expect(outcome.rejections[0].reason == .changedSinceScan)
+  for item in plan.items { try ActionGuard(homeDirectory: fixture.home).validate(item) }
+}
+
+@Test("Available planning does not grant permanent authority to package contents")
+func catalogAvailablePermanentStillRejectsPackageCandidates() async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let catalog = try CleanCatalog(homeDirectory: fixture.home)
+  let app = fixture.root + "/LightenQA-" + UUID().uuidString + ".app"
+  try FileManager.default.createDirectory(atPath: app + "/Contents", withIntermediateDirectories: true)
+  let info = try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": "qa.lighten.permanent-package"], format: .xml, options: 0)
+  try info.write(to: URL(fileURLWithPath: app + "/Contents/Info.plist"))
+  let snapshot = try await ScanService(homeDirectory: fixture.home).scan(rootPath: fixture.root)
+  let goodID = try #require(snapshot.entries.first { $0.path == fixture.candidate }).id
+  let appID = try #require(snapshot.entries.first { $0.path == app }).id
+  let selection = CatalogSelection(snapshot: snapshot, selectedIDs: [goodID, appID], rowID: "pip-http-v2")
+  let permanent = catalog.planAvailable(selections: [selection], kind: .catalogDelete)
+  let plan = try #require(permanent.plan)
+  #expect(plan.items.map(\.sourcePath) == [fixture.candidate])
+  #expect(plan.items[0].policy == nil)
+  #expect(permanent.rejections.map(\.path) == [app])
+  let trash = try #require(catalog.planAvailable(selections: [selection], kind: .trash).plan)
+  #expect(Set(trash.items.map(\.sourcePath)) == [fixture.candidate, app])
+  #expect(FileManager.default.fileExists(atPath: app + "/Contents/Info.plist"))
+}

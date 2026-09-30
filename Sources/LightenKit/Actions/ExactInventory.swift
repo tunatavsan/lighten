@@ -98,7 +98,7 @@ public struct ExactInventory: Sendable {
   }
 
   static func isApplicationName(_ path: String) -> Bool {
-    path.lowercased(with: Locale(identifier: "en_US_POSIX")).hasSuffix(".app")
+    ApplicationPackage.isApplication(path)
   }
 
   /// Home folders whose removal would take whole categories of user data.

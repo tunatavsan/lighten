@@ -161,6 +161,7 @@ public struct ScanService: Sendable {
   /// The extension part of `isPackage`, for entries that are not directories.
   static func isPackageName(_ path: String) -> Bool {
     let name = (path as NSString).lastPathComponent.lowercased()
+    if name.hasSuffix(".app") { return false }
     return packageSuffixes.contains { name.hasSuffix($0) }
   }
 
@@ -171,6 +172,7 @@ public struct ScanService: Sendable {
 
   static func isPackage(_ path: String) -> Bool {
     let name = (path as NSString).lastPathComponent.lowercased()
+    if name.hasSuffix(".app") { return ApplicationPackage.isApplication(path) }
     if [
       ".app", ".bundle", ".framework", ".photoslibrary", ".pkg", ".pvm", ".vmwarevm", ".sparsebundle", ".rtfd",
       ".playground", ".xcworkspace", ".xcodeproj", ".pages", ".numbers", ".key",

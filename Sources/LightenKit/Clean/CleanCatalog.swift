@@ -125,6 +125,18 @@ public struct CatalogSelection: Sendable {
   }
 }
 
+/// Available candidates share one action; unavailable candidates retain their
+/// individual reason and path for the confirmation screen.
+public struct CatalogPlanOutcome: Sendable {
+  public let plan: ActionPlan?
+  public let rejections: [PlanRejection]
+
+  public init(plan: ActionPlan?, rejections: [PlanRejection]) {
+    self.plan = plan
+    self.rejections = rejections
+  }
+}
+
 public enum CatalogFailure: Error, Sendable {
   case invalidManifest, unauthorizedPath, invalidProof, unavailable
   case resourceFailure(stage: String, code: Int32)
@@ -208,36 +220,89 @@ public struct CleanCatalog: Sendable {
   public func root(for row: CatalogRow) -> String { homeDirectory + "/" + row.relativeRoot }
   public func row(id: String) -> CatalogRow? { rows.first { $0.id == id } }
 
-  /// Generic app caches are scoped to a single app; tool caches share one row root.
+  /// Generic app caches and logs are scoped to one app; tool caches share one row root.
   public func activityRoot(for row: CatalogRow, candidatePath: String) -> String {
-    row.relativeRoot == "Library/Caches" ? candidatePath : root(for: row)
+    row.relativeRoot == "Library/Caches" || row.relativeRoot == "Library/Logs" ? candidatePath : root(for: row)
   }
 
   /// A display-time filter; it grants no authority to mutate the candidate.
   public func allowsCandidate(path: String, row: CatalogRow, kind: ActionKind = .trash) -> Bool {
+    candidateRejection(path: path, row: row, kind: kind) == nil
+  }
+
+  /// Eligibility refusals are also available to report-only rows. A new plan
+  /// and its execution both perform the same current checks again.
+  public func candidateRejection(path: String, row: CatalogRow, kind: ActionKind = .trash) -> PlanRejection? {
     let allowedRoot = root(for: row)
     guard self.row(id: row.id) == row, row.methods.contains(kind),
       path.hasPrefix(allowedRoot + "/"),
       (path as NSString).deletingLastPathComponent == allowedRoot,
-      (try? DescriptorFileSystem.validatedComponents(path)) != nil,
-      ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory) == nil
-    else { return false }
+      (try? DescriptorFileSystem.validatedComponents(path)) != nil
+    else { return PlanRejection(.unavailable, path: path, ruleID: "catalog-scope") }
+    if let rule = ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory) {
+      return PlanRejection(.protectedItem, path: path, ruleID: rule.id)
+    }
     if row.relativeRoot == "Library/Caches" {
-      let name = (path as NSString).lastPathComponent.lowercased()
-      if name.hasPrefix("com.apple.") { return false }
+      let name = (path as NSString).lastPathComponent.lowercased(with: Locale(identifier: "en_US_POSIX"))
+      if name.hasPrefix("com.apple.") || Self.appleCacheNames.contains(name) {
+        return PlanRejection(.protectedItem, path: path, ruleID: "apple-system-cache")
+      }
       if rows.contains(where: {
         $0.id != row.id && (root(for: $0) == path || root(for: $0).hasPrefix(path + "/"))
       }) {
-        return false
+        return PlanRejection(.unavailable, path: path, ruleID: "catalog-overlap")
       }
     }
     if row.minAgeDays > 0 {
-      guard let identity = try? DescriptorFileSystem.identity(at: path),
-        let modified = identity.modificationSeconds,
-        Date().timeIntervalSince1970 - Double(modified) >= Double(row.minAgeDays) * 86_400
-      else { return false }
+      guard let modified = newestContentModification(at: path) else {
+        return PlanRejection(.unavailable, path: path, ruleID: "age-unavailable")
+      }
+      guard Date().timeIntervalSince1970 - Double(modified) >= Double(row.minAgeDays) * 86_400 else {
+        return PlanRejection(.unavailable, path: path, ruleID: "minimum-age")
+      }
     }
-    return true
+    return nil
+  }
+
+  private static let appleCacheNames: Set<String> = [
+    "cloudkit", "familycircle", "passkit", "askpermissiond", "gamekit", "siritts", "geoservices", "familycircled",
+  ]
+
+  /// Metadata-only, no-follow age evidence. Nonempty folder timestamps do not
+  /// stand in for their contents; empty folders and symlinks use their own mtime.
+  /// Unknown, protected, changing, cross-volume or over-limit trees stay unavailable.
+  func newestContentModification(at path: String, limit: Int = 100_000) -> Int64? {
+    guard limit > 0, let root = try? DescriptorFileSystem.identity(at: path) else { return nil }
+    var pending: [(path: String, identity: FileIdentity, depth: Int)] = [(path, root, 0)]
+    var observed: [String: FileIdentity] = [:]
+    var newest: Int64?
+    while let current = pending.popLast() {
+      guard !Task.isCancelled, current.depth <= 128, observed.count < limit,
+        current.identity.device == root.device,
+        current.identity.flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0,
+        current.identity.kind != .other,
+        ProtectionPolicy.rule(for: current.path, homeDirectory: homeDirectory) == nil,
+        let modified = current.identity.modificationSeconds
+      else { return nil }
+      observed[current.path] = current.identity
+      if current.identity.kind == .directory {
+        guard let names = try? DescriptorFileSystem.children(at: current.path, expected: current.identity),
+          observed.count + pending.count + names.count <= limit
+        else { return nil }
+        if names.isEmpty { newest = max(newest ?? modified, modified) }
+        for name in names {
+          let child = current.path + "/" + name
+          guard let identity = try? DescriptorFileSystem.identity(at: child) else { return nil }
+          pending.append((child, identity, current.depth + 1))
+        }
+      } else {
+        newest = max(newest ?? modified, modified)
+      }
+    }
+    for (path, identity) in observed {
+      guard (try? DescriptorFileSystem.identity(at: path)) == identity else { return nil }
+    }
+    return newest
   }
 
   public func validate(_ item: PlanItem, in plan: ActionPlan) throws -> CatalogRow {
@@ -317,6 +382,83 @@ public struct CleanCatalog: Sendable {
     let plan = ActionPlan(snapshotRunID: first.snapshot.runID, kind: kind, items: sorted)
     for item in sorted { _ = try validate(item, in: plan) }
     return plan
+  }
+
+  /// Builds each selected candidate through the strict planner, then combines
+  /// only validated, nonoverlapping items. Permanent candidates keep every
+  /// strict snapshot, package, protection and method check.
+  public func planAvailable(selections: [CatalogSelection], kind: ActionKind = .trash) -> CatalogPlanOutcome {
+    var items: [PlanItem] = []
+    var rejections: [PlanRejection] = []
+    for selection in selections {
+      for id in selection.selectedIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+        let observedPath =
+          selection.snapshot.entries.first(where: { $0.id == id })?.path
+          ?? selection.snapshot.rootPath
+        do {
+          let candidate = try plan(snapshot: selection.snapshot, selectedIDs: [id], rowID: selection.rowID, kind: kind)
+          for item in candidate.items {
+            guard
+              !items.contains(where: {
+                $0.id == item.id || $0.sourcePath == item.sourcePath
+                  || $0.sourcePath.hasPrefix(item.sourcePath + "/")
+                  || item.sourcePath.hasPrefix($0.sourcePath + "/")
+              })
+            else {
+              rejections.append(PlanRejection(.unavailable, path: item.sourcePath, ruleID: "overlapping-selection"))
+              continue
+            }
+            items.append(item)
+          }
+        } catch let rejected as PlanRejection {
+          rejections.append(rejected)
+        } catch let rejected as PlanRejections {
+          rejections += rejected.rejections
+        } catch {
+          if let row = row(id: selection.rowID),
+            let refusal = candidateRejection(path: observedPath, row: row, kind: kind)
+          {
+            rejections.append(refusal)
+          } else if let failure = error as? PlanFailure, failure == .changedSinceScan {
+            rejections.append(PlanRejection(.changedSinceScan, path: observedPath))
+          } else if let failure = error as? FileSystemFailure {
+            switch failure {
+            case .changedDuringInspection:
+              rejections.append(PlanRejection(.changedSinceScan, path: observedPath))
+            case .systemCall(_, let code) where code == ENOENT || code == ENOTDIR:
+              rejections.append(PlanRejection(.changedSinceScan, path: observedPath))
+            case .systemCall(_, let code) where code == EACCES || code == EPERM:
+              rejections.append(PlanRejection(.unreadableFolder, path: observedPath))
+            default:
+              rejections.append(PlanRejection(.unavailable, path: observedPath, ruleID: "catalog-unavailable"))
+            }
+          } else {
+            rejections.append(PlanRejection(.unavailable, path: observedPath, ruleID: "catalog-unavailable"))
+          }
+        }
+      }
+    }
+    guard let runID = selections.first?.snapshot.runID, !items.isEmpty else {
+      return CatalogPlanOutcome(plan: nil, rejections: rejections)
+    }
+    let combined = ActionPlan(snapshotRunID: runID, kind: kind, items: items.sorted { $0.sourcePath < $1.sourcePath })
+    var validated: [PlanItem] = []
+    for item in combined.items {
+      do {
+        _ = try validate(item, in: combined)
+        validated.append(item)
+      } catch {
+        if let rowID = item.catalogProof?.rowID, let row = row(id: rowID),
+          let refusal = candidateRejection(path: item.sourcePath, row: row, kind: kind)
+        {
+          rejections.append(refusal)
+        } else {
+          rejections.append(PlanRejection(.unavailable, path: item.sourcePath, ruleID: "catalog-unavailable"))
+        }
+      }
+    }
+    let plan = validated.isEmpty ? nil : ActionPlan(snapshotRunID: runID, kind: kind, items: validated)
+    return CatalogPlanOutcome(plan: plan, rejections: rejections)
   }
 
   private func proof(row: CatalogRow, runID: UUID, kind: ActionKind) -> CatalogProof {
