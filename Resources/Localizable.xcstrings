@@ -305,6 +305,22 @@
         }
       }
     },
+    "Application-group ownership could not be verified. This data will stay in place.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application-group ownership could not be verified. This data will stay in place."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama grubu sahipliği doğrulanamadı. Bu veri yerinde kalacak."
+          }
+        }
+      }
+    },
     "Apps": {
       "localizations": {
         "en": {

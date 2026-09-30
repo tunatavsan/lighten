@@ -136,7 +136,9 @@ func relatedNineDomainsUndo() async throws {
   let candidates = await fixture.service.discover()
   let selected = candidates.filter { fixture.paths.contains($0.path) }
   #expect(selected.count == 9)
-  #expect(selected.allSatisfy { $0.classification == .installed && $0.defaultSelected })
+  #expect(selected.allSatisfy { $0.classification == .installed })
+  #expect(selected.filter(\.defaultSelected).count == 8)
+  #expect(selected.first { $0.path == fixture.paths[4] }?.defaultSelected == false)
   let app = try #require(fixture.service.inventory().applications.first)
   let plan = try fixture.service.planUninstall(app: app, selectedRelated: selected)
   #expect(plan.items.count == 10)
@@ -265,12 +267,14 @@ func droppedApplicationDataIsInstalled() async throws {
     withIntermediateDirectories: true)
   try FileManager.default.moveItem(atPath: fixture.app, toPath: dropped)
   let report = try #require(await ApplicationDiscovery(related: fixture.service).report(path: dropped))
-  #expect(report.related.filter(\.defaultSelected).count == 9)
+  #expect(report.related.filter(\.defaultSelected).count == 8)
   #expect(report.related.allSatisfy { $0.classification == .installed })
+  #expect(report.related.first { $0.path == fixture.paths[4] }?.canSelect == true)
+  #expect(report.related.first { $0.path == fixture.paths[4] }?.defaultSelected == false)
   let app = try #require(fixture.service.application(at: dropped))
   #expect(app.bundleID == fixture.bundleID)
   let plan = try fixture.service.planUninstall(app: app, selectedRelated: report.related.filter(\.defaultSelected))
-  #expect(plan.items.count == 10)
+  #expect(plan.items.count == 9)
   for item in plan.items.dropLast() { try fixture.service.validateInstalled(item, plan: plan) }
 }
 

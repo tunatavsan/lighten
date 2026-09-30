@@ -278,6 +278,8 @@ struct CleanView: View {
     case .recordUnavailable: String(localized: "The ownership record is unavailable. Inspect this data in Finder.")
     case .historicallyVerified: String(localized: "Previously verified owner absent here; it may exist elsewhere")
     case .nameOnly: String(localized: "The name alone does not prove former ownership. Inspect this data in Finder.")
+    case .ownershipUnavailable:
+      String(localized: "Application-group ownership could not be verified. This data will stay in place.")
     case .sharedGroup:
       String(localized: "Shared Group Containers may contain data from several apps. Inspect the folder in Finder.")
     case .installedElsewhere:

@@ -15,6 +15,7 @@ public struct BundleInventory: Sendable {
   public let unidentifiedPaths: [String]
   public let complete: Bool
   public let observedAt: Date
+  public var ownershipCandidates: [ApplicationOwnerCandidate] = []
 
   public func contains(_ bundleID: String) -> Bool {
     applications.contains { foldedAppID($0.bundleID) == foldedAppID(bundleID) }
@@ -32,7 +33,7 @@ public enum RelatedClassification: String, Sendable {
 public enum RelatedReason: String, Sendable {
   case candidateAreaUnreadable, recordUnsafe, protected, installed
   case incompleteInventory, recordUnavailable, historicallyVerified, nameOnly
-  case sharedGroup, installedElsewhere, orphanVerified, foreignOwner, mediumMatch
+  case sharedGroup, installedElsewhere, orphanVerified, foreignOwner, mediumMatch, ownershipUnavailable
 }
 
 public struct RelatedDataCandidate: Sendable, Identifiable {
@@ -53,7 +54,10 @@ public struct RelatedDataCandidate: Sendable, Identifiable {
       && matchStrength != .weak && snapshot != nil
   }
 
-  public var defaultSelected: Bool { canSelect && classification == .installed && matchStrength == .strong }
+  public var defaultSelected: Bool {
+    canSelect && classification == .installed && matchStrength == .strong
+      && !path.contains("/Library/Group Containers/")
+  }
 }
 
 public struct RelatedReceipt: Codable, Sendable, Equatable {
@@ -109,6 +113,7 @@ public struct UnknownRunningApplicationSource: RunningApplicationSource {
 public struct RelatedDataService: Sendable {
   public let homeDirectory: String
   private let applicationRoots: [String]
+  private let ownershipRoots: [String]
   private let writeVerifiedReceipts: Bool
   /// Whether the system knows an app with this bundle ID anywhere outside the
   /// Trash. A known app elsewhere keeps its data from being called a leftover.
@@ -124,19 +129,21 @@ public struct RelatedDataService: Sendable {
   ) {
     self.homeDirectory = homeDirectory
     self.applicationRoots = ["/Applications", homeDirectory + "/Applications"]
+    self.ownershipRoots = self.applicationRoots + ["/System/Applications", "/System/Library/CoreServices"]
     self.writeVerifiedReceipts = writeVerifiedReceipts
     self.installedElsewhere = installedElsewhere ?? ApplicationRegistration.isInstalled
     self.signingMetadata = ApplicationSigningMetadata.read
   }
 
   init(
-    homeDirectory: String, applicationRoots: [String],
+    homeDirectory: String, applicationRoots: [String], ownershipApplicationRoots: [String]? = nil,
     writeVerifiedReceipts: Bool = true,
     installedElsewhere: @escaping @Sendable (String) -> Bool = { _ in false },
     signingMetadata: @escaping @Sendable (String) -> ApplicationSigningMetadata? = ApplicationSigningMetadata.read
   ) {
     self.homeDirectory = homeDirectory
     self.applicationRoots = applicationRoots
+    self.ownershipRoots = ownershipApplicationRoots ?? applicationRoots
     self.writeVerifiedReceipts = writeVerifiedReceipts
     self.installedElsewhere = installedElsewhere
     self.signingMetadata = signingMetadata
@@ -244,9 +251,10 @@ public struct RelatedDataService: Sendable {
       }
       visit(root, depth: 0, volumeID: volumeID)
     }
+    let owners = ApplicationOwnershipInventory.collect(roots: ownershipRoots, applications: apps)
     return BundleInventory(
       applications: apps, unidentifiedPaths: unidentifiedPaths,
-      complete: complete, observedAt: Date())
+      complete: complete && owners.complete, observedAt: Date(), ownershipCandidates: owners.candidates)
   }
 
   /// A link resolving to a regular file (a document or script) cannot be an app.
@@ -305,16 +313,21 @@ public struct RelatedDataService: Sendable {
     var signatures: [String: ApplicationSigningMetadata] = [:]
     let selected = signingMetadata(app.linkTarget ?? app.path)
     signatures[app.path] = selected
+    signatures[app.linkTarget ?? app.path] = selected
+    for owner in apps.ownershipCandidates
+    where owner.packagePath == app.path && owner.path != (app.linkTarget ?? app.path) {
+      signatures[owner.path] = signingMetadata(owner.path)
+    }
     // Other signers are relevant only when a selected entitlement names a
     // present group container whose exclusive ownership must be checked.
     let hasGroupData =
-      selected?.groupIdentifiers.contains { domain in
+      signatures.values.flatMap(\.groupIdentifiers).contains { domain in
         (try? DescriptorFileSystem.identity(
           at: RelatedLocation.groupContainers.path(domain: domain, homeDirectory: homeDirectory))) != nil
-      } == true
+      }
     if hasGroupData {
-      for owner in apps.applications where owner.path != app.path {
-        signatures[owner.path] = signingMetadata(owner.linkTarget ?? owner.path)
+      for owner in apps.ownershipCandidates where owner.path != (app.linkTarget ?? app.path) {
+        signatures[owner.path] = signingMetadata(owner.path)
       }
     }
     return (
@@ -352,9 +365,12 @@ public struct RelatedDataService: Sendable {
       ProtectionPolicy.rule(for: app.path, homeDirectory: homeDirectory) == nil,
       Self.bundleID(at: app.path) == app.bundleID
     else { return current }
+    let owners = ApplicationOwnershipInventory.collect(
+      roots: ownershipRoots, applications: current.applications + [app])
     return BundleInventory(
       applications: current.applications + [app], unidentifiedPaths: current.unidentifiedPaths,
-      complete: current.complete, observedAt: current.observedAt)
+      complete: current.complete && owners.complete, observedAt: current.observedAt,
+      ownershipCandidates: owners.candidates)
   }
 
   private func discover(
@@ -369,8 +385,8 @@ public struct RelatedDataService: Sendable {
     let signatures =
       suppliedSignatures
       ?? Dictionary(
-        apps.applications.compactMap { app -> (String, ApplicationSigningMetadata)? in
-          signingMetadata(app.linkTarget ?? app.path).map { (app.path, $0) }
+        apps.ownershipCandidates.compactMap { owner -> (String, ApplicationSigningMetadata)? in
+          signingMetadata(owner.path).map { (owner.path, $0) }
         },
         uniquingKeysWith: { first, _ in first })
     var candidates: [RelatedDataCandidate] = []
@@ -387,7 +403,10 @@ public struct RelatedDataService: Sendable {
       if let app {
         let domains: [String]
         if location == .groupContainers {
-          domains = Array(signatures[app.path]?.groupIdentifiers ?? [])
+          domains = Array(
+            Set(
+              apps.ownershipCandidates.filter { $0.packagePath == app.path }
+                .flatMap { signatures[$0.path]?.groupIdentifiers ?? [] }))
         } else {
           domains = [app.bundleID]
         }
@@ -425,7 +444,12 @@ public struct RelatedDataService: Sendable {
     for (location, domain, path) in paths {
       if Task.isCancelled { return [] }
       let identity = try? DescriptorFileSystem.identity(at: path)
-      let groupOwners = apps.applications.filter { signatures[$0.path]?.groupIdentifiers.contains(domain) == true }
+      let claimingPackages = Set(
+        apps.ownershipCandidates.filter {
+          signatures[$0.path]?.groupIdentifiers.contains(domain) == true
+        }.map(\.packagePath))
+      let groupOwners = apps.applications.filter { claimingPackages.contains($0.path) }
+      let ownershipVerified = apps.complete && apps.ownershipCandidates.allSatisfy { signatures[$0.path] != nil }
       let exactOwners = apps.applications.filter { foldedAppID($0.bundleID) == foldedAppID(domain) }
       let prefixOwners = apps.applications.filter { owner in
         guard let team = signatures[owner.path]?.teamID else { return false }
@@ -461,7 +485,10 @@ public struct RelatedDataService: Sendable {
       let protection = ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory)
       let classification: RelatedClassification
       let reason: RelatedReason
-      if location == .groupContainers && (owners.count != 1 || !apps.complete) {
+      if location == .groupContainers && (!ownershipVerified || domain.lowercased().hasPrefix("group.com.apple.")) {
+        classification = .shared
+        reason = ownershipVerified ? .sharedGroup : .ownershipUnavailable
+      } else if location == .groupContainers && (claimingPackages.count != 1 || owners.count != 1) {
         classification = .shared
         reason = .sharedGroup
       } else if protection != nil && !(location == .groupContainers && protection?.id == "group-containers") {
@@ -660,10 +687,13 @@ public struct RelatedDataService: Sendable {
       return nil
     }
     if location == .groupContainers {
-      let owners = inventory.applications.filter {
-        signingMetadata($0.linkTarget ?? $0.path)?.groupIdentifiers.contains(domain) == true
+      guard inventory.complete, !domain.lowercased().hasPrefix("group.com.apple.") else { return nil }
+      var owners: Set<String> = []
+      for candidate in inventory.ownershipCandidates {
+        guard let signature = signingMetadata(candidate.path) else { return nil }
+        if signature.groupIdentifiers.contains(domain) { owners.insert(candidate.packagePath) }
       }
-      return owners.count == 1 && owners[0] == app ? .relatedGroupContainer : nil
+      return owners == [app.path] ? .relatedGroupContainer : nil
     }
     if domain != app.bundleID {
       guard let team = signingMetadata(app.path)?.teamID,
@@ -764,9 +794,17 @@ public struct RelatedDataService: Sendable {
         Self.bundleID(at: proof.appPath) == proof.bundleID
       else { throw RelatedFailure.unsupportedInstalledData }
       if location == .groupContainers {
-        guard signingMetadata(proof.appPath)?.groupIdentifiers.contains(domain) == true else {
+        let app = InstalledApplication(bundleID: proof.bundleID, path: proof.appPath, version: nil)
+        let owners = ApplicationOwnershipInventory.collect(roots: [], applications: [app])
+        guard owners.complete, !domain.lowercased().hasPrefix("group.com.apple.") else {
           throw RelatedFailure.unsupportedInstalledData
         }
+        var claimed = false
+        for owner in owners.candidates {
+          guard let signature = signingMetadata(owner.path) else { throw RelatedFailure.unsupportedInstalledData }
+          claimed = claimed || (owner.packagePath == app.path && signature.groupIdentifiers.contains(domain))
+        }
+        guard claimed else { throw RelatedFailure.unsupportedInstalledData }
       } else if domain != proof.bundleID {
         guard let team = signingMetadata(proof.appPath)?.teamID,
           domain == team + "." + proof.bundleID || domain.hasPrefix(team + "." + proof.bundleID + ".")
