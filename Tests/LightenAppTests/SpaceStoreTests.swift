@@ -161,3 +161,32 @@ struct SpaceStoreTests {
     return try #require(store.layout)
   }
 }
+
+extension SpaceStoreTests {
+  @MainActor @Test("Overview decodes only the shared Space picture")
+  func overviewPicture() async throws {
+    let fixture = "/private/tmp/LightenQA-" + UUID().uuidString
+    let root = fixture + "/home"
+    try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: fixture) }
+    try Data(repeating: 1, count: 4096).write(to: URL(fileURLWithPath: root + "/data.bin"))
+    let run = try ScanEngine().start(root: root)
+    await run.waitUntilFinished()
+    let pictures = ResultPictureStore(directory: fixture + "/pictures")
+    try pictures.saveSpace(tree: run.tree)
+    let cache = ScanCache(directory: fixture + "/cache", homeDirectory: root)
+    let store = SpaceStore(cache: cache, pictures: pictures)
+    store.selectedRoot = URL(fileURLWithPath: root)
+    store.showCachedSummary()
+    for _ in 0..<100 {
+      if store.rootSummary != nil { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(store.tree == nil)
+    #expect(store.rootSummary?.logical.completeTotal == 4096)
+    #expect(store.rootSummary?.inode == 0)
+    #expect(store.isShowingCache)
+    await store.clearScanCache()
+    #expect(pictures.loadSpace(root: root) == nil)
+  }
+}

@@ -44,7 +44,7 @@ struct SpaceView: View {
     VStack(spacing: 0) {
       header
       Divider()
-      if store.tree != nil {
+      if store.current != nil {
         breadcrumb
         Divider()
         GeometryReader { geometry in
@@ -71,7 +71,10 @@ struct SpaceView: View {
     .background(LightenStyle.canvas)
     .tint(LightenStyle.accent)
     .navigationTitle(String(localized: "Space"))
-    .onAppear { store.loadVolumes() }
+    .onAppear {
+      store.spaceDidAppear()
+      store.loadVolumes()
+    }
     .sheet(item: $actions.pending) { presentation in
       ConfirmationView(presentation: presentation, actions: actions)
     }

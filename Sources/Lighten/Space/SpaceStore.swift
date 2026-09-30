@@ -12,10 +12,62 @@ enum ScanPhase: Equatable {
 final class SpaceStore {
   @ObservationIgnored private let engine: ScanEngine
   @ObservationIgnored private let cache: ScanCache?
+  @ObservationIgnored private let pictures: ResultPictureStore?
+  @ObservationIgnored private var generation = UUID()
+  @ObservationIgnored private var openingGeneration: UUID?
+  @ObservationIgnored private var picture: ResultPicture<SpacePicture>?
+  @ObservationIgnored private var appearedAt: ContinuousClock.Instant?
+  @ObservationIgnored private var scanBaseline: ScanReplayBaseline?
+  private(set) var rootSummary: SpaceItem?
+  private(set) var firstLayoutMilliseconds: Double?
+  private(set) var cacheUsageBytes: Int64 = 0
+  private(set) var cacheMessage: String?
 
-  init(engine: ScanEngine = ScanEngine(), cache: ScanCache? = ScanCache()) {
+  func loadCacheUsage() {
+    let cache = self.cache
+    Task {
+      cacheUsageBytes = await Task.detached { cache?.usageBytes() ?? 0 }.value
+    }
+  }
+
+  func clearScanCache() async {
+    let cache = self.cache
+    let pictures = self.pictures
+    do {
+      try await Task.detached {
+        try cache?.clear()
+        try pictures?.clearSpacePictures()
+      }.value
+      cacheMessage = nil
+      loadCacheUsage()
+    } catch { cacheMessage = FailureText.describe(error) }
+  }
+
+  func spaceDidAppear() {
+    appearedAt = .now
+    firstLayoutMilliseconds = nil
+    if layout != nil { recordFirstLayout() }
+  }
+
+  private func recordFirstLayout() {
+    guard firstLayoutMilliseconds == nil, let appearedAt else { return }
+    let duration = appearedAt.duration(to: .now).components
+    firstLayoutMilliseconds = Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1e15
+  }
+
+  init(
+    engine: ScanEngine = ScanEngine(), cache: ScanCache? = ScanCache(),
+    pictures: ResultPictureStore? = nil
+  ) {
     self.engine = engine
     self.cache = cache
+    self.pictures =
+      pictures
+      ?? cache.map {
+        ResultPictureStore(
+          directory: $0.directory == ScanCache.defaultDirectory
+            ? ResultPictureStore.defaultDirectory : $0.directory + "-pictures")
+      }
   }
 
   var selectedRoot = URL(fileURLWithPath: NSHomeDirectory())
@@ -71,20 +123,21 @@ final class SpaceStore {
     if tree == nil {
       showCachedAndRefresh()
     } else if cachedAt != nil, phase != .scanning {
-      startScan(keepingCache: true)
+      showCachedAndRefresh()
     }
   }
 
-  /// Shows the last finished scan without starting a new one (for Overview).
+  /// Overview needs only the small, shared presentation result.
   func showCachedSummary() {
-    guard tree == nil, let cache else { return }
+    guard rootSummary == nil, let pictures else { return }
     let root = selectedRoot.path
+    let token = generation
     Task {
-      let loaded = await Task.detached { cache.load(root: root) }.value
-      guard selectedRoot.path == root, tree == nil, let loaded else { return }
-      install(tree: loaded.tree)
-      cachedAt = loaded.savedAt
-      phase = .complete
+      let loaded = await Task.detached { pictures.loadSpace(root: root) }.value
+      guard generation == token, selectedRoot.path == root, rootSummary == nil, let loaded else { return }
+      picture = loaded
+      rootSummary = loaded.content.root.item
+      cachedAt = loaded.observedAt
     }
   }
 
@@ -107,17 +160,53 @@ final class SpaceStore {
     showCachedAndRefresh()
   }
 
-  /// A cached picture appears at once and a fresh scan starts behind it.
+  /// The picture is decoded first; the full tree and historical replay stay
+  /// off the main actor. Cached rows remain unselectable until refresh succeeds.
   private func showCachedAndRefresh() {
     guard let cache else { return }
     let root = selectedRoot.path
+    let token = generation
+    guard openingGeneration != token else { return }
+    openingGeneration = token
+    let pictures = self.pictures
+    let engine = self.engine
+    phase = .scanning
     Task {
-      let loaded = await Task.detached { cache.load(root: root) }.value
-      guard selectedRoot.path == root, tree == nil, let loaded else { return }
-      install(tree: loaded.tree)
+      if let loaded = await Task.detached(operation: { pictures?.loadSpace(root: root) }).value {
+        guard generation == token, selectedRoot.path == root else { return }
+        picture = loaded
+        cachedAt = loaded.observedAt
+        rootSummary = loaded.content.root.item
+        refreshView(forceLayout: true)
+      }
+      let loaded = await Task.detached { cache.loadEntry(root: root) }.value
+      guard generation == token, selectedRoot.path == root else { return }
+      guard let loaded, let baseline = loaded.baseline else {
+        startScan(keepingCache: cachedAt != nil)
+        return
+      }
       cachedAt = loaded.savedAt
-      phase = .complete
-      startScan(keepingCache: true)
+      let current = await Task.detached { ScanReplayBaseline.capture(root: root) }.value
+      let replay = await FileEventsReplay.replay(root: root, since: baseline.eventID)
+      guard generation == token, selectedRoot.path == root else { return }
+      let outcome = await Task.detached {
+        engine.reconcile(tree: loaded.tree, replay: replay, baseline: baseline, currentBaseline: current)
+      }.value
+      guard generation == token, selectedRoot.path == root else { return }
+      if case .refreshed = outcome {
+        picture = nil
+        cachedAt = nil
+        install(tree: loaded.tree)
+        phase = rootSummary?.partial == true ? .partial : .complete
+        let nextBaseline = current.map { ScanReplayBaseline(eventID: replay.latestID, volumeUUID: $0.volumeUUID) }
+        Task.detached(priority: .utility) {
+          try? cache.save(loaded.tree, baseline: nextBaseline)
+          try? pictures?.saveSpace(tree: loaded.tree)
+        }
+      } else {
+        if tree == nil, picture == nil { install(tree: loaded.tree) }
+        startScan(keepingCache: true)
+      }
     }
   }
 
@@ -140,14 +229,18 @@ final class SpaceStore {
       return
     }
     run = started
+    scanBaseline = started.replayBaseline
     liveTree = started.tree
     phase = .scanning
     progress = nil
     if !keepingCache {
       cachedAt = nil
+      picture = nil
       install(tree: started.tree)
     }
     let cache = self.cache
+    let pictures = self.pictures
+    let baseline = scanBaseline
     progressTask = Task { [weak self] in
       for await update in started.progress {
         guard let self, self.run === started else { return }
@@ -156,7 +249,10 @@ final class SpaceStore {
       guard let self, self.run === started else { return }
       if !started.tree.wasCancelled, let cache {
         let tree = started.tree
-        Task.detached(priority: .utility) { try? cache.save(tree) }
+        Task.detached(priority: .utility) {
+          try? cache.save(tree, baseline: baseline)
+          try? pictures?.saveSpace(tree: tree)
+        }
       }
     }
   }
@@ -175,6 +271,7 @@ final class SpaceStore {
       // Swap the finished fresh tree in, keeping the place the person was looking at.
       let path = current?.path
       cachedAt = nil
+      picture = nil
       install(tree: started.tree, keepingPath: path)
     }
     phase = started.tree.item(started.tree.rootID)?.partial == true ? .partial : .complete
@@ -182,6 +279,8 @@ final class SpaceStore {
 
   private func install(tree newTree: ScanTree?, keepingPath: String? = nil) {
     tree = newTree
+    rootSummary = newTree.flatMap { $0.item($0.rootID) }
+    if newTree == nil { picture = nil }
     currentID = newTree.map { tree in keepingPath.flatMap { tree.find(path: $0) } ?? tree.rootID }
     selectedID = nil
     showingOther = false
@@ -198,6 +297,7 @@ final class SpaceStore {
   }
 
   private func cancelRun() {
+    generation = UUID()
     run?.cancel()
     run = nil
     progressTask?.cancel()
@@ -240,6 +340,25 @@ final class SpaceStore {
   /// O(children of the open folder); called at most at the publication rate.
   private func refreshView(forceLayout: Bool) {
     guard let tree, let currentID else {
+      if let picture {
+        let root = picture.content.root.item
+        current = root
+        currentID = root.id
+        rootSummary = root
+        crumbs = [root]
+        let sorted = picture.content.children.map(\.item).sorted {
+          $0.bytes(metric).knownLowerBound > $1.bytes(metric).knownLowerBound
+        }
+        let front = Array(sorted.prefix(24))
+        let rest = Array(sorted.dropFirst(24))
+        let bytes = rest.reduce(Int64(0)) { $0 + $1.bytes(metric).knownLowerBound }
+        group = SpaceGroup(
+          items: front, other: rest, otherBytes: ByteAggregate(knownLowerBound: bytes, completeTotal: nil))
+        visibleByID = Dictionary(uniqueKeysWithValues: sorted.map { ($0.id, $0) })
+        refreshSelection()
+        scheduleLayout(force: forceLayout)
+        return
+      }
       current = nil
       group = nil
       crumbs = []
@@ -247,6 +366,7 @@ final class SpaceStore {
       selected = nil
       return
     }
+    rootSummary = tree.item(tree.rootID)
     current = tree.item(currentID)
     let newGroup = tree.group(at: currentID, metric: metric)
     group = newGroup
@@ -271,13 +391,13 @@ final class SpaceStore {
 
   /// Relayout at most ~3 times a second while numbers move; immediately on navigation.
   private func scheduleLayout(force: Bool) {
-    guard let size = layoutSize, let tree, let currentID, let group else { return }
+    guard let size = layoutSize, let currentID, let group else { return }
     var values = (showingOther ? group.other : group.items).map { ($0.id, $0.bytes(metric).knownLowerBound) }
     if !showingOther, !group.other.isEmpty {
       values.append((SpaceView.otherID, group.otherBytes.knownLowerBound))
     }
     let key = LayoutKey(
-      run: tree.runID, node: currentID, metric: metric, showingOther: showingOther,
+      run: tree?.runID ?? generation, node: currentID, metric: metric, showingOther: showingOther,
       width: Int(size.width.rounded()), height: Int(size.height.rounded()), values: values.map(\.1))
     guard key != layoutKey else { return }
     let now = ContinuousClock.now
@@ -302,6 +422,7 @@ final class SpaceStore {
       }.value
       guard !Task.isCancelled, layoutKey == key else { return }
       layout = result
+      recordFirstLayout()
     }
   }
 }

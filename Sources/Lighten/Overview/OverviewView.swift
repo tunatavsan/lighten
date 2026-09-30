@@ -64,7 +64,7 @@ struct OverviewView: View {
                 " · \(String(localized: "Last scan")) \($0.formatted(date: .abbreviated, time: .shortened))"
               } ?? ""))
           Text(
-            "\(String(localized: "Scanned items")): \(space.tree.flatMap { $0.item($0.rootID) }.map { $0.itemCount.formatted() } ?? String(localized: "Not scanned"))"
+            "\(String(localized: "Scanned items")): \(space.rootSummary.map { $0.itemCount.formatted() } ?? String(localized: "Not scanned"))"
           )
         }
         Spacer(minLength: 0)
@@ -84,7 +84,7 @@ struct OverviewView: View {
   }
 
   private var scanSize: String {
-    guard let tree = space.tree, let root = tree.item(tree.rootID) else {
+    guard let root = space.rootSummary else {
       return String(localized: "Not scanned")
     }
     if let complete = root.logical.completeTotal { return format(complete) }

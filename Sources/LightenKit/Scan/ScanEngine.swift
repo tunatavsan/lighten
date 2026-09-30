@@ -70,6 +70,7 @@ final class FinishSignal: Sendable {
 /// One scan: a live tree, a throttled progress stream, cancellation and focus.
 public final class ScanRun: Sendable {
   public let tree: ScanTree
+  public let replayBaseline: ScanReplayBaseline?
   public let counters: ScanCounters
   public let progress: AsyncStream<ScanProgress>
   let walker: ParallelWalker
@@ -77,9 +78,10 @@ public final class ScanRun: Sendable {
 
   init(
     tree: ScanTree, counters: ScanCounters, walker: ParallelWalker, progress: AsyncStream<ScanProgress>,
-    finish: FinishSignal
+    finish: FinishSignal, replayBaseline: ScanReplayBaseline? = nil
   ) {
     self.tree = tree
+    self.replayBaseline = replayBaseline
     self.counters = counters
     self.walker = walker
     self.progress = progress
@@ -112,6 +114,7 @@ public struct ScanEngine: Sendable {
       requestedRoot.count > 1 && requestedRoot.hasSuffix("/") ? String(requestedRoot.dropLast()) : requestedRoot
     // "/" walks the Data volume once through its firmlinked names; the sealed
     // system volume becomes one measured block.
+    let baseline = ScanReplayBaseline.capture(root: root)
     let physical = root == "/" ? "/System/Volumes/Data" : root
     var details = stat()
     guard lstat(physical, &details) == 0 else { throw .unavailable(errno) }
@@ -136,7 +139,8 @@ public struct ScanEngine: Sendable {
       tree: tree, counters: counters, automaton: automaton, boundaryDevice: device,
       homeDirectory: configuration.homeDirectory, firmlinks: firmlinks, workers: configuration.workers,
       onFinish: { finish.signal() })
-    let run = ScanRun(tree: tree, counters: counters, walker: walker, progress: stream, finish: finish)
+    let run = ScanRun(
+      tree: tree, counters: counters, walker: walker, progress: stream, finish: finish, replayBaseline: baseline)
     let interval = configuration.publishInterval
     // The publisher lives exactly as long as the walk; yields after the consumer
     // stops listening are dropped by the stream.

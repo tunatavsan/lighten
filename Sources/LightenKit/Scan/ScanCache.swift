@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 /// Last completed scan tree per root, for an instant first screen on the next
@@ -6,8 +7,18 @@ import Foundation
 public struct ScanCache: Sendable {
   public let directory: String
 
-  public init(directory: String = ScanCache.defaultDirectory) {
+  public let homeDirectory: String
+  public let maximumBytes: Int
+  public let maximumRoots: Int
+
+  public init(
+    directory: String = ScanCache.defaultDirectory, homeDirectory: String = NSHomeDirectory(),
+    maximumBytes: Int = 300_000_000, maximumRoots: Int = 3
+  ) {
     self.directory = directory
+    self.homeDirectory = homeDirectory
+    self.maximumBytes = maximumBytes
+    self.maximumRoots = maximumRoots
   }
 
   public static var defaultDirectory: String {
@@ -21,19 +32,59 @@ public struct ScanCache: Sendable {
     return directory + "/" + digest + ".bin"
   }
 
-  public func save(_ tree: ScanTree) throws {
-    guard tree.isFinished, !tree.wasCancelled else { return }
-    let data = tree.storage.withLock { storage in Self.encode(storage, savedAt: Date()) }
-    try FileManager.default.createDirectory(
-      atPath: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-    try data.write(to: URL(fileURLWithPath: file(for: tree.rootPath)), options: [.atomic])
+  public struct Entry: Sendable {
+    public let tree: ScanTree
+    public let savedAt: Date
+    public let baseline: ScanReplayBaseline?
   }
 
-  /// A finished tree and the time its scan completed, or nil when absent or unreadable.
+  public enum Failure: Error, Equatable { case tooLarge, retainedHomeExceedsLimit }
+
+  public func save(_ tree: ScanTree, baseline: ScanReplayBaseline? = nil) throws {
+    guard tree.isFinished, !tree.wasCancelled else { return }
+    // Arrays and strings are CoW: encoding owns a stable snapshot without
+    // blocking readers for the duration of serialization.
+    let snapshot = tree.storage.withLock { $0 }
+    let payload = Self.encode(Self.compacted(snapshot), savedAt: Date())
+    var writer = Writer()
+    writer.u32(0x4C_53_43_32)
+    writer.u64(baseline?.eventID ?? 0)
+    writer.optionalString(baseline?.volumeUUID.uuidString)
+    let header = writer.data
+    writer.data.append(contentsOf: SHA256.hash(data: header + payload))
+    writer.data.append(payload)
+    guard writer.data.count <= maximumBytes else { throw Failure.tooLarge }
+    try prepareDirectory()
+    try prune(reserving: writer.data.count, replacing: tree.rootPath)
+    let name = URL(fileURLWithPath: file(for: tree.rootPath)).lastPathComponent
+    try ResultPictureFile.write(directory: directory, name: name, data: writer.data, limit: maximumBytes)
+    try prune(reserving: 0, replacing: nil)
+  }
+
   public func load(root: String) -> (tree: ScanTree, savedAt: Date)? {
-    guard let data = try? Data(contentsOf: URL(fileURLWithPath: file(for: root)), options: [.mappedIfSafe]),
-      let decoded = Self.decode(data), decoded.storage.rootPath == root, !decoded.storage.nodes.isEmpty
+    loadEntry(root: root).map { ($0.tree, $0.savedAt) }
+  }
+
+  public func loadEntry(root: String) -> Entry? {
+    let name = URL(fileURLWithPath: file(for: root)).lastPathComponent
+    guard let data = try? ResultPictureFile.read(directory: directory, name: name, limit: maximumBytes) else {
+      return nil
+    }
+    var reader = Reader(data: data)
+    guard reader.u32() == 0x4C_53_43_32, let eventID = reader.u64(), let uuidText = reader.optionalString(),
+      reader.offset + 32 <= data.count
     else { return nil }
+    let header = Data(data.prefix(reader.offset))
+    let checksum = data[reader.offset..<(reader.offset + 32)]
+    let payload = Data(data.dropFirst(reader.offset + 32))
+    guard Data(SHA256.hash(data: header + payload)) == checksum,
+      let decoded = Self.decode(payload), decoded.storage.rootPath == root,
+      !decoded.storage.nodes.isEmpty, decoded.savedAt <= Date(),
+      decoded.savedAt.timeIntervalSince1970.isFinite
+    else { return nil }
+    let baseline = uuidText.flatMap(UUID.init(uuidString:)).map {
+      ScanReplayBaseline(eventID: eventID, volumeUUID: $0)
+    }
     let tree = ScanTree(
       runID: UUID(), rootPath: root, root: decoded.storage.nodes[0], firmlinks: decoded.storage.firmlinks,
       startedAt: decoded.savedAt)
@@ -42,7 +93,114 @@ public struct ScanCache: Sendable {
       storage.finished = true
       storage.cancelled = false
     }
-    return (tree, decoded.savedAt)
+    return Entry(tree: tree, savedAt: decoded.savedAt, baseline: baseline)
+  }
+
+  public func usageBytes() -> Int64 {
+    cacheFiles().reduce(0) { $0 + $1.bytes }
+  }
+
+  public func clear() throws {
+    for entry in cacheFiles() { try removeCacheFile(entry.path) }
+  }
+
+  private func cacheFiles() -> [(path: String, bytes: Int64, modified: Date)] {
+    let fd = DirectoryReader.openDirectory(directory)
+    guard fd >= 0 else { return [] }
+    defer { close(fd) }
+    guard let names = try? ExactInventory.names(fd: fd) else { return [] }
+    return names.compactMap { name in
+      let path = directory + "/" + name
+      var info = stat()
+      guard fstatat(fd, name, &info, AT_SYMLINK_NOFOLLOW) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
+      return (
+        path, info.st_size,
+        Date(timeIntervalSince1970: Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1e9)
+      )
+    }
+  }
+
+  private func prepareDirectory() throws {
+    let components = try DescriptorFileSystem.validatedComponents(directory)
+    var fd = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+    guard fd >= 0 else { throw ResultPictureFailure.unsafe }
+    defer { close(fd) }
+    for component in components {
+      var next = openat(fd, component, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY)
+      if next < 0 && errno == ENOENT {
+        guard mkdirat(fd, component, 0o700) == 0 || errno == EEXIST else {
+          throw FileSystemFailure.systemCall("create scan cache directory", errno)
+        }
+        next = openat(fd, component, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY)
+      }
+      guard next >= 0 else { throw ResultPictureFailure.unsafe }
+      close(fd)
+      fd = next
+    }
+    var details = stat()
+    guard fstat(fd, &details) == 0, details.st_uid == geteuid(), fchmod(fd, 0o700) == 0 else {
+      throw ResultPictureFailure.unsafe
+    }
+  }
+
+  private func removeCacheFile(_ path: String) throws {
+    let fd = DirectoryReader.openDirectory(directory)
+    guard fd >= 0 else { throw FileSystemFailure.systemCall("open scan cache", errno) }
+    defer { close(fd) }
+    guard unlinkat(fd, URL(fileURLWithPath: path).lastPathComponent, 0) == 0 else {
+      throw FileSystemFailure.systemCall("remove scan cache", errno)
+    }
+  }
+
+  private static func isCurrentFormat(_ path: String) -> Bool {
+    let fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW_ANY | O_NONBLOCK)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    var bytes = [UInt8](repeating: 0, count: 4)
+    let count = bytes.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+    return count == 4 && bytes == [0x32, 0x43, 0x53, 0x4C]
+  }
+
+  private func prune(reserving bytes: Int, replacing root: String?) throws {
+    let home = file(for: homeDirectory)
+    let replacement = root.map(file(for:))
+    var entries = cacheFiles().filter { $0.path != replacement }
+    // Unsupported legacy files are disposable pictures, never scan evidence.
+    for entry in entries {
+      guard Self.isCurrentFormat(entry.path)
+      else {
+        try removeCacheFile(entry.path)
+        continue
+      }
+    }
+    entries = cacheFiles().filter { $0.path != replacement }
+    var total = entries.reduce(Int64(bytes)) { $0 + $1.bytes }
+    var count = entries.count + (bytes > 0 ? 1 : 0)
+    for entry in entries.sorted(by: { $0.modified < $1.modified }) where entry.path != home {
+      if total <= maximumBytes && count <= maximumRoots { break }
+      try removeCacheFile(entry.path)
+      total -= entry.bytes
+      count -= 1
+    }
+    guard total <= maximumBytes && count <= maximumRoots else { throw Failure.retainedHomeExceedsLimit }
+  }
+
+  private static func compacted(_ snapshot: ScanTree.Storage) -> ScanTree.Storage {
+    var result = snapshot
+    var order: [Int32] = [0]
+    var position = 0
+    while position < order.count {
+      order.append(contentsOf: snapshot.nodes[Int(order[position])].childNodes)
+      position += 1
+    }
+    let mapping = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, Int32($0.offset)) })
+    result.nodes = order.map { index in
+      var node = snapshot.nodes[Int(index)]
+      node.parent = node.parent < 0 ? -1 : mapping[node.parent]!
+      node.childNodes = node.childNodes.map { mapping[$0]! }
+      return node
+    }
+    return result
   }
 
   // MARK: Binary format (little-endian, versioned by magic)

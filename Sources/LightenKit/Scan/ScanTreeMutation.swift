@@ -146,3 +146,72 @@ extension ScanTree {
     }
   }
 }
+
+extension ScanTree {
+  /// Splices a measured directory into the same tree and adjusts ancestor
+  /// aggregates by the exact difference. Unchanged child nodes are reused.
+  func replaceDirectory(_ index: Int32, measured: Storage, preserved: [Int32: Int32]) {
+    storage.withLock { storage in
+      let previous = storage.nodes[Int(index)]
+      var removed: [Int32] = []
+      var pending = previous.childNodes
+      let reused = Set(preserved.values)
+      while let child = pending.popLast() {
+        if reused.contains(child) { continue }
+        pending.append(contentsOf: storage.nodes[Int(child)].childNodes)
+        removed.append(child)
+      }
+      for child in removed {
+        storage.nodes[Int(child)] = Node(name: "", parent: -2, kind: .directory, device: 0, inode: 0)
+      }
+      var free = removed
+      var mapping: [Int32: Int32] = [0: index]
+      for position in measured.nodes.indices.dropFirst() {
+        let local = Int32(position)
+        if let existing = preserved[local] {
+          mapping[local] = existing
+        } else {
+          if let slot = free.popLast() {
+            mapping[local] = slot
+            storage.nodes[Int(slot)] = measured.nodes[position]
+          } else {
+            mapping[local] = Int32(storage.nodes.count)
+            storage.nodes.append(measured.nodes[position])
+          }
+        }
+      }
+      for position in measured.nodes.indices.reversed() {
+        let local = Int32(position)
+        if preserved[local] != nil { continue }
+        var node = measured.nodes[position]
+        node.parent = position == 0 ? previous.parent : mapping[node.parent]!
+        node.childNodes = node.childNodes.compactMap { mapping[$0] }
+        node.pending = 0
+        node.lifecycle = .done
+        if position == 0 {
+          node.name = previous.name
+          node.kind = previous.kind
+          node.pathOverride = previous.pathOverride
+        }
+        node.partialDescendant = node.childNodes.contains {
+          storage.nodes[Int($0)].ownReason != nil || storage.nodes[Int($0)].partialDescendant
+        }
+        storage.nodes[Int(mapping[local]!)] = node
+      }
+      let replacement = storage.nodes[Int(index)]
+      Self.add(
+        logical: replacement.logical - previous.logical,
+        allocated: replacement.allocated - previous.allocated,
+        items: replacement.items - previous.items, from: previous.parent, in: &storage.nodes)
+      var cursor = previous.parent
+      while cursor >= 0 {
+        let children = storage.nodes[Int(cursor)].childNodes
+        storage.nodes[Int(cursor)].partialDescendant = children.contains {
+          storage.nodes[Int($0)].ownReason != nil || storage.nodes[Int($0)].partialDescendant
+        }
+        cursor = storage.nodes[Int(cursor)].parent
+      }
+      storage.version &+= 1
+    }
+  }
+}
