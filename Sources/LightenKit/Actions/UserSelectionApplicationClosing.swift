@@ -21,9 +21,13 @@ public struct NativeUserSelectionApplicationClosing: UserSelectionApplicationClo
     let records = try await Task.detached(priority: .utility) {
       var pointer: UnsafeMutablePointer<LightenApplicationProcess>?
       var count: UInt32 = 0
-      let result = physicalRoot.withCString { lighten_copy_application_processes($0, &pointer, &count) }
+      var administrator: Int32 = 0
+      let result = physicalRoot.withCString {
+        lighten_copy_current_user_application_processes($0, &pointer, &count, &administrator)
+      }
       defer { lighten_free_application_processes(pointer) }
       guard result == 0 else { throw ProcessActivityFailure.unavailable }
+      guard administrator == 0 else { throw PlanRejection(.needsAdministrator, path: rootPath) }
       return Array(UnsafeBufferPointer(start: pointer, count: Int(count)))
     }.value
     for record in records {
@@ -54,7 +58,8 @@ public struct NativeUserSelectionApplicationClosing: UserSelectionApplicationClo
     }
     let forcedDeadline = ContinuousClock.now + .seconds(2)
     while ContinuousClock.now < forcedDeadline {
-      let activity = await NativeApplicationActivitySource().activity(applicationPath: physicalRoot)
+      let activity = await NativeApplicationActivitySource(scope: .currentUser).activity(applicationPath: physicalRoot)
+      guard !activity.requiresAdministrator else { throw PlanRejection(.needsAdministrator, path: rootPath) }
       switch activity.state {
       case .clearObservedProcesses: return
       case .unknown: throw ProcessActivityFailure.unavailable

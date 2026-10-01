@@ -32,6 +32,13 @@ int lighten_process_activity(const char *root, char *process_name, size_t name_c
 // Uses proc_pidpath, recovering complete mapped-vnode evidence only for ENOENT.
 // Never reads arguments or the process environment.
 int lighten_application_activity(const char *root, char *process_name, size_t name_capacity);
+// A complete current-UID census is mandatory. Unavailable foreign processes do
+// not veto it; an observed stable foreign executable under root sets the flag.
+int lighten_current_user_application_activity(const char *root, char *process_name, size_t name_capacity,
+                                               int *requires_administrator);
+// Read-only scoped evidence classification: -1 current unknown, 0 no scoped
+// veto, 1 current active, 2 observed foreign active requiring administration.
+int lighten_current_user_application_evidence(uint32_t uid, int executable_evidence);
 // Per-PID mapped executable observation, never signal authority. Two complete
 // matching native snapshots and a stable UID/start binding are required.
 // 1: executable mapping under root, 0: all outside, -1: incomplete/unavailable.
@@ -55,6 +62,8 @@ typedef struct {
 // At most three fresh complete censuses share one three-second deadline.
 // Failure discards all partial records and returns NULL/zero outputs.
 int lighten_copy_application_processes(const char *root, LightenApplicationProcess **records, uint32_t *count);
+int lighten_copy_current_user_application_processes(const char *root, LightenApplicationProcess **records,
+                                                   uint32_t *count, int *requires_administrator);
 void lighten_free_application_processes(LightenApplicationProcess *records);
 // Revalidates the full native record before sending only SIGTERM or SIGKILL.
 // 0: signaled/already exited; -1: identity unavailable or changed.

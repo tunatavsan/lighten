@@ -1054,7 +1054,8 @@ final class AppsStore {
             path: report.path,
             expectedIdentity: listedIdentities[report.path]
               ?? (report.linkTarget == nil ? report.displayRootIdentity : nil),
-            observedSize: ObservedPlanSize(logical: report.logical, allocated: report.allocated)))
+            observedSize: ObservedPlanSize(logical: report.logical, allocated: report.allocated),
+            applicationPackagePaths: [report.path]))
       }
       let chosen = selections
       await prepare(
@@ -1226,7 +1227,9 @@ final class AppsStore {
       : SelectionWarning.example(in: candidate.snapshot?.entries.map(\.path) ?? [candidate.path])
     return UserSelection(
       path: candidate.path, expectedIdentity: root?.identity, observedSize: size,
-      warnings: example.map { [UserSelectionWarning(examplePath: $0)] } ?? [])
+      warnings: example.map { [UserSelectionWarning(examplePath: $0)] } ?? [],
+      applicationPackagePaths: ActionStore.observedApplicationPackagePaths(
+        in: candidate.snapshot?.entries.map(\.path) ?? [], under: candidate.path))
   }
 
   private static func refusalText(_ rejection: PlanRejection) -> String {

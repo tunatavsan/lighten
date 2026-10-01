@@ -78,6 +78,7 @@ public actor ActionExecutor {
   private let spaceActivity: any SpaceActivitySource
   private let mountedImages: any MountedImageSource
   private let applicationActivity: any ApplicationActivitySource
+  private let userSelectionApplicationActivity: any ApplicationActivitySource
   private let applicationClosing: any UserSelectionApplicationClosing
   private let duplicates: DuplicateFileComparator
   private var busy = false
@@ -93,7 +94,8 @@ public actor ActionExecutor {
     duplicates: DuplicateFileComparator = DuplicateFileComparator(),
     spaceActivity: any SpaceActivitySource = NativeSpaceActivitySource(),
     mountedImages: any MountedImageSource = NativeMountedImageSource(),
-    applicationActivity: any ApplicationActivitySource = NativeApplicationActivitySource(),
+    applicationActivity: (any ApplicationActivitySource)? = nil,
+    userSelectionApplicationActivity: (any ApplicationActivitySource)? = nil,
     applicationClosing: any UserSelectionApplicationClosing = NativeUserSelectionApplicationClosing()
   ) {
     self.journal = journal
@@ -107,7 +109,9 @@ public actor ActionExecutor {
     self.duplicates = duplicates
     self.spaceActivity = spaceActivity
     self.mountedImages = mountedImages
-    self.applicationActivity = applicationActivity
+    self.applicationActivity = applicationActivity ?? NativeApplicationActivitySource()
+    self.userSelectionApplicationActivity =
+      userSelectionApplicationActivity ?? applicationActivity ?? NativeApplicationActivitySource(scope: .currentUser)
     self.applicationClosing = applicationClosing
   }
 
@@ -491,16 +495,39 @@ public actor ActionExecutor {
     for item in plan.items {
       do {
         try guardService.validate(item, plan: plan)
-        if closeRunningApplications {
-          try await applicationClosing.closeApplications(rootPath: item.sourcePath, forceAfterGraceful: true)
+        let packages = UserSelectionBindings.applicationPackages(for: item, plan: plan)
+        // Observe every package before closing any: a foreign process is an
+        // administrator refusal, never permission to signal current-user helpers.
+        for path in packages {
+          try await validateUserSelectionActivity(path, permitActive: closeRunningApplications)
         }
-        try await validateUserSelectionActivity(item)
+        if closeRunningApplications {
+          for path in packages {
+            try guardService.validate(item, plan: plan)
+            guard UserSelectionBindings.applicationPackages(for: item, plan: plan).contains(path) else { continue }
+            do {
+              try await applicationClosing.closeApplications(rootPath: path, forceAfterGraceful: true)
+            } catch ProcessActivityFailure.unavailable {
+              throw SpaceValidationFailure(detail: "appRunningStateUnavailable:" + path)
+            }
+          }
+          for path in UserSelectionBindings.applicationPackages(for: item, plan: plan) {
+            try await validateUserSelectionActivity(path)
+          }
+        }
         try await beforeMutation?(item)
         try guardService.validate(item, plan: plan)
-        try await validateUserSelectionActivity(item)
+        for path in UserSelectionBindings.applicationPackages(for: item, plan: plan) {
+          try await validateUserSelectionActivity(path)
+        }
       } catch {
         do {
-          let detail = String(describing: error)
+          let detail: String
+          if let rejection = error as? PlanRejection, rejection.reason == .needsAdministrator {
+            detail = "needsAdministrator:" + rejection.path
+          } else {
+            detail = String(describing: error)
+          }
           try await journal.append(JournalRecord(kind: .skipped, planID: plan.id, itemID: item.id, detail: detail))
           results.append(
             ItemActionResult(itemID: item.id, outcome: .skipped, detail: detail, mutationStage: .notStarted))
@@ -585,15 +612,14 @@ public actor ActionExecutor {
     return ActionResult(planID: plan.id, items: results)
   }
 
-  private func validateUserSelectionActivity(_ item: PlanItem) async throws {
-    // Executable paths cover an application root and nested helpers without
-    // enumerating selected descendants or consulting bundle identifiers.
-    if item.inventory.first?.identity?.kind == .symbolicLink { return }
-    let observation = await applicationActivity.activity(applicationPath: item.sourcePath)
+  private func validateUserSelectionActivity(_ path: String, permitActive: Bool = false) async throws {
+    let observation = await userSelectionApplicationActivity.activity(applicationPath: path)
+    guard !observation.requiresAdministrator else { throw PlanRejection(.needsAdministrator, path: path) }
     switch observation.state {
     case .clearObservedProcesses: return
-    case .active: throw ProcessActivityFailure.active(processNames: observation.processNames)
-    case .unknown: throw ProcessActivityFailure.unavailable
+    case .active:
+      if !permitActive { throw ProcessActivityFailure.active(processNames: observation.processNames) }
+    case .unknown: throw SpaceValidationFailure(detail: "appRunningStateUnavailable:" + path)
     }
   }
 

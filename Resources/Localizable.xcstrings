@@ -5890,6 +5890,23 @@
         }
       }
     },
+    "This app’s running state could not be verified. Quit it and try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This app’s running state could not be verified. Quit it and try again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamanın çalışıp çalışmadığı doğrulanamadı. Uygulamayı kapatıp tekrar deneyin."
+          }
+        }
+      }
+    },
     "This application could not be identified safely.": {
       "localizations": {
         "en": {

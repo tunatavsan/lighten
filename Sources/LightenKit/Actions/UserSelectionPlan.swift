@@ -8,15 +8,18 @@ public struct UserSelection: Sendable {
   public let expectedIdentity: FileIdentity?
   public let observedSize: ObservedPlanSize?
   public let warnings: [UserSelectionWarning]
+  /// Known package locations for process presentation, never removal authority.
+  public let applicationPackagePaths: [String]
 
   public init(
     path: String, expectedIdentity: FileIdentity? = nil, observedSize: ObservedPlanSize? = nil,
-    warnings: [UserSelectionWarning] = []
+    warnings: [UserSelectionWarning] = [], applicationPackagePaths: [String] = []
   ) {
     self.path = path
     self.expectedIdentity = expectedIdentity
     self.observedSize = observedSize?.validated
     self.warnings = warnings
+    self.applicationPackagePaths = applicationPackagePaths
   }
 }
 
@@ -39,6 +42,7 @@ extension PlanService {
       }
       var items: [PlanItem] = []
       var rejections: [PlanRejection] = []
+      var applicationPackages: [UUID: [String]] = [:]
       for selection in roots {
         do {
           try UserSelectionSafety.validateBase(selection.path, homeDirectory: homeDirectory)
@@ -64,13 +68,14 @@ extension PlanService {
               inventory: [root], ancestors: [], snapshotRunID: runID,
               observedSize: selection.observedSize, userSelection: true,
               userSelectionWarnings: warning.map { [$0] }))
+          applicationPackages[root.id] = selection.applicationPackagePaths
         } catch let rejection as PlanRejection { rejections.append(rejection) } catch {
           rejections.append(PlanRejection(.unavailable, path: selection.path, ruleID: String(describing: error)))
         }
       }
       guard !items.isEmpty else { return AvailableSpacePlan(plan: nil, rejections: rejections) }
       let plan = ActionPlan(snapshotRunID: runID, kind: kind, items: items)
-      UserSelectionBindings.bind(plan, homeDirectory: homeDirectory)
+      UserSelectionBindings.bind(plan, homeDirectory: homeDirectory, applicationPackages: applicationPackages)
       return AvailableSpacePlan(plan: plan, rejections: rejections)
     }.value
   }
@@ -81,7 +86,8 @@ extension PlanService {
       selections: plan.items.map {
         UserSelection(
           path: $0.sourcePath, expectedIdentity: $0.inventory.first?.identity, observedSize: $0.displaySize,
-          warnings: $0.userSelectionWarnings ?? [])
+          warnings: $0.userSelectionWarnings ?? [],
+          applicationPackagePaths: applicationPackagePaths(for: $0, in: plan))
       }, kind: kind ?? plan.kind, runID: plan.snapshotRunID)
     guard let fresh = outcome.plan else { return outcome }
     let items = fresh.items.map { item in
@@ -96,8 +102,27 @@ extension PlanService {
     }
     let selected = ActionPlan(
       id: plan.id, snapshotRunID: plan.snapshotRunID, kind: fresh.kind, createdAt: plan.createdAt, items: items)
-    UserSelectionBindings.bind(selected, homeDirectory: homeDirectory)
+    let packages = Dictionary(
+      uniqueKeysWithValues: items.map { item in
+        (
+          item.id,
+          fresh.items.first(where: { $0.sourcePath == item.sourcePath }).map {
+            UserSelectionBindings.applicationPackages(for: $0, plan: fresh)
+          } ?? []
+        )
+      })
+    UserSelectionBindings.bind(selected, homeDirectory: homeDirectory, applicationPackages: packages)
     return AvailableSpacePlan(plan: selected, rejections: outcome.rejections)
+  }
+
+  /// Uses only already known package locations and fresh no-follow observations.
+  /// A regular file, ordinary folder without package hints, or a symlink has none.
+  public func applicationPackagePaths(for item: PlanItem, in plan: ActionPlan) -> [String] {
+    let known =
+      item.userSelection == true
+      ? UserSelectionBindings.applicationPackages(for: item, plan: plan)
+      : item.inventory.map(\.path)
+    return UserSelectionApplicationPackages.validatedPaths(for: item, knownPaths: known)
   }
 }
 
@@ -106,17 +131,63 @@ enum UserSelectionBindings {
   private struct Binding: Sendable {
     let plan: ActionPlan
     let homeDirectory: String
+    let applicationPackages: [UUID: [String]]
   }
   private static let plans = Mutex<[UUID: Binding]>([:])
 
-  static func bind(_ plan: ActionPlan, homeDirectory: String) {
-    plans.withLock { $0[plan.id] = Binding(plan: plan, homeDirectory: homeDirectory) }
+  static func bind(_ plan: ActionPlan, homeDirectory: String, applicationPackages: [UUID: [String]] = [:]) {
+    plans.withLock {
+      $0[plan.id] = Binding(plan: plan, homeDirectory: homeDirectory, applicationPackages: applicationPackages)
+    }
+  }
+
+  static func applicationPackages(for item: PlanItem, plan: ActionPlan) -> [String] {
+    let hints = plans.withLock { bindings -> [String] in
+      guard let binding = bindings[plan.id], binding.plan == plan, plan.items.contains(item) else { return [] }
+      return binding.applicationPackages[item.id] ?? []
+    }
+    return UserSelectionApplicationPackages.validatedPaths(for: item, knownPaths: hints)
   }
 
   static func validate(_ plan: ActionPlan, homeDirectory: String) throws {
     guard plans.withLock({ $0[plan.id].map { $0.plan == plan && $0.homeDirectory == homeDirectory } ?? false }),
       !plan.items.isEmpty, plan.items.allSatisfy({ $0.userSelection == true && $0.inventory.count == 1 })
     else { throw ExecutionFailure.invalidPlan }
+  }
+}
+
+private enum UserSelectionApplicationPackages {
+  static func validatedPaths(for item: PlanItem, knownPaths: [String]) -> [String] {
+    guard let expected = item.inventory.first?.identity, expected.kind == .directory,
+      let root = try? UserSelectionFileSystem.identity(at: item.sourcePath), root.kind == .directory,
+      UserSelectionSafety.sameRoot(root, expected)
+    else { return [] }
+    // lstat treats the selected leaf as the item, including when its parent is an alias.
+    // A package needs no Info.plist or descendant inventory to be a process scope.
+    if item.sourcePath.lowercased().hasSuffix(".app") { return [item.sourcePath] }
+    guard !knownPaths.isEmpty, let opened = try? UserSelectionFileSystem.openParent(of: item.sourcePath) else {
+      return []
+    }
+    defer { close(opened.0) }
+    let rootFD = openat(opened.0, opened.1, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY)
+    guard rootFD >= 0 else { return [] }
+    defer { close(rootFD) }
+    var rootDetails = stat()
+    guard fstat(rootFD, &rootDetails) == 0,
+      UserSelectionSafety.sameRoot(DescriptorFileSystem.identity(from: rootDetails), expected)
+    else { return [] }
+    var result: [String] = []
+    for path in Set(knownPaths).sorted()
+    where path.hasPrefix(item.sourcePath + "/") && path.lowercased().hasSuffix(".app") {
+      guard (try? DescriptorFileSystem.validatedComponents(path)) != nil else { continue }
+      let relative = String(path.dropFirst(item.sourcePath.count + 1))
+      // Only the known path's chain is inspected; links never become target scopes.
+      let packageFD = openat(rootFD, relative, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY)
+      guard packageFD >= 0 else { continue }
+      close(packageFD)
+      if !result.contains(where: { path.hasPrefix($0 + "/") }) { result.append(path) }
+    }
+    return result
   }
 }
 

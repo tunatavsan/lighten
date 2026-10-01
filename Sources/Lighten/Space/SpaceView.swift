@@ -589,7 +589,7 @@ struct SpaceView: View {
                     ? String(localized: "Add to basket") : String(localized: "In basket")
                 ) {
                   withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) {
-                    actions.add(item, warningPath: store.observedWarningPath(for: item))
+                    actions.add(item, warningPath: store.observedWarningPath(for: item), tree: store.tree)
                   }
                 }
                 .buttonStyle(.borderedProminent)

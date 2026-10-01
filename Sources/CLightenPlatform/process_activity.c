@@ -469,6 +469,196 @@ int lighten_copy_application_processes(const char *root, LightenApplicationProce
   return -1;
 }
 
+int lighten_current_user_application_evidence(uint32_t uid, int executable_evidence) {
+  if (executable_evidence < -1 || executable_evidence > 1) return -1;
+  if (uid == geteuid()) return executable_evidence;
+  return executable_evidence == 1 ? 2 : 0;
+}
+
+static struct kinfo_proc *scoped_application_process_table(int current_uid, uint64_t deadline,
+                                                          size_t *count) {
+  int mib[4] = {CTL_KERN, KERN_PROC, current_uid ? KERN_PROC_UID : KERN_PROC_ALL, (int)geteuid()};
+  unsigned int length = current_uid ? 4 : 3;
+  *count = 0;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    uint64_t now = activity_milliseconds();
+    if (!now || now >= deadline) return NULL;
+    size_t bytes = 0;
+    if (sysctl(mib, length, NULL, &bytes, NULL, 0) != 0 || bytes > 16 * 1024 * 1024) return NULL;
+    bytes += 64 * sizeof(struct kinfo_proc);
+    struct kinfo_proc *list = malloc(bytes);
+    if (!list) return NULL;
+    size_t actual = bytes;
+    if (sysctl(mib, length, list, &actual, NULL, 0) == 0) {
+      if (actual % sizeof(*list) != 0) { free(list); return NULL; }
+      *count = actual / sizeof(*list);
+      if (current_uid) {
+        int includes_observer = 0;
+        for (size_t index = 0; index < *count; index++) {
+          if (list[index].kp_proc.p_pid == getpid() &&
+              list[index].kp_eproc.e_ucred.cr_uid == geteuid()) includes_observer = 1;
+        }
+        if (!includes_observer) { free(list); return NULL; }
+      }
+      return list;
+    }
+    int error = errno;
+    free(list);
+    if (error != ENOMEM) return NULL;
+  }
+  return NULL;
+}
+
+static int same_application_process_identity(const struct kinfo_proc *before,
+                                             const struct kinfo_proc *after) {
+  return before->kp_eproc.e_ucred.cr_uid == after->kp_eproc.e_ucred.cr_uid &&
+    before->kp_proc.p_starttime.tv_sec == after->kp_proc.p_starttime.tv_sec &&
+    before->kp_proc.p_starttime.tv_usec == after->kp_proc.p_starttime.tv_usec;
+}
+
+static int current_user_application_census(const char *root, LightenApplicationProcess **records,
+                                          uint32_t *count, char *name, size_t capacity,
+                                          uint64_t deadline) {
+  size_t process_count = 0;
+  struct kinfo_proc *list = scoped_application_process_table(1, deadline, &process_count);
+  if (!list) return -1;
+  int active = 0, incomplete = 0;
+  size_t record_capacity = 0;
+  for (size_t index = 0; index < process_count; index++) {
+    uint64_t now = activity_milliseconds();
+    if (!now || now >= deadline) { incomplete = 1; break; }
+    struct kinfo_proc before = list[index], after;
+    pid_t pid = before.kp_proc.p_pid;
+    if (pid <= 0 || before.kp_proc.p_stat == SZOMB) continue;
+    int evidence = pid_executes_root_until(pid, root, deadline);
+    int evidence_error = errno;
+    errno = 0;
+    if (!read_process_identity(pid, &after)) {
+      int identity_error = errno;
+      if (kill(pid, 0) != 0 && errno == ESRCH) continue;
+      if (!incomplete) name[0] = '\0';
+      incomplete = 1;
+      describe_unknown_process(name, capacity, &before, "process identity unavailable", identity_error);
+      continue;
+    }
+    if (after.kp_proc.p_stat == SZOMB) continue;
+    if (before.kp_eproc.e_ucred.cr_uid != geteuid() ||
+        !same_application_process_identity(&before, &after)) {
+      if (!incomplete) name[0] = '\0';
+      incomplete = 1;
+      describe_unknown_process(name, capacity, &before, "process identity changed during observation", -1);
+      continue;
+    }
+    int scoped = lighten_current_user_application_evidence(after.kp_eproc.e_ucred.cr_uid, evidence);
+    if (scoped < 0) {
+      if (!incomplete) name[0] = '\0';
+      incomplete = 1;
+      describe_unknown_process(name, capacity, &after, "executable path unavailable", evidence_error);
+      continue;
+    }
+    if (scoped == 0) continue;
+    active = 1;
+    if (name[0] == '\0') {
+      strncpy(name, after.kp_proc.p_comm, capacity - 1);
+      name[capacity - 1] = '\0';
+    }
+    if (!records) continue;
+    LightenApplicationProcess captured;
+    if (capture_application_process(pid, &captured, deadline) != 0) {
+      if (!incomplete) name[0] = '\0';
+      incomplete = 1;
+      describe_unknown_process(name, capacity, &after, "executable signal binding unavailable", errno);
+      continue;
+    }
+    if (*count == record_capacity) {
+      size_t next = record_capacity ? record_capacity * 2 : 16;
+      if (next * sizeof(captured) > 16 * 1024 * 1024) { incomplete = 1; break; }
+      LightenApplicationProcess *grown = realloc(*records, next * sizeof(captured));
+      if (!grown) { incomplete = 1; break; }
+      *records = grown;
+      record_capacity = next;
+    }
+    (*records)[(*count)++] = captured;
+  }
+  free(list);
+  uint64_t finished = activity_milliseconds();
+  return incomplete || !finished || finished >= deadline ? -1 : active;
+}
+
+static int observed_foreign_application(const char *root, char *name, size_t capacity, uint64_t deadline) {
+  size_t count = 0;
+  struct kinfo_proc *list = scoped_application_process_table(0, deadline, &count);
+  if (!list) return 0;
+  int administrative = 0;
+  for (size_t index = 0; index < count; index++) {
+    uint64_t now = activity_milliseconds();
+    if (!now || now >= deadline) break;
+    struct kinfo_proc before = list[index], after;
+    if (before.kp_proc.p_pid <= 0 || before.kp_proc.p_stat == SZOMB ||
+        before.kp_eproc.e_ucred.cr_uid == geteuid()) continue;
+    int evidence = pid_executes_root_until(before.kp_proc.p_pid, root, deadline);
+    if (lighten_current_user_application_evidence(before.kp_eproc.e_ucred.cr_uid, evidence) != 2) continue;
+    if (!read_process_identity(before.kp_proc.p_pid, &after) || after.kp_proc.p_stat == SZOMB ||
+        !same_application_process_identity(&before, &after)) continue;
+    strncpy(name, after.kp_proc.p_comm, capacity - 1);
+    name[capacity - 1] = '\0';
+    administrative = 1;
+    break;
+  }
+  free(list);
+  return administrative;
+}
+
+static int scoped_current_user_application_observation(const char *root, LightenApplicationProcess **records,
+                                                       uint32_t *count, char *name, size_t capacity,
+                                                       int *requires_administrator) {
+  if (!root || root[0] != '/' || !count || !name || capacity == 0 || !requires_administrator) return -1;
+  if (records) *records = NULL;
+  *count = 0;
+  *requires_administrator = 0;
+  name[0] = '\0';
+  uint64_t started = activity_milliseconds();
+  if (!started) return -1;
+  uint64_t deadline = started + 3000;
+  char *physical = realpath(root, NULL);
+  const char *selected = physical ? physical : root;
+  int result = -1;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    name[0] = '\0';
+    result = current_user_application_census(selected, records, count, name, capacity, deadline);
+    if (result >= 0) break;
+    if (records) { free(*records); *records = NULL; }
+    *count = 0;
+    uint64_t now = activity_milliseconds();
+    if (!now || now >= deadline || attempt == 2) break;
+    uint64_t pause = deadline - now < 25 ? deadline - now : 25;
+    struct timespec delay = { .tv_sec = 0, .tv_nsec = (long)pause * 1000000 };
+    nanosleep(&delay, NULL);
+  }
+  if (result >= 0) {
+    *requires_administrator = observed_foreign_application(selected, name, capacity, deadline);
+    if (*requires_administrator) result = 1;
+  }
+  free(physical);
+  return result;
+}
+
+int lighten_current_user_application_activity(const char *root, char *process_name, size_t name_capacity,
+                                               int *requires_administrator) {
+  uint32_t count = 0;
+  return scoped_current_user_application_observation(root, NULL, &count, process_name, name_capacity,
+                                                    requires_administrator);
+}
+
+int lighten_copy_current_user_application_processes(const char *root, LightenApplicationProcess **records,
+                                                   uint32_t *count, int *requires_administrator) {
+  if (!records) return -1;
+  char name[256] = {0};
+  int result = scoped_current_user_application_observation(root, records, count, name, sizeof(name),
+                                                         requires_administrator);
+  return result < 0 ? -1 : 0;
+}
+
 void lighten_free_application_processes(LightenApplicationProcess *records) { free(records); }
 
 int lighten_validate_application_process(const LightenApplicationProcess *record) {

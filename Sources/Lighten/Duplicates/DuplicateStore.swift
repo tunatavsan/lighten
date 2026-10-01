@@ -194,7 +194,9 @@ final class DuplicateStore {
               ObservedPlanSize(
                 logical: ByteAggregate(knownLowerBound: $0.logicalBytes, completeTotal: $0.logicalBytes),
                 allocated: ByteAggregate(knownLowerBound: $0.allocatedBytes, completeTotal: $0.allocatedBytes))
-            })
+            },
+            applicationPackagePaths: ActionStore.observedApplicationPackagePaths(
+              in: report.snapshot.entries.map(\.path), under: member.entry.path))
         }, kind: preferences.deletionDefault.kind, runID: report.snapshot.runID)
       guard preparationGeneration == generation, targets == selected else { return }
       guard let plan = outcome.plan else {

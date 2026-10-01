@@ -301,6 +301,11 @@ enum FailureText {
         "Process activity could not be checked. Check Activity Monitor.",
         "Süreç etkinliği denetlenemedi. Etkinlik Monitörü’nü kontrol edin."
       )
+    case "appRunningStateUnavailable":
+      copy = (
+        "This app’s running state could not be verified. Quit it and try again.",
+        "Bu uygulamanın çalışıp çalışmadığı doğrulanamadı. Uygulamayı kapatıp tekrar deneyin."
+      )
     case "catalogDeleteDenied":
       copy = (
         "Lighten could not confirm that the related tool is idle. Check the tool in Activity Monitor.",

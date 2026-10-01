@@ -45,6 +45,7 @@ struct BasketEntry: Sendable, Equatable {
   var identity: FileIdentity? = nil
   var warning: ProtectiveWarning? = nil
   var warningPaths: [String] = []
+  var applicationPackagePaths: [String] = []
 }
 
 struct ActionPresentation: Identifiable, Sendable {
@@ -83,6 +84,7 @@ final class ActionStore {
   @ObservationIgnored private let planService: PlanService
   @ObservationIgnored private let preferences: RemovalPreferences
   @ObservationIgnored private let applicationActivity: any ApplicationActivitySource
+  @ObservationIgnored private let userSelectionApplicationActivity: any ApplicationActivitySource
   @ObservationIgnored private var claimedCloseRunningApplications = false
   @ObservationIgnored private let historyService: ActionHistory
   @ObservationIgnored private var claimedPlan: ActionPlan?
@@ -107,16 +109,22 @@ final class ActionStore {
     historyService: ActionHistory? = nil, planService: PlanService = PlanService(),
     runningApplications: any RunningApplicationSource = NativeRunningApplicationSource(),
     preferences: RemovalPreferences = .shared,
-    applicationActivity: any ApplicationActivitySource = NativeApplicationActivitySource()
+    applicationActivity: (any ApplicationActivitySource)? = nil,
+    userSelectionApplicationActivity: (any ApplicationActivitySource)? = nil,
+    applicationClosing: any UserSelectionApplicationClosing = NativeUserSelectionApplicationClosing()
   ) {
     self.journal = journal
     self.preferences = preferences
-    self.applicationActivity = applicationActivity
+    self.applicationActivity = applicationActivity ?? NativeApplicationActivitySource()
+    let userActivity =
+      userSelectionApplicationActivity ?? applicationActivity ?? NativeApplicationActivitySource(scope: .currentUser)
+    self.userSelectionApplicationActivity = userActivity
     self.planService = planService
     self.executor = ActionExecutor(
       journal: journal, trash: trash, guardService: ActionGuard(homeDirectory: planService.homeDirectory),
       activity: MacOSProcessActivitySource(), related: .system,
-      runningApplications: runningApplications, applicationActivity: applicationActivity)
+      runningApplications: runningApplications, applicationActivity: applicationActivity,
+      userSelectionApplicationActivity: userActivity, applicationClosing: applicationClosing)
     self.historyService = historyService ?? ActionHistory(journal: journal)
   }
 
@@ -133,13 +141,43 @@ final class ActionStore {
   private(set) var preparingAlternate = false
   var message: String?
 
-  func add(_ item: SpaceItem, warningPath: String? = nil) {
+  func add(_ item: SpaceItem, warningPath: String? = nil, tree: ScanTree? = nil) {
     guard !busy, Self.canManuallySelect(item), item.inode != 0 else { return }
     let identity = try? DescriptorFileSystem.identity(at: item.path)
     basket[item.path] = BasketEntry(
       path: item.path, label: item.name, device: item.device, inode: item.inode, logical: item.logical,
       allocated: item.allocated, identity: identity,
-      warningPaths: warningPath.map { [$0] } ?? [])
+      warningPaths: warningPath.map { [$0] } ?? [],
+      applicationPackagePaths: Self.observedApplicationPackagePaths(in: tree, under: item))
+  }
+
+  private nonisolated static func observedApplicationPackagePaths(in tree: ScanTree?, under item: SpaceItem) -> [String]
+  {
+    guard let tree else { return [] }
+    var pending = [item]
+    var packages: [String] = []
+    while let current = pending.popLast() {
+      guard current.path == item.path || current.path.hasPrefix(item.path + "/") else { continue }
+      if (current.kind == .package || current.kind == .directory) && current.path.lowercased().hasSuffix(".app") {
+        packages.append(current.path)
+      } else if current.kind == .directory {
+        pending.append(
+          contentsOf: tree.children(of: current.id, metric: .logical).filter {
+            $0.kind == .directory || $0.kind == .package
+          })
+      }
+    }
+    return packages.sorted()
+  }
+
+  /// Uses paths already present in the scan; the planner validates packages without following links.
+  nonisolated static func observedApplicationPackagePaths(in paths: [String], under root: String) -> [String] {
+    Array(
+      Set(
+        paths.filter {
+          ($0 == root || $0.hasPrefix(root + "/")) && $0.lowercased().hasSuffix(".app")
+        })
+    ).sorted()
   }
 
   static func canManuallySelect(_ item: SpaceItem) -> Bool {
@@ -192,7 +230,8 @@ final class ActionStore {
         UserSelection(
           path: $0.path, expectedIdentity: $0.identity,
           observedSize: ObservedPlanSize(logical: $0.logical, allocated: $0.allocated),
-          warnings: $0.warningPaths.map { UserSelectionWarning(examplePath: $0) })
+          warnings: $0.warningPaths.map { UserSelectionWarning(examplePath: $0) },
+          applicationPackagePaths: $0.applicationPackagePaths)
       }, kind: preferences.deletionDefault.kind, runID: runID ?? UUID())
     guard let plan = outcome.plan else {
       pending = nil
@@ -216,7 +255,10 @@ final class ActionStore {
 
   func containsRunningApplications(_ plan: ActionPlan) async -> Bool {
     for item in plan.items {
-      if await applicationActivity.activity(applicationPath: item.sourcePath).state == .active { return true }
+      for path in planService.applicationPackagePaths(for: item, in: plan) {
+        let activity = await userSelectionApplicationActivity.activity(applicationPath: path)
+        if !activity.requiresAdministrator && activity.state == .active { return true }
+      }
     }
     return false
   }
@@ -400,7 +442,8 @@ final class ActionStore {
             logical: subtract(entry.logical, amounts: descendants.map { $0.size.logical })
               ?? ByteAggregate(knownLowerBound: 0, completeTotal: nil),
             allocated: subtract(entry.allocated, amounts: descendants.map { $0.size.allocated }),
-            identity: entry.identity, warning: entry.warning, warningPaths: entry.warningPaths)
+            identity: entry.identity, warning: entry.warning, warningPaths: entry.warningPaths,
+            applicationPackagePaths: entry.applicationPackagePaths)
         }
       }
       displayRevision += 1

@@ -388,7 +388,9 @@ final class CleanStore: ToolSummaryProviding {
             expectedIdentity: candidate.snapshot?.entries.first { $0.path == candidate.path }?.identity,
             observedSize: candidate.observation.map { ObservedPlanSize(logical: $0.logical, allocated: $0.allocated) },
             warnings: SelectionWarning.example(in: candidate.snapshot?.entries.map(\.path) ?? [candidate.path])
-              .map { [UserSelectionWarning(examplePath: $0)] } ?? [])
+              .map { [UserSelectionWarning(examplePath: $0)] } ?? [],
+            applicationPackagePaths: ActionStore.observedApplicationPackagePaths(
+              in: candidate.snapshot?.entries.map(\.path) ?? [], under: candidate.path))
         ],
         kind: preferences.deletionDefault.kind)
       guard tool.preparation.accepts(token) else { return }
@@ -439,7 +441,9 @@ final class CleanStore: ToolSummaryProviding {
               in: candidate.snapshot.entries.filter {
                 $0.path == candidate.entry.path || $0.path.hasPrefix(candidate.entry.path + "/")
               }.map(\.path)
-            ).map { [UserSelectionWarning(examplePath: $0)] } ?? [])
+            ).map { [UserSelectionWarning(examplePath: $0)] } ?? [],
+            applicationPackagePaths: ActionStore.observedApplicationPackagePaths(
+              in: candidate.snapshot.entries.map(\.path), under: candidate.entry.path))
         }, kind: preferences.deletionDefault.kind)
       guard tool.preparation.accepts(token), selected == selectedIDs else { return }
       guard let plan = outcome.plan else {

@@ -27,10 +27,13 @@ private struct UserSelectionFixture {
     try directory((path as NSString).deletingLastPathComponent)
     try Data(text.utf8).write(to: URL(fileURLWithPath: path))
   }
-  func plan(_ path: String, kind: ActionKind = .trash, warnings: [UserSelectionWarning] = []) async throws -> ActionPlan
-  {
+  func plan(
+    _ path: String, kind: ActionKind = .trash, warnings: [UserSelectionWarning] = [],
+    applicationPackagePaths: [String] = []
+  ) async throws -> ActionPlan {
     let outcome = await PlanService(homeDirectory: home).makeAvailableUserSelectionPlan(
-      selections: [UserSelection(path: path, warnings: warnings)], kind: kind)
+      selections: [UserSelection(path: path, warnings: warnings, applicationPackagePaths: applicationPackagePaths)],
+      kind: kind)
     #expect(outcome.rejections.isEmpty)
     return try #require(outcome.plan)
   }
@@ -38,11 +41,38 @@ private struct UserSelectionFixture {
 }
 
 private func nativeCaptureFailureActivity(selectedRoot: String, unrelatedRoot: String) async -> String {
-  let source = NativeApplicationActivitySource()
+  let source = NativeApplicationActivitySource(scope: .currentUser)
   let selected = await source.activity(applicationPath: selectedRoot)
   let unrelated = await source.activity(applicationPath: unrelatedRoot)
   return "selected root activity: \(selected.state), processes: \(selected.processNames); "
     + "unrelated root activity: \(unrelated.state), processes: \(unrelated.processNames)"
+}
+
+private func validateAllUsersNativeCensus(
+  root: String, unrelatedRoot: String, expectedPIDs: Set<pid_t>
+) async {
+  let environment = await NativeApplicationActivitySource().activity(applicationPath: unrelatedRoot)
+  let foreignUnavailable =
+    environment.state == .unknown
+    && environment.processNames.contains {
+      guard let suffix = $0.components(separatedBy: ", uid ").last,
+        let uid = UInt32(suffix.prefix { $0.isNumber })
+      else { return false }
+      return uid != geteuid()
+    }
+  let requireComplete = ProcessInfo.processInfo.environment["LIGHTEN_REQUIRE_COMPLETE_NATIVE_CENSUS"] == "1"
+  var pointer: UnsafeMutablePointer<LightenApplicationProcess>?
+  var count: UInt32 = 0
+  let status = root.withCString { lighten_copy_application_processes($0, &pointer, &count) }
+  defer { lighten_free_application_processes(pointer) }
+  let expected = foreignUnavailable && !requireComplete ? -1 : 0
+  #expect(status == expected, "all-users environment: \(environment.state), \(environment.processNames)")
+  if expected == 0 {
+    #expect(Set(UnsafeBufferPointer(start: pointer, count: Int(count)).map(\.pid)) == expectedPIDs)
+  } else {
+    #expect(pointer == nil && count == 0)
+    #expect(environment.scope == .allUsers && !environment.processNames.isEmpty)
+  }
 }
 
 private struct UserSelectionTrash: TrashMoving {
@@ -267,10 +297,10 @@ struct UserSelectionTests {
       guardService: ActionGuard(homeDirectory: fixture.home),
       applicationActivity: UserSelectionActivity(state: state),
       applicationClosing: UserSelectionClosing(state: state))
-    let first = try await fixture.plan(source)
+    let first = try await fixture.plan(source, applicationPackagePaths: [source + "/Nested.app"])
     #expect(try await executor.execute(first).items[0].outcome == .skipped)
     #expect(state.confirmations.withLock { $0.isEmpty })
-    let second = try await fixture.plan(source)
+    let second = try await fixture.plan(source, applicationPackagePaths: [source + "/Nested.app"])
     #expect(try await executor.execute(second, closeRunningApplications: true).items[0].outcome == .applied)
     #expect(state.confirmations.withLock { $0 } == [true])
   }
@@ -370,7 +400,10 @@ struct UserSelectionTests {
     try #require(processes.allSatisfy { $0.isRunning })
     var pointer: UnsafeMutablePointer<LightenApplicationProcess>?
     var count: UInt32 = 0
-    let status = app.withCString { lighten_copy_application_processes($0, &pointer, &count) }
+    var administrator: Int32 = 0
+    let status = app.withCString {
+      lighten_copy_current_user_application_processes($0, &pointer, &count, &administrator)
+    }
     defer { lighten_free_application_processes(pointer) }
     var diagnostic = ""
     if status != 0 {
@@ -381,8 +414,14 @@ struct UserSelectionTests {
         + (await nativeCaptureFailureActivity(selectedRoot: app, unrelatedRoot: unrelated))
     }
     #expect(status == 0, "\(diagnostic)")
+    #expect(administrator == 0)
     let records = Array(UnsafeBufferPointer(start: pointer, count: Int(count)))
     #expect(Set(records.map(\.pid)) == Set(processes.map(\.processIdentifier)))
+    let allUsersUnrelated = fixture.home + "/LightenQA-all-users-unrelated"
+    try fixture.directory(allUsersUnrelated)
+    await validateAllUsersNativeCensus(
+      root: app, unrelatedRoot: allUsersUnrelated,
+      expectedPIDs: Set(processes.map(\.processIdentifier)))
     var changedStart = try #require(records.first)
     changedStart.start_microseconds += 1
     #expect(lighten_signal_application_process(&changedStart, SIGTERM) == -1)
@@ -432,7 +471,10 @@ struct UserSelectionTests {
     defer { if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) } }
     var pointer: UnsafeMutablePointer<LightenApplicationProcess>?
     var count: UInt32 = 0
-    let captured = app.withCString { lighten_copy_application_processes($0, &pointer, &count) }
+    var administrator: Int32 = 0
+    let captured = app.withCString {
+      lighten_copy_current_user_application_processes($0, &pointer, &count, &administrator)
+    }
     defer { lighten_free_application_processes(pointer) }
     var diagnostic = ""
     if captured != 0 || count != 1 {
@@ -441,6 +483,8 @@ struct UserSelectionTests {
         + (await nativeCaptureFailureActivity(selectedRoot: app, unrelatedRoot: unrelated))
     }
     try #require(captured == 0 && count == 1, "\(diagnostic)")
+    #expect(administrator == 0)
+    await validateAllUsersNativeCensus(root: app, unrelatedRoot: unrelated, expectedPIDs: [process.processIdentifier])
     var original = try #require(pointer?.pointee)
     try #require(original.pid == process.processIdentifier)
     // Removing this exact owned leaf reproduces an updater's detached image.
@@ -449,7 +493,7 @@ struct UserSelectionTests {
     var incompletePointer: UnsafeMutablePointer<LightenApplicationProcess>?
     var incompleteCount: UInt32 = 0
     let incomplete = app.withCString {
-      lighten_copy_application_processes($0, &incompletePointer, &incompleteCount)
+      lighten_copy_current_user_application_processes($0, &incompletePointer, &incompleteCount, &administrator)
     }
     defer { lighten_free_application_processes(incompletePointer) }
     #expect(incomplete == -1)
@@ -461,7 +505,7 @@ struct UserSelectionTests {
     #expect(unrelated.withCString { lighten_application_mapping_activity(process.processIdentifier, $0, 4097) } == -1)
     #expect(unrelated.withCString { lighten_application_mapping_activity(0, $0, 4096) } == -1)
     #expect(lighten_application_mapping_activity(process.processIdentifier, "relative", 4096) == -1)
-    let source = NativeApplicationActivitySource()
+    let source = NativeApplicationActivitySource(scope: .currentUser)
     #expect(await source.activity(applicationPath: app).state == .active)
     #expect(await source.activity(applicationPath: unrelated).state == .clearObservedProcesses)
     #expect(lighten_signal_application_process(&original, SIGTERM) == -1)
