@@ -452,3 +452,123 @@ private func selectedAppCandidate(_ path: String) -> RelatedDataCandidate {
   #expect(store.selectedReport?.related.map(\.path) == [candidate.path])
   #expect(store.message == nil && actions.pending == nil)
 }
+
+private func storeUnprovenCandidate(
+  _ path: String, classification: RelatedClassification = .unprovenNameOnly,
+  reason: RelatedReason = .nameOnly, inode: UInt64 = 2
+) -> RelatedDataCandidate {
+  let identity = FileIdentity(
+    device: 1, inode: inode, changeSeconds: 1, changeNanoseconds: 0,
+    logicalBytes: 64, allocatedBytes: 64, linkCount: 1, flags: 0, kind: .directory,
+    birthSeconds: 1, birthNanoseconds: 0)
+  return RelatedDataCandidate(
+    id: path, path: path, classification: classification, reason: reason,
+    snapshot: ScanSnapshot(
+      rootPath: path, volumeDevice: 1,
+      entries: [ScanEntry(parentID: nil, path: path, identity: identity, issues: [], readable: true)], nodes: []),
+    receipt: nil, explicitManualChoiceAvailable: true)
+}
+
+@Test(
+  "Known app-data vetoes cannot become manual name-only choices",
+  arguments: [
+    (RelatedClassification.uncertain, RelatedReason.literalIdentifierOwner),
+    (.shared, .sharedInstalledData), (.protected, .protected), (.protected, .foreignOwner),
+    (.uncertain, .ownershipUnavailable), (.unprovenNameOnly, .literalIdentifierOwner),
+  ])
+@MainActor func appsKnownVetoCannotBecomeManual(classification: RelatedClassification, reason: RelatedReason) {
+  let path = "/Applications/LightenQA-name.app"
+  let candidate = storeUnprovenCandidate(
+    "/private/tmp/LightenQA-name-data", classification: classification, reason: reason)
+  var app = selectedAppReport(path, bundleID: "qa.lighten.name")
+  app.related = [candidate]
+  let store = AppsStore(
+    pictures: disabledAppsPictures(), running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [app]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = ["qa.lighten.name"]
+  store.select(path, actions: actions)
+  #expect(!store.canSelect(candidate, app: app))
+  store.toggleData(candidate.path, actions: actions)
+  #expect(store.selectedDataPaths.isEmpty && actions.pending == nil)
+}
+
+@Test(
+  "Running or unchecked applications cannot offer a name-only removal choice",
+  arguments: ["running", "unknown", "unchecked"])
+@MainActor func appsUnprovenKeepsRunningVeto(state: String) {
+  let path = "/Applications/LightenQA-name.app"
+  let id = "qa.lighten.name"
+  let candidate = storeUnprovenCandidate("/private/tmp/LightenQA-name-data")
+  var app = selectedAppReport(path, bundleID: id)
+  app.related = [candidate]
+  let store = AppsStore(
+    pictures: disabledAppsPictures(), running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  store.reports = [app]
+  store.inventoryComplete = true
+  if state != "unchecked" { store.runningCheckedIDs = [id] }
+  if state == "running" { store.runningIDs = [id] }
+  if state == "unknown" { store.runningUnknownIDs = [id] }
+  #expect(!store.canSelect(candidate, app: app))
+}
+
+@Test("A fresh name-only row preserves a choice only for the same observed identity", arguments: [false, true])
+@MainActor func appsUnprovenRefreshRequiresNewChoice(changedIdentity: Bool) async throws {
+  let path = "/Applications/LightenQA-name.app"
+  let id = "qa.lighten.name"
+  let candidate = storeUnprovenCandidate("/private/tmp/LightenQA-name-data")
+  let replacement = storeUnprovenCandidate(candidate.path, inode: changedIdentity ? 3 : 2)
+  var app = selectedAppReport(path, bundleID: id)
+  app.related = [candidate]
+  let inventory = BundleInventory(
+    applications: [InstalledApplication(bundleID: id, path: path, version: "1")],
+    unidentifiedPaths: [], complete: true, observedAt: Date())
+  let plan = ActionPlan(
+    snapshotRunID: UUID(), kind: .trash,
+    items: [PlanItem(id: UUID(), sourcePath: candidate.path, inventory: [], ancestors: [])])
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    explicitUninstallPlanBuilder: { _, automatic, _, manual in
+      #expect(automatic.isEmpty && manual.count == 1)
+      return .init(plan: plan, rejections: [])
+    }, running: ClosedAppSource(), events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  continuation.yield(.inventory(inventory, [app]))
+  await waitForApps { store.reports.count == 1 }
+  store.inventoryComplete = true
+  store.runningCheckedIDs = [id]
+  store.select(path, actions: actions)
+  store.toggleData(candidate.path, actions: actions)
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending?.id == plan.id)
+  continuation.yield(.related(path: path, candidates: [replacement], ownershipPending: false))
+  await waitForApps {
+    store.selectedReport?.related.first?.snapshot?.entries.first?.identity?.inode == (changedIdentity ? 3 : 2)
+      && (!changedIdentity || store.selectedDataPaths.isEmpty)
+  }
+  if changedIdentity {
+    #expect(store.selectedDataPaths.isEmpty && actions.pending == nil)
+    #expect(store.message?.contains("select it again") == true)
+    store.toggleData(replacement.path, actions: actions)
+    #expect(store.selectedDataPaths == [replacement.path])
+  } else {
+    #expect(store.selectedDataPaths == [candidate.path])
+    #expect(actions.pending?.id == plan.id)
+  }
+  continuation.yield(.completed(inventory, [app]))
+  continuation.finish()
+  await waitForApps { !store.busy }
+}
+
+@Test(
+  "Provenance labels distinguish package-derived evidence from a user's name-only choice",
+  arguments: [
+    (RelatedDataProvenanceKind.bundleIdentifier, "bundle identifier"),
+    (.electron, "Electron"), (.mozilla, "Mozilla"), (.explicitUserChoice, "unproven"),
+  ])
+func appsProvenanceLabelsAreHonest(kind: RelatedDataProvenanceKind, phrase: String) {
+  #expect(AppsStore.provenanceLabel(kind).contains(phrase))
+}

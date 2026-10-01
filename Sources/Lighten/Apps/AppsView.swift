@@ -539,7 +539,9 @@ struct AppsView: View {
       Text(String(localized: "Related data"))
         .font(.system(size: 15, weight: .semibold))
       Text(
-        String(localized: "Data is separate from the app. Exact names show a possible link, not guaranteed ownership.")
+        String(
+          localized:
+            "Data is separate from the app. Each association shows its evidence; name matches are reviewed separately.")
       )
       .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       .fixedSize(horizontal: false, vertical: true)
@@ -560,9 +562,11 @@ struct AppsView: View {
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       }
-      ForEach(app.related) { candidate in
+      ForEach(app.related.filter { $0.classification != .unprovenNameOnly }) { candidate in
         relatedRow(candidate, app: app)
       }
+      let unproven = app.related.filter { $0.classification == .unprovenNameOnly }
+      if !unproven.isEmpty { unprovenSection(unproven, app: app) }
       Label(
         String(localized: "Shared containers are included only when this app is their sole verified owner."),
         systemImage: "lock.shield"
@@ -571,6 +575,29 @@ struct AppsView: View {
     }
     .padding(12).frame(maxWidth: .infinity, alignment: .leading)
     .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
+  }
+
+  private func unprovenSection(_ candidates: [RelatedDataCandidate], app: ApplicationReport) -> some View {
+    let name = URL(fileURLWithPath: app.path).deletingPathExtension().lastPathComponent
+    return VStack(alignment: .leading, spacing: 8) {
+      Text(
+        String.localizedStringWithFormat(
+          String(localized: "Names resemble %@, but ownership is unproven."), name)
+      )
+      .font(.system(size: 12, weight: .semibold))
+      .fixedSize(horizontal: false, vertical: true)
+      Text(
+        "These items are never selected automatically. Select only items you recognize; your choice does not prove they belong to this app. Safe removal uses Trash and Undo."
+      )
+      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      .fixedSize(horizontal: false, vertical: true)
+      ForEach(candidates) { candidate in
+        relatedRow(candidate, app: app)
+      }
+    }
+    .padding(10)
+    .background(LightenStyle.warning.opacity(0.06), in: RoundedRectangle(cornerRadius: 7))
+    .accessibilityElement(children: .contain)
   }
 
   private func relatedRow(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> some View {
@@ -599,6 +626,18 @@ struct AppsView: View {
         if let reason = actions.failure(at: candidate.path) {
           Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
             .fixedSize(horizontal: false, vertical: true)
+        }
+        if let provenance = candidate.provenance {
+          Text(AppsStore.provenanceLabel(provenance.kind))
+            .font(.system(size: 10, weight: .medium)).foregroundStyle(LightenStyle.muted)
+          if let source = provenance.sourcePath {
+            Text(source).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+              .lineLimit(2).truncationMode(.middle).help(source)
+          }
+          if let detail = provenance.detail {
+            Text(detail).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+              .fixedSize(horizontal: false, vertical: true)
+          }
         }
         Text(relatedReason(candidate, eligible: eligible))
           .font(.system(size: 10)).foregroundStyle(eligible ? LightenStyle.muted : LightenStyle.warning)
@@ -630,9 +669,28 @@ struct AppsView: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       Spacer(minLength: 3)
-      if let observation = candidate.observation {
-        Text(format(observation.logical.completeTotal ?? observation.logical.knownLowerBound))
-          .font(.system(size: 10)).monospacedDigit()
+      VStack(alignment: .trailing, spacing: 5) {
+        if let observation = candidate.observation {
+          if let total = observation.logical.completeTotal {
+            Text(format(total)).font(.system(size: 10)).monospacedDigit()
+          } else {
+            Text(
+              String.localizedStringWithFormat(
+                String(localized: "At least %@"), format(observation.logical.knownLowerBound))
+            )
+            .font(.system(size: 10)).monospacedDigit()
+          }
+        } else {
+          Text("Size not measured").font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+        }
+        if candidate.classification == .unprovenNameOnly {
+          Button("Show in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: candidate.path)])
+          }
+          .buttonStyle(.plain).font(.system(size: 10))
+          .accessibilityLabel(
+            String.localizedStringWithFormat(String(localized: "Show in Finder: %@"), candidate.path))
+        }
       }
     }
     .accessibilityElement(children: .contain)
@@ -649,11 +707,15 @@ struct AppsView: View {
     return switch candidate.classification {
     case .installed:
       eligible
-        ? String(localized: "Exact standard app location · separate Trash choice")
+        ? String(localized: "Associated app data · separate Trash choice")
         : String(localized: "Needs complete, safe scan and a closed app")
     case .protected: String(localized: "Protected · report only")
     case .shared: String(localized: "Shared · report only")
     case .uncertain: String(localized: "Association uncertain · report only")
+    case .unprovenNameOnly:
+      eligible
+        ? String(localized: "Name match only · your explicit choice, not verified app data")
+        : String(localized: "Name match only · unavailable until a fresh, safe review")
     case .historicallyVerifiedAbsent: String(localized: "Previously associated · review in Clean")
     case .orphanVerified: String(localized: "App no longer found · review carefully")
     }

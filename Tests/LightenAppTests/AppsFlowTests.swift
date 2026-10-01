@@ -829,3 +829,130 @@ private actor DroppedReportGate {
   store.toggleOrphan(orphan.path, actions: actions)
   #expect(actions.pending == nil)
 }
+
+private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> RelatedDataCandidate {
+  let identity = FileIdentity(
+    device: 1, inode: inode, changeSeconds: 1, changeNanoseconds: 0,
+    logicalBytes: 64, allocatedBytes: 64, linkCount: 1, flags: 0, kind: .directory,
+    birthSeconds: 1, birthNanoseconds: 0)
+  return RelatedDataCandidate(
+    id: path, path: path, classification: .unprovenNameOnly, reason: .nameOnly,
+    snapshot: ScanSnapshot(
+      rootPath: path, volumeDevice: 1,
+      entries: [ScanEntry(parentID: nil, path: path, identity: identity, issues: [], readable: true)], nodes: []),
+    receipt: nil, explicitManualChoiceAvailable: true)
+}
+
+@Test("Name-only app data needs an explicit choice and enters review without app ownership", arguments: [false, true])
+@MainActor func appsUnprovenRequiresExplicitChoice(includePackage: Bool) async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let path = root + "/LightenQA-name.app"
+  try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
+  let candidate = flowUnprovenCandidate(root + "/Library/Application Support/LightenQA-name")
+  let package = PlanItem(
+    id: UUID(), sourcePath: path, inventory: [], ancestors: [], policy: .wholeBundle,
+    applicationBundleID: "qa.lighten.flow")
+  let data = PlanItem(id: UUID(), sourcePath: candidate.path, inventory: [], ancestors: [])
+  let plan = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: includePackage ? [package, data] : [data])
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    availableUninstallPlanBuilder: { _, candidates, _ in
+      #expect(candidates.allSatisfy { $0.classification != .unprovenNameOnly })
+      Issue.record("An explicit name-only choice reached the automatic ownership planner")
+      return .init(plan: nil, rejections: [])
+    },
+    explicitUninstallPlanBuilder: { report, candidates, packageSelected, manual in
+      #expect(report.path == path)
+      #expect(candidates.isEmpty)
+      #expect(packageSelected == includePackage)
+      #expect(manual.map(\.path) == [candidate.path])
+      #expect(manual.first?.snapshot?.entries.first?.identity == candidate.snapshot?.entries.first?.identity)
+      return .init(plan: plan, rejections: [])
+    }, running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [flowReport(path: path, candidates: [candidate])]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(path, actions: actions)
+  #expect(!candidate.canSelect && !candidate.defaultSelected)
+  store.togglePackage(actions: actions)
+  #expect(store.packageSelected && store.selectedDataPaths.isEmpty)
+  if !includePackage { store.togglePackage(actions: actions) }
+  store.toggleData(candidate.path, actions: actions)
+  #expect(store.selectedDataPaths == [candidate.path])
+  await store.prepareSelectedData(actions: actions)
+  let pending = try #require(actions.pending)
+  #expect(pending.plan == plan && pending.plan.kind == .trash)
+  #expect(pending.permanentPlanBuilder == nil)
+  let summary = try #require(pending.items.first { $0.path == candidate.path })
+  #expect(summary.reason.contains("ownership is unproven"))
+  #expect(summary.reason.contains("Undo"))
+  #expect(data.installedRelatedProof == nil && data.orphanRelatedProof == nil && data.relatedProof == nil)
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+  store.toggleData(candidate.path, actions: actions)
+  #expect(store.selectedDataPaths.isEmpty && actions.pending == nil)
+}
+
+@Test("Assigning a name-only path cannot fabricate the user's explicit choice")
+@MainActor func appsUnprovenPathAssignmentIsNotAuthorization() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let path = root + "/LightenQA-name.app"
+  let candidate = flowUnprovenCandidate(root + "/Library/Application Support/LightenQA-name")
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    explicitUninstallPlanBuilder: { _, _, _, _ in
+      Issue.record("A path assignment impersonated an explicit user choice")
+      return .init(plan: nil, rejections: [])
+    }, running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [flowReport(path: path, candidates: [candidate])]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(path, actions: actions)
+  store.selectedDataPaths = [candidate.path]
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending == nil)
+  #expect(store.message?.contains(candidate.path) == true)
+  store.selectedDataPaths = []
+  store.toggleData(candidate.path, actions: actions)
+  #expect(store.selectedDataPaths == [candidate.path])
+  store.selectedDataPaths = []
+  store.selectedDataPaths = [candidate.path]
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending == nil)
+  #expect(store.message?.contains(candidate.path) == true)
+}
+
+@Test("Revoking a name-only choice discards a late plan even if its path is assigned again")
+@MainActor func appsRevokedUnprovenChoiceDiscardsLatePlan() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let path = root + "/LightenQA-name.app"
+  let candidate = flowUnprovenCandidate(root + "/Library/Application Support/LightenQA-name")
+  let plan = ActionPlan(
+    snapshotRunID: UUID(), kind: .trash,
+    items: [PlanItem(id: UUID(), sourcePath: candidate.path, inventory: [], ancestors: [])])
+  let gate = AppsAvailableGate()
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    explicitUninstallPlanBuilder: { _, _, _, manual in
+      #expect(manual.map(\.path) == [candidate.path])
+      return await gate.outcome()
+    }, running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [flowReport(path: path, candidates: [candidate])]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(path, actions: actions)
+  store.toggleData(candidate.path, actions: actions)
+  let preparation = Task { await store.prepareSelectedData(actions: actions) }
+  await gate.waitForArrival()
+  store.selectedDataPaths = []
+  store.selectedDataPaths = [candidate.path]
+  await gate.finish(.init(plan: plan, rejections: []))
+  await preparation.value
+  #expect(actions.pending == nil && !store.preparing)
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+}

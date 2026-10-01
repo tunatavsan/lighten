@@ -84,6 +84,7 @@ final class ApplicationContextMetadata: Sendable {
     let application: InstalledApplication?
   }
   private let entries = Mutex<[Key: Observation]>([:])
+  let ownedData = ApplicationDataEvidenceCache()
 
   private func identities(at path: String) throws -> [ApplicationPathObservation] {
     let root = try DescriptorFileSystem.identity(at: path)
@@ -157,16 +158,29 @@ final class AuthenticApplicationContext: Sendable {
   let metadata: ApplicationContextMetadata
   private let infoAbsences: Mutex<[String: ApplicationMetadataObservation]>
   private let signers = Mutex<[String: ApplicationSignatureCache.Observation]>([:])
+  private let dataEvidence = Mutex<[String: ApplicationOwnedDataEvidence]>([:])
+  private struct DataClaims: Sendable {
+    let claims: [String: [ApplicationOwnedDataEvidence]]
+    let sources: [ApplicationPathObservation]
+    let issues: [ApplicationAuxiliaryIssue]
+  }
+  private let dataClaims = Mutex<DataClaims?>(nil)
 
   init(
     scope: ApplicationContextScope, inventory: BundleInventory, lineage: [ApplicationPathObservation],
     registeredPaths: [String], standardBundleID: String? = nil,
-    installedListing: BundleInventory? = nil, metadata: ApplicationContextMetadata? = nil
+    installedListing: BundleInventory? = nil, metadata: ApplicationContextMetadata? = nil,
+    dataEvidenceSource: AuthenticApplicationContext? = nil
   ) {
     self.scope = scope
     self.inventory = inventory
     self.installedListing = installedListing ?? inventory
     self.metadata = metadata ?? ApplicationContextMetadata()
+    if let dataEvidenceSource {
+      let observed = dataEvidenceSource.dataEvidence.withLock { $0 }
+      dataEvidence.withLock { $0 = observed }
+      dataClaims.withLock { $0 = dataEvidenceSource.dataClaims.withLock { $0 } }
+    }
     self.infoAbsences = Mutex(
       Dictionary(
         inventory.applicationMetadata.compactMap { observation in
@@ -204,6 +218,62 @@ final class AuthenticApplicationContext: Sendable {
 
   func observedInfoAbsences() -> [ApplicationMetadataObservation] {
     infoAbsences.withLock { $0.values.sorted { $0.path < $1.path } }
+  }
+
+  func recordDataEvidence(_ evidence: ApplicationOwnedDataEvidence) {
+    let key = evidence.packagePath + "\n" + evidence.dataPath
+    dataEvidence.withLock { entries in
+      if entries[key] == nil { entries[key] = evidence }
+    }
+  }
+
+  func observedDataEvidence(packagePath: String, dataPath: String) -> ApplicationOwnedDataEvidence? {
+    dataEvidence.withLock { $0[packagePath + "\n" + dataPath] }
+  }
+
+  func observedDataClaims() -> [String: [ApplicationOwnedDataEvidence]]? {
+    dataClaims.withLock { $0?.claims }
+  }
+
+  func recordDataClaims(
+    _ claims: [String: [ApplicationOwnedDataEvidence]], sources: [ApplicationPathObservation],
+    issues: [ApplicationAuxiliaryIssue]
+  ) {
+    dataClaims.withLock {
+      if $0 == nil { $0 = DataClaims(claims: claims, sources: sources, issues: issues) }
+    }
+  }
+
+  func observedDataIssues() -> [ApplicationAuxiliaryIssue] {
+    dataClaims.withLock { $0?.issues ?? [] }
+  }
+
+  func validateDataSources(excludingPackage: String? = nil) throws {
+    let observed = dataClaims.withLock { $0 }
+    guard let observed else { return }
+    let sources = observed.sources
+    let packages = Set(
+      inventory.applications.map { $0.linkTarget ?? $0.path }.filter { package in
+        sources.contains { $0.path == package && $0.identity?.kind == .directory }
+      })
+    var checked: Set<String> = []
+    for package in packages where package != excludingPackage {
+      let nodes = sources.filter { $0.path == package || $0.path.hasPrefix(package + "/") }
+      guard let root = nodes.first(where: { $0.path == package })?.identity else {
+        throw RelatedFailure.incompleteInventory
+      }
+      try ApplicationPathObservation.validate(nodes, root: package, expected: root)
+      checked.formUnion(nodes.map(\.path))
+    }
+    for source in sources {
+      if checked.contains(source.path) { continue }
+      if let excludingPackage,
+        source.path == excludingPackage || source.path.hasPrefix(excludingPackage + "/")
+      {
+        continue
+      }
+      try source.validate()
+    }
   }
 }
 
@@ -384,33 +454,37 @@ public actor ApplicationScanSession {
   }
 
   public func makeAvailableUninstallPlan(
-    app: InstalledApplication, selectedRelated: [RelatedDataCandidate], includePackage: Bool = true
+    app: InstalledApplication, selectedRelated: [RelatedDataCandidate], includePackage: Bool = true,
+    selectedUnprovenRelated: [RelatedDataCandidate] = []
   ) async -> RelatedDataService.AvailableUninstallPlan {
     await makeAvailableUninstallPlan(
       path: app.path, expectedBundleID: app.bundleID, selectedRelated: selectedRelated,
-      includePackage: includePackage)
+      includePackage: includePackage, selectedUnprovenRelated: selectedUnprovenRelated)
   }
 
   public func makeAvailableUninstallPlan(
     path: String, expectedBundleID: String?, selectedRelated: [RelatedDataCandidate],
-    includePackage: Bool = true
+    includePackage: Bool = true, selectedUnprovenRelated: [RelatedDataCandidate] = []
   ) async -> RelatedDataService.AvailableUninstallPlan {
     guard !cancelled, !Task.isCancelled else {
       return .init(
         plan: nil, rejections: [PlanRejection(.unavailable, path: path, ruleID: "cancelled")])
     }
     let context: AuthenticApplicationContext?
-    if selectedRelated.isEmpty || expectedBundleID == nil {
+    if (selectedRelated.isEmpty && selectedUnprovenRelated.isEmpty) || expectedBundleID == nil {
       context = nil
     } else if let observed = related.application(at: path),
       let app = related.application(at: observed.linkTarget ?? observed.path),
       related.isExactStandardSelection(app: app, candidates: selectedRelated)
     {
       let listing = await installedListing()
+      let evidenceSource: AuthenticApplicationContext?
+      if let ownership { evidenceSource = await ownership.value } else { evidenceSource = nil }
       let service = related
       let metadata = self.metadata
       context = await Task.detached(priority: .userInitiated) {
-        service.makeStandardContext(app: app, listing: listing, metadata: metadata)
+        service.makeStandardContext(
+          app: app, listing: listing, metadata: metadata, dataEvidenceSource: evidenceSource)
       }.value
     } else {
       context = await self.context()
@@ -421,7 +495,7 @@ public actor ApplicationScanSession {
     }
     return await related.makeAvailableUninstallPlan(
       path: path, expectedBundleID: expectedBundleID, selectedRelated: selectedRelated,
-      includePackage: includePackage, context: context)
+      includePackage: includePackage, selectedUnprovenRelated: selectedUnprovenRelated, context: context)
   }
 
   /// Fresh read-only refusals for one concrete plan. Private ownership

@@ -13,6 +13,9 @@ final class RealUseSurvey {
     let owner: String?
     let logical: ByteAggregate?
     let allocated: ByteAggregate?
+    let candidateClassification: String?
+    let candidateReason: String?
+    let provenanceKind: String?
     var outcome = "pending"
   }
 
@@ -251,8 +254,10 @@ final class RealUseSurvey {
       progress(path: report.path)
       let start = ContinuousClock.now
       activePlanStarted = start
+      // Name-only candidates are observations, never automatic uninstall selections.
+      let automaticRelated = report.related.filter { $0.classification != .unprovenNameOnly }
       let outcome = await session.makeAvailableUninstallPlan(
-        path: report.path, expectedBundleID: report.bundleID, selectedRelated: report.related, includePackage: true)
+        path: report.path, expectedBundleID: report.bundleID, selectedRelated: automaticRelated, includePackage: true)
       let planning = elapsed(start)
       planSeconds += planning
       appPlanTimes.append(planning)
@@ -312,7 +317,9 @@ final class RealUseSurvey {
           path: candidate.path, scope: "installedRelated", owner: report.path,
           rejections: packageRefusals.isEmpty ? refusals : packageRefusals + refusals,
           planned: outcome.plan?.items.contains { $0.sourcePath == candidate.path } == true,
-          planning: planning, validation: checking, evidence: evidence)
+          planning: planning, validation: checking,
+          evidence: evidence + candidate.refusalEvidence, extra: Self.candidateDetails(candidate),
+          unprovenNameOnly: Self.isUnprovenNameOnly(candidate))
       }
       completedApplications += 1
     }
@@ -324,7 +331,12 @@ final class RealUseSurvey {
       progress(path: candidate.path)
       let start = ContinuousClock.now
       activePlanStarted = start
-      let outcome = await session.plan(candidate: candidate)
+      let outcome: RelatedDataService.AvailableUninstallPlan
+      if Self.isUnprovenNameOnly(candidate) {
+        outcome = .init(plan: nil, rejections: [])
+      } else {
+        outcome = await session.plan(candidate: candidate)
+      }
       let planning = elapsed(start)
       planSeconds += planning
       activePlanStarted = nil
@@ -343,7 +355,9 @@ final class RealUseSurvey {
         path: candidate.path, scope: kind, owner: nil,
         rejections: outcome.rejections + validation,
         planned: outcome.plan?.items.contains { $0.sourcePath == candidate.path } == true,
-        planning: planning, validation: checking, evidence: outcome.refusalEvidence + validationEvidence)
+        planning: planning, validation: checking,
+        evidence: outcome.refusalEvidence + validationEvidence + candidate.refusalEvidence,
+        extra: Self.candidateDetails(candidate), unprovenNameOnly: Self.isUnprovenNameOnly(candidate))
     }
     await session.cancel()
     self.session = nil
@@ -464,13 +478,31 @@ final class RealUseSurvey {
   ) {
     let values = Self.observation(candidate)
     var details = extra
-    details["classification"] = candidate.classification.rawValue
-    details["candidateReason"] = candidate.reason.rawValue
-    details["canSelectObservation"] = candidate.canSelect
-    details["matchStrength"] = candidate.matchStrength.rawValue
-    details["bundleID"] = candidate.bundleID as Any? ?? NSNull()
+    details.merge(Self.candidateDetails(candidate)) { _, value in value }
     details["ownershipRefusalEvidence"] = candidate.refusalEvidence.map { Self.ownershipEvidence($0, fresh: false) }
     register(path: candidate.path, scope: scope, owner: owner, logical: values.0, allocated: values.1, extra: details)
+  }
+
+  private static func isUnprovenNameOnly(_ candidate: RelatedDataCandidate) -> Bool {
+    candidate.classification == .unprovenNameOnly && candidate.reason == .nameOnly
+      && candidate.refusalEvidence.isEmpty
+  }
+
+  private static func candidateDetails(_ candidate: RelatedDataCandidate) -> [String: Any] {
+    [
+      "classification": candidate.classification.rawValue,
+      "candidateReason": candidate.reason.rawValue,
+      "candidateName": URL(fileURLWithPath: candidate.path).lastPathComponent,
+      "canSelectObservation": candidate.canSelect,
+      "explicitManualChoiceAvailableObservation": candidate.explicitManualChoiceAvailable,
+      "defaultSelectedObservation": candidate.defaultSelected,
+      "matchStrength": candidate.matchStrength.rawValue,
+      "bundleID": candidate.bundleID as Any? ?? NSNull(),
+      "provenanceKind": candidate.provenance?.kind.rawValue as Any? ?? NSNull(),
+      "provenanceSourcePath": candidate.provenance?.sourcePath as Any? ?? NSNull(),
+      "provenanceDetail": candidate.provenance?.detail as Any? ?? NSNull(),
+      "ownershipClaim": candidate.classification == .installed,
+    ]
   }
 
   private static func covers(root: String, path: String) -> Bool {
@@ -529,7 +561,11 @@ final class RealUseSurvey {
     let previous = targets[id]
     targets[id] = Target(
       id: id, path: path, scope: scope, owner: owner,
-      logical: logical, allocated: allocated, outcome: previous?.outcome ?? "pending")
+      logical: logical, allocated: allocated,
+      candidateClassification: extra["classification"] as? String,
+      candidateReason: extra["candidateReason"] as? String,
+      provenanceKind: extra["provenanceKind"] as? String,
+      outcome: previous?.outcome ?? "pending")
     var row = extra
     row["type"] = previous == nil ? "observation" : "observationUpdate"
     row["id"] = id
@@ -543,13 +579,21 @@ final class RealUseSurvey {
   private func result(
     path: String, scope: String, owner: String?, rejections: [PlanRejection],
     planned: Bool, planning: Double?, validation: Double?,
-    evidence: [RelatedOwnershipRefusalEvidence] = [], extra: [String: Any] = [:], forceError: Bool = false
+    evidence: [RelatedOwnershipRefusalEvidence] = [], extra: [String: Any] = [:], forceError: Bool = false,
+    unprovenNameOnly: Bool = false
   ) async {
     let id = scope + ":" + (owner ?? "") + ":" + path
     var refusalRows: [[String: Any]] = []
     for rejection in rejections { refusalRows.append(await refusal(rejection, evidence: evidence)) }
-    let outcome = forceError ? "errorRefusal" : Self.resultOutcome(planned: planned, refusals: refusalRows)
     let relevantEvidence = evidence.filter { $0.candidatePath == path }
+    // Any concrete veto or unexpected plan stays in the normal refusal accounting.
+    let nameOnlyObservation =
+      unprovenNameOnly && !planned && rejections.isEmpty
+      && relevantEvidence.isEmpty && !forceError
+    let outcome =
+      forceError
+      ? "errorRefusal"
+      : nameOnlyObservation ? "unprovenNameOnly" : Self.resultOutcome(planned: planned, refusals: refusalRows)
     for veto in relevantEvidence where veto.reason == .unknownMetadata {
       line([
         "type": "ownershipVeto", "candidatePath": veto.candidatePath,
@@ -568,7 +612,10 @@ final class RealUseSurvey {
       "fullValidationPerformed": validation != nil,
       "timingScope": scope == "installedRelated" ? "shared owner application plan" : "requested item plan",
       "bytes": bytes(targets[id]?.logical, targets[id]?.allocated),
-      "unexplainedMissingPlan": !planned && rejections.isEmpty,
+      "unexplainedMissingPlan": !planned && rejections.isEmpty && !nameOnlyObservation,
+      "userChoiceRequired": nameOnlyObservation,
+      "surveySelectedUnprovenItems": false,
+      "ownershipClaim": nameOnlyObservation ? false : extra["ownershipClaim"] as Any? ?? NSNull(),
       "ownershipRefusalEvidence": relevantEvidence.map { Self.ownershipEvidence($0, fresh: true) },
       "hasUnattributedRejection": forceError,
     ]) { _, value in value }
@@ -717,6 +764,19 @@ final class RealUseSurvey {
       values["includedInRequestedDenominator"] = name != "simulatorOutOfScope"
       scopes[name] = values
     }
+    let nameOnly = requested.filter { $0.outcome == "unprovenNameOnly" }
+    let nameOnlyCandidates = requested.filter { $0.candidateClassification == "unprovenNameOnly" }
+    let namedNameOnlyCandidates = nameOnlyCandidates.sorted { $0.id < $1.id }.map { target -> [String: Any] in
+      [
+        "id": target.id, "name": URL(fileURLWithPath: target.path).lastPathComponent,
+        "path": target.path, "scope": target.scope,
+        "ownerApplicationPath": target.owner as Any? ?? NSNull(), "outcome": target.outcome,
+        "candidateReason": target.candidateReason as Any? ?? NSNull(),
+        "provenanceKind": target.provenanceKind as Any? ?? NSNull(),
+        "bytes": bytes(target.logical, target.allocated),
+        "includedInRequestedDenominator": true, "ownershipClaim": false,
+      ]
+    }
     line([
       "type": "summary", "schema": 1, "completed": completed,
       "metadataIssueCount": metadataIssueCount,
@@ -751,6 +811,12 @@ final class RealUseSurvey {
       "unattributedPlanErrorCount": unattributedErrorCount,
       "uniqueObservedPathCount": paths.count, "uniqueFolderPoolPathCount": folderPoolPaths.count,
       "requested": scopeSummary(requested, coverageComplete: completed), "scopes": scopes,
+      "unprovenNameOnlyCount": nameOnly.count,
+      "unprovenNameOnly": scopeSummary(nameOnly, coverageComplete: applicationCoverage && !timedOut),
+      "unprovenNameOnlyObservedCandidateCount": nameOnlyCandidates.count,
+      "unprovenNameOnlyCandidates": namedNameOnlyCandidates,
+      "unprovenNameOnlyAccounting":
+        "raw candidate request rows remain in the requested denominator; named list includes pending or refused candidates; bytes can be unknown or overlap",
       "canonicalUnionLogicalBytes": NSNull(), "canonicalUnionMeasured": false, "overlaps": overlaps,
       "byteAccounting": "requested sums overlap; they are not uniquely reclaimable bytes",
       "overlapDetection": "exact lexical paths; link-target and hardlink union not measured",
@@ -780,6 +846,9 @@ final class RealUseSurvey {
         "logicalBytePercentOfCompleteExactDenominator": percent,
         "unknownLogicalByteCount": values.filter { $0.logical == nil }.count,
         "lowerBoundLogicalByteCount": values.filter { $0.logical != nil && $0.logical?.completeTotal == nil }.count,
+        "unknownAllocatedByteCount": values.filter { $0.allocated == nil }.count,
+        "lowerBoundAllocatedByteCount": values.filter { $0.allocated != nil && $0.allocated?.completeTotal == nil }
+          .count,
       ]
     }
     return [
@@ -791,6 +860,8 @@ final class RealUseSurvey {
       "requestedAllocatedSumExact": exactSum(rows.map(\.allocated)) as Any? ?? NSNull(),
       "unknownLogicalByteCount": rows.filter { $0.logical == nil }.count,
       "lowerBoundLogicalByteCount": rows.filter { $0.logical != nil && $0.logical?.completeTotal == nil }.count,
+      "unknownAllocatedByteCount": rows.filter { $0.allocated == nil }.count,
+      "lowerBoundAllocatedByteCount": rows.filter { $0.allocated != nil && $0.allocated?.completeTotal == nil }.count,
       "coverageComplete": coverageComplete, "outcomes": outcomes,
       "byteAccounting": "requested sums; overlapping paths are counted per request",
     ]

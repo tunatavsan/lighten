@@ -393,6 +393,22 @@
         }
       }
     },
+    "An item you selected by name changed. Review it and select it again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An item you selected by name changed. Review it and select it again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adına göre seçtiğiniz bir öğe değişti. İnceleyip yeniden seçin."
+          }
+        }
+      }
+    },
     "Another action is running. Wait for it to finish.": {
       "localizations": {
         "en": {
@@ -601,6 +617,22 @@
         }
       }
     },
+    "Associated app data · separate Trash choice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Associated app data · separate Trash choice"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişkili uygulama verisi · ayrı Çöp seçimi"
+          }
+        }
+      }
+    },
     "Association uncertain · report only": {
       "localizations": {
         "en": {
@@ -629,6 +661,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "En az"
+          }
+        }
+      }
+    },
+    "At least %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "At least %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En az %@"
           }
         }
       }
@@ -1145,18 +1193,18 @@
         }
       }
     },
-    "Data is separate from the app. Exact names show a possible link, not guaranteed ownership.": {
+    "Data is separate from the app. Each association shows its evidence; name matches are reviewed separately.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Data is separate from the app. Exact names show a possible link, not guaranteed ownership."
+            "value": "Data is separate from the app. Each association shows its evidence; name matches are reviewed separately."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Veriler uygulamadan ayrıdır. Tam ad eşleşmesi olası bir ilişki gösterir; sahipliği kanıtlamaz."
+            "value": "Veri uygulamadan ayrıdır. Her ilişki kanıtını gösterir; ad eşleşmeleri ayrı incelenir."
           }
         }
       }
@@ -1354,6 +1402,150 @@
         }
       }
     },
+    "Evidence: Electron package settings and data structure": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evidence: Electron package settings and data structure"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kanıt: Electron paket ayarları ve veri yapısı"
+          }
+        }
+      }
+    },
+    "Evidence: Mozilla package settings and profile structure": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evidence: Mozilla package settings and profile structure"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kanıt: Mozilla paket ayarları ve profil yapısı"
+          }
+        }
+      }
+    },
+    "Evidence: bundle identifier": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evidence: bundle identifier"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kanıt: paket kimliği"
+          }
+        }
+      }
+    },
+    "Evidence: directory named in this app’s settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evidence: directory named in this app’s settings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kanıt: bu uygulamanın ayarlarında belirtilen dizin"
+          }
+        }
+      }
+    },
+    "Evidence: installer receipt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evidence: installer receipt"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kanıt: yükleyici kaydı"
+          }
+        }
+      }
+    },
+    "Evidence: launch service points into this app": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evidence: launch service points into this app"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kanıt: başlatma hizmeti bu uygulamayı işaret ediyor"
+          }
+        }
+      }
+    },
+    "Evidence: signing team identifier": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evidence: signing team identifier"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kanıt: imzalayan ekip kimliği"
+          }
+        }
+      }
+    },
+    "Evidence: this app’s exclusive vendor directory": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evidence: this app’s exclusive vendor directory"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kanıt: yalnızca bu uygulamaya ait üretici dizini"
+          }
+        }
+      }
+    },
+    "Evidence: this app’s open files or working directory": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Evidence: this app’s open files or working directory"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kanıt: bu uygulamanın açık dosyaları veya çalışma dizini"
+          }
+        }
+      }
+    },
     "Exact copy; verified keeper remains": {
       "localizations": {
         "en": {
@@ -1382,22 +1574,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Seçtiğiniz klasördeki birebir yerel dosya kopyaları"
-          }
-        }
-      }
-    },
-    "Exact standard app location · separate Trash choice": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Exact standard app location · separate Trash choice"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tam standart uygulama konumu · ayrı Çöp Sepeti seçimi"
           }
         }
       }
@@ -2568,6 +2744,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ad"
+          }
+        }
+      }
+    },
+    "Name match only · unavailable until a fresh, safe review": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name match only · unavailable until a fresh, safe review"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnızca ad eşleşmesi · yeni ve güvenli bir incelemeye kadar kullanılamaz"
+          }
+        }
+      }
+    },
+    "Name match only · your explicit choice, not verified app data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name match only · your explicit choice, not verified app data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnızca ad eşleşmesi · açık seçiminiz; doğrulanmış uygulama verisi değildir"
+          }
+        }
+      }
+    },
+    "Names resemble %@, but ownership is unproven.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Names resemble %@, but ownership is unproven."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adlar %@ uygulamasını andırıyor, ancak sahiplik kanıtlanamadı."
           }
         }
       }
@@ -4269,6 +4493,22 @@
         }
       }
     },
+    "Show in Finder: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show in Finder: %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finder’da göster: %@"
+          }
+        }
+      }
+    },
     "Show in Trash": {
       "extractionState": "manual",
       "localizations": {
@@ -4330,6 +4570,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Boyut ölçüsü"
+          }
+        }
+      }
+    },
+    "Size not measured": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Size not measured"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Boyut ölçülmedi"
           }
         }
       }
@@ -5171,6 +5427,22 @@
         }
       }
     },
+    "These items are never selected automatically. Select only items you recognize; your choice does not prove they belong to this app. Safe removal uses Trash and Undo.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These items are never selected automatically. Select only items you recognize; your choice does not prove they belong to this app. Safe removal uses Trash and Undo."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğeler hiçbir zaman otomatik seçilmez. Yalnızca tanıdığınız öğeleri seçin; seçiminiz bu uygulamaya ait olduklarını kanıtlamaz. Güvenli kaldırma Çöp ve Geri Al ile yapılır."
+          }
+        }
+      }
+    },
     "These items do not meet this category's safety rules. Inspect them in Finder.": {
       "localizations": {
         "en": {
@@ -5924,6 +6196,22 @@
         }
       }
     },
+    "You selected this item by name. Its ownership is unproven; it may contain personal data. Move it to Trash only if you recognize it. Undo is available in History.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You selected this item by name. Its ownership is unproven; it may contain personal data. Move it to Trash only if you recognize it. Undo is available in History."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğeyi adına göre seçtiniz. Sahipliği kanıtlanmadı; kişisel veri içerebilir. Yalnızca tanıyorsanız Çöp’e taşıyın. Geçmiş’ten Geri Al kullanılabilir."
+          }
+        }
+      }
+    },
     "Your account cannot move this item from its folder. Check the folder’s permissions in Finder.": {
       "localizations": {
         "en": {
@@ -5952,6 +6240,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Hesabınız bu öğeyi taşıyamıyor. Sahibini ve izinlerini Finder’da kontrol edin."
+          }
+        }
+      }
+    },
+    "Your explicit choice · ownership remains unproven": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your explicit choice · ownership remains unproven"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Açık seçiminiz · sahiplik hâlâ kanıtlanmadı"
           }
         }
       }

@@ -6,6 +6,8 @@ struct PreparedInstalledOwner: Sendable {
   let planID: UUID
   let item: PlanItem
   let signatures: [ApplicationSignatureIdentity]
+  var dataEvidence: ApplicationOwnedDataEvidence? = nil
+  var validateDataEnvironment: (@Sendable (MovedApplicationOwner?) throws -> Void)? = nil
 
   func validate(_ selected: PlanItem, plan: ActionPlan, movedOwner: MovedApplicationOwner?) throws {
     guard plan.id == planID, selected == item, plan.kind == .trash,
@@ -32,6 +34,14 @@ struct PreparedInstalledOwner: Sendable {
       } else {
         try signature.validate()
       }
+    }
+    if let dataEvidence {
+      guard dataEvidence.packagePath == originalProof.appPath,
+        dataEvidence.bundleID == originalProof.bundleID, dataEvidence.dataPath == item.sourcePath
+      else { throw RelatedFailure.changedItem }
+      try dataEvidence.validate(relocatedPackagePath: movedOwner?.movedPackage.sourcePath)
+      guard let validateDataEnvironment else { throw RelatedFailure.incompleteInventory }
+      try validateDataEnvironment(movedOwner)
     }
   }
 }

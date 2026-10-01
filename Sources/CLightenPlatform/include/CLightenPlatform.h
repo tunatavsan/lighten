@@ -88,3 +88,4 @@ int lighten_bulk_read_metadata(int dirfd, void *buffer, size_t size, LightenDirE
 int lighten_volume_space_used(const char *path, int64_t *used_bytes);
 
 #endif
+#include "ApplicationDataPaths.h"

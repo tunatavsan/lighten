@@ -29,6 +29,12 @@ public struct ActionGuard: Sendable {
   }
 
   public func validate(_ item: PlanItem) throws {
+    try ApplicationExplicitSelections.refuseWithoutPlan(item)
+    try validate(item, installedScopePrepared: false)
+  }
+
+  func validate(_ item: PlanItem, plan: ActionPlan) throws {
+    try ApplicationExplicitSelections.validate(item, plan: plan)
     try validate(item, installedScopePrepared: false)
   }
 
@@ -71,11 +77,13 @@ public struct ActionGuard: Sendable {
       } else {
         guard item.installedRelatedProof != nil else { throw GuardFailure.unsupportedItem }
       }
-      guard let (location, _) = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory),
-        policy
-          == (location == .containers
-            ? .relatedContainer : location == .groupContainers ? .relatedGroupContainer : .relatedTrash)
-      else { throw GuardFailure.unsupportedItem }
+      if !installedScopePrepared {
+        guard let (location, _) = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory),
+          policy
+            == (location == .containers
+              ? .relatedContainer : location == .groupContainers ? .relatedGroupContainer : .relatedTrash)
+        else { throw GuardFailure.unsupportedItem }
+      }
     }
     // Catalog tree policies require a matching, bundled Trash authority.
     if policy == .catalogTrash || policy == .catalogBuildOutput {
@@ -297,6 +305,12 @@ public struct ActionGuard: Sendable {
   /// Refreshes only explicit Space trees. The old immutable root still binds the
   /// operation, while every new descendant receives all current safety checks.
   public func refreshedSpaceItem(_ item: PlanItem) throws -> PlanItem {
+    try ApplicationExplicitSelections.refuseWithoutPlan(item)
+    return try refreshedSpaceItem(item, plan: nil)
+  }
+
+  func refreshedSpaceItem(_ item: PlanItem, plan: ActionPlan?) throws -> PlanItem {
+    if let plan { try ApplicationExplicitSelections.validate(item, plan: plan) }
     guard item.policy == .spaceTrash || item.policy == .wholeBundle,
       item.catalogProof == nil, item.relatedProof == nil, item.installedRelatedProof == nil,
       item.orphanRelatedProof == nil, item.duplicateProof == nil,
@@ -331,7 +345,7 @@ public struct ActionGuard: Sendable {
       sizeMetadataVersion: item.sizeMetadataVersion,
       applicationPackageObservation: item.applicationPackageObservation,
       packageLinkTargetItemID: item.packageLinkTargetItemID)
-    try validate(refreshed)
+    if let plan { try validate(refreshed, plan: plan) } else { try validate(refreshed) }
     return refreshed
   }
 

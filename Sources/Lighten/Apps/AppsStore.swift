@@ -8,6 +8,9 @@ final class AppsStore {
   typealias AvailableUninstallPlanBuilder =
     @Sendable (ApplicationReport, [RelatedDataCandidate], Bool) async throws ->
     RelatedDataService.AvailableUninstallPlan
+  typealias ExplicitUninstallPlanBuilder =
+    @Sendable (ApplicationReport, [RelatedDataCandidate], Bool, [RelatedDataCandidate]) async throws ->
+    RelatedDataService.AvailableUninstallPlan
   struct PictureOpeningTiming: Sendable {
     let requestedAt: ContinuousClock.Instant
     let loadStartedAt: ContinuousClock.Instant
@@ -64,7 +67,13 @@ final class AppsStore {
   var needsRescan = false
   var selectedPath: String?
   var packageSelected = false
-  var selectedDataPaths: Set<String> = []
+  var selectedDataPaths: Set<String> = [] {
+    didSet {
+      explicitlySelectedUnproven = explicitlySelectedUnproven.filter { selectedDataPaths.contains($0.key) }
+    }
+  }
+  @ObservationIgnored private weak var preparedActions: ActionStore?
+  @ObservationIgnored private var explicitlySelectedUnproven: [String: RelatedDataCandidate] = [:]
   var selectedDataPath: String? {
     get { selectedDataPaths.sorted().first }
     set { selectedDataPaths = newValue.map { [$0] } ?? [] }
@@ -95,6 +104,7 @@ final class AppsStore {
   @ObservationIgnored private var navigationGeneration = UUID()
   @ObservationIgnored private var observedResultID: UUID?
   @ObservationIgnored private let uninstallPlanBuilder: AvailableUninstallPlanBuilder
+  @ObservationIgnored private let explicitUninstallPlanBuilder: ExplicitUninstallPlanBuilder
   @ObservationIgnored private let orphanPlanBuilder: @Sendable ([RelatedDataCandidate]) async throws -> ActionPlan
   @ObservationIgnored private let droppedReport: @Sendable (String) async -> ApplicationReport?
 
@@ -103,6 +113,7 @@ final class AppsStore {
     uninstallPlanBuilder: (@Sendable (ApplicationReport, [RelatedDataCandidate], Bool) async throws -> ActionPlan)? =
       nil,
     availableUninstallPlanBuilder: AvailableUninstallPlanBuilder? = nil,
+    explicitUninstallPlanBuilder: ExplicitUninstallPlanBuilder? = nil,
     relatedService: RelatedDataService = .system,
     selectedReview: SelectedReview? = nil,
     orphanPlanBuilder: @escaping @Sendable ([RelatedDataCandidate]) async throws -> ActionPlan = { candidates in
@@ -137,13 +148,15 @@ final class AppsStore {
   ) {
     self.selectedReview = selectedReview
     self.relatedService = relatedService
-    self.usesInjectedPlanner = availableUninstallPlanBuilder != nil || uninstallPlanBuilder != nil || planBuilder != nil
+    self.usesInjectedPlanner =
+      availableUninstallPlanBuilder != nil || explicitUninstallPlanBuilder != nil
+      || uninstallPlanBuilder != nil || planBuilder != nil
     self.pictures = pictures
     self.running = running
     self.events = events
     self.orphanPlanBuilder = orphanPlanBuilder
     self.droppedReport = droppedReport
-    self.uninstallPlanBuilder =
+    let standardBuilder: AvailableUninstallPlanBuilder =
       availableUninstallPlanBuilder ?? { report, candidates, includePackage in
         if let uninstallPlanBuilder {
           return RelatedDataService.AvailableUninstallPlan(
@@ -169,6 +182,14 @@ final class AppsStore {
         return await service.makeAvailableUninstallPlan(
           path: report.path, expectedBundleID: report.bundleID,
           selectedRelated: candidates, includePackage: includePackage)
+      }
+    self.uninstallPlanBuilder = standardBuilder
+    self.explicitUninstallPlanBuilder =
+      explicitUninstallPlanBuilder ?? { report, candidates, includePackage, manual in
+        if manual.isEmpty { return try await standardBuilder(report, candidates, includePackage) }
+        return await relatedService.makeAvailableUninstallPlan(
+          path: report.path, expectedBundleID: report.bundleID, selectedRelated: candidates,
+          includePackage: includePackage, selectedUnprovenRelated: manual)
       }
   }
 
@@ -231,6 +252,7 @@ final class AppsStore {
     selectedPath = nil
     packageSelected = false
     selectedDataPaths = []
+    explicitlySelectedUnproven = [:]
     runningIDs = []
     runningUnknownIDs = []
     runningCheckedIDs = []
@@ -334,6 +356,7 @@ final class AppsStore {
     invalidatePreparation()
     packageSelected = false
     selectedDataPaths = []
+    explicitlySelectedUnproven = [:]
     message = String(localized: "Scan cancelled")
   }
 
@@ -352,6 +375,7 @@ final class AppsStore {
     selectedPath = path
     packageSelected = false
     selectedDataPaths = []
+    explicitlySelectedUnproven = [:]
     message = nil
     requestSelectedReview(path)
   }
@@ -477,6 +501,22 @@ final class AppsStore {
       ownershipPending
       ? incoming + reports[index].related.filter { !incomingPaths.contains($0.path) && !displayRemoved($0) }
       : incoming
+    if selectedPath == path {
+      let invalidated = explicitlySelectedUnproven.keys.filter { selected in
+        guard let original = explicitlySelectedUnproven[selected],
+          let fresh = reports[index].related.first(where: { $0.path == selected })
+        else { return true }
+        return !Self.sameUnprovenObservation(original, fresh)
+      }
+      for selected in invalidated {
+        selectedDataPaths.remove(selected)
+        explicitlySelectedUnproven.removeValue(forKey: selected)
+      }
+      if !invalidated.isEmpty {
+        invalidatePreparation(actions: preparedActions)
+        message = String(localized: "An item you selected by name changed. Review it and select it again.")
+      }
+    }
     relatedReviewedPaths.insert(path)
     if ownershipPending { ownershipPendingPaths.insert(path) } else { ownershipPendingPaths.remove(path) }
   }
@@ -504,7 +544,10 @@ final class AppsStore {
     packageSelected.toggle()
     if packageSelected {
       selectedDataPaths.formUnion(
-        report.related.filter { $0.defaultSelected && canSelect($0, app: report) }.map(\.path))
+        report.related.filter {
+          $0.classification != .unprovenNameOnly && $0.provenance?.kind != .configuredDirectory
+            && $0.defaultSelected && canSelect($0, app: report)
+        }.map(\.path))
     }
   }
 
@@ -580,7 +623,13 @@ final class AppsStore {
     guard let app = selectedReport, let candidate = app.related.first(where: { $0.path == path }),
       canSelect(candidate, app: app)
     else { return }
-    if selectedDataPaths.contains(path) { selectedDataPaths.remove(path) } else { selectedDataPaths.insert(path) }
+    if selectedDataPaths.contains(path) {
+      selectedDataPaths.remove(path)
+      explicitlySelectedUnproven.removeValue(forKey: path)
+    } else {
+      selectedDataPaths.insert(path)
+      if candidate.classification == .unprovenNameOnly { explicitlySelectedUnproven[path] = candidate }
+    }
   }
 
   /// Leaving the screen keeps a running scan going; only prepared plans expire.
@@ -711,8 +760,13 @@ final class AppsStore {
   }
 
   func canSelect(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> Bool {
-    guard !incompletePackagePaths.contains(app.path), candidate.canSelect,
-      candidate.classification == .installed,
+    let manual =
+      candidate.classification == .unprovenNameOnly
+      && candidate.reason == .nameOnly && candidate.explicitManualChoiceAvailable
+      && candidate.snapshot?.entries.first(where: { $0.path == candidate.path })?.identity != nil
+      && candidate.refusalEvidence.isEmpty
+    guard !incompletePackagePaths.contains(app.path),
+      (candidate.canSelect && candidate.classification == .installed) || manual,
       !ownershipRefusalEvidence.contains(where: { $0.candidatePath == candidate.path }),
       inventoryComplete || relatedReviewedPaths.contains(app.path) || reviewedDropPath == app.path,
       !needsRescan, pictureRows.isEmpty,
@@ -721,6 +775,32 @@ final class AppsStore {
       runningCheckedIDs.contains(id), !runningIDs.contains(id), !runningUnknownIDs.contains(id)
     else { return false }
     return true
+  }
+
+  nonisolated static func provenanceLabel(_ kind: RelatedDataProvenanceKind) -> String {
+    switch kind {
+    case .bundleIdentifier: String(localized: "Evidence: bundle identifier")
+    case .teamIdentifier: String(localized: "Evidence: signing team identifier")
+    case .electron: String(localized: "Evidence: Electron package settings and data structure")
+    case .mozilla: String(localized: "Evidence: Mozilla package settings and profile structure")
+    case .installerReceipt: String(localized: "Evidence: installer receipt")
+    case .launchService: String(localized: "Evidence: launch service points into this app")
+    case .configuredDirectory: String(localized: "Evidence: directory named in this app’s settings")
+    case .vendorDirectory: String(localized: "Evidence: this app’s exclusive vendor directory")
+    case .liveProcess: String(localized: "Evidence: this app’s open files or working directory")
+    case .explicitUserChoice: String(localized: "Your explicit choice · ownership remains unproven")
+    }
+  }
+
+  private nonisolated static func sameUnprovenObservation(
+    _ original: RelatedDataCandidate, _ current: RelatedDataCandidate
+  ) -> Bool {
+    guard current.classification == .unprovenNameOnly, current.reason == .nameOnly,
+      current.explicitManualChoiceAvailable, current.refusalEvidence.isEmpty,
+      let oldRoot = original.snapshot?.entries.first(where: { $0.path == original.path })?.identity,
+      let newRoot = current.snapshot?.entries.first(where: { $0.path == current.path })?.identity
+    else { return false }
+    return original.path == current.path && oldRoot == newRoot
   }
 
   func toggleOrphan(_ path: String, actions: ActionStore) {
@@ -780,6 +860,7 @@ final class AppsStore {
     selectedPath = report.path
     reviewedDropPath = report.path
     selectedDataPaths = []
+    explicitlySelectedUnproven = [:]
     packageSelected = false
     if let bundleID = report.bundleID {
       let status = await running.isRunning(bundleID: bundleID)
@@ -792,7 +873,11 @@ final class AppsStore {
     }
     guard let reason = packageUnavailableReason(report) else {
       packageSelected = true
-      selectedDataPaths = Set(report.related.filter { $0.defaultSelected && canSelect($0, app: report) }.map(\.path))
+      selectedDataPaths = Set(
+        report.related.filter {
+          $0.classification != .unprovenNameOnly && $0.provenance?.kind != .configuredDirectory
+            && $0.defaultSelected && canSelect($0, app: report)
+        }.map(\.path))
       await prepareSelectedData(actions: actions)
       return
     }
@@ -818,9 +903,15 @@ final class AppsStore {
       message = String(localized: "Select the app or eligible related data")
       return
     }
-    let candidates = report.related.filter { selectedDataPaths.contains($0.path) }
-    let missing = selectedDataPaths.subtracting(candidates.map(\.path)).sorted().map {
-      PlanRejection(.unavailable, path: $0)
+    let candidates = report.related.filter {
+      selectedDataPaths.contains($0.path) && $0.classification != .unprovenNameOnly
+    }
+    let manual = explicitlySelectedUnproven.values.filter { original in
+      selectedDataPaths.contains(original.path)
+        && report.related.contains { Self.sameUnprovenObservation(original, $0) }
+    }.sorted { $0.path < $1.path }
+    let missing = selectedDataPaths.subtracting(candidates.map(\.path) + manual.map(\.path)).sorted().map {
+      PlanRejection(.unavailable, path: $0, ruleID: "explicitSelectionRequired")
     }
     if packageSelected, let reason = packageUnavailableReason(report) {
       message = reason
@@ -828,24 +919,29 @@ final class AppsStore {
     }
     let includePackage = packageSelected
     let dataPaths = selectedDataPaths
-    let fallbackBuilder = uninstallPlanBuilder
+    let fallbackBuilder = explicitUninstallPlanBuilder
     let activeSession = usesInjectedPlanner ? nil : session
     let builder: AvailableUninstallPlanBuilder = { report, candidates, includePackage in
       guard let activeSession else {
-        return try await fallbackBuilder(report, candidates, includePackage)
+        return try await fallbackBuilder(report, candidates, includePackage, manual)
       }
       return await activeSession.makeAvailableUninstallPlan(
         path: report.path, expectedBundleID: report.bundleID,
-        selectedRelated: candidates, includePackage: includePackage)
+        selectedRelated: candidates, includePackage: includePackage, selectedUnprovenRelated: manual)
     }
     await prepare(
       actions: actions,
       stillSelected: {
         self.selectedPath == report.path && self.selectedDataPaths == dataPaths
           && self.packageSelected == includePackage
+          && manual.allSatisfy { original in
+            self.explicitlySelectedUnproven[original.path].map {
+              Self.sameUnprovenObservation(original, $0)
+            } == true
+          }
       },
       builder: {
-        if candidates.isEmpty && !includePackage {
+        if candidates.isEmpty && manual.isEmpty && !includePackage {
           return RelatedDataService.AvailableUninstallPlan(plan: nil, rejections: missing)
         }
         let outcome = try await builder(report, candidates, includePackage)
@@ -877,6 +973,7 @@ final class AppsStore {
     let id = UUID()
     preparationGeneration = id
     preparing = true
+    preparedActions = actions
     defer {
       if preparationGeneration == id {
         preparing = false
@@ -918,6 +1015,7 @@ final class AppsStore {
       guard preparationGeneration == id, stillSelected(), !actions.busy else { return }
       let summaries = plan.items.map { item in
         let size = PlanItemSize.measure(item)
+        let selectedByName = explicitlySelectedUnproven[item.sourcePath] != nil
         return ActionItemSummary(
           id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
           path: item.sourcePath,
@@ -926,10 +1024,15 @@ final class AppsStore {
             : item.policy == .applicationLink
               ? String(
                 localized: "Listed application link; the physical application is a separate item.")
-              : String(
-                localized:
-                  "Selected app data. Preferences and support files may contain personal settings or documents."
-              ),
+              : selectedByName
+                ? String(
+                  localized:
+                    "You selected this item by name. Its ownership is unproven; it may contain personal data. Move it to Trash only if you recognize it. Undo is available in History."
+                )
+                : String(
+                  localized:
+                    "Selected app data. Preferences and support files may contain personal settings or documents."
+                ),
           logicalBytes: size.logical, allocatedBytes: size.allocated)
       }
       actions.present(plan: plan, items: summaries, rejectedItems: outcome.rejections)

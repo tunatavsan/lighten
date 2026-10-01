@@ -229,7 +229,8 @@ public actor ActionExecutor {
           try guardService.validate(item, plan: plan, preparedOwner: prepared)
         }
         if item.policy == .spaceTrash || item.policy == .wholeBundle {
-          let refreshed = try guardService.refreshedSpaceItem(item)
+          try related.validateExplicitSelection(item, plan: plan)
+          let refreshed = try guardService.refreshedSpaceItem(item, plan: plan)
           try await validateApplication(refreshed)
           try await validateSpaceActivity(refreshed)
           preparedItems.append(refreshed)
@@ -294,7 +295,7 @@ public actor ActionExecutor {
           guard let prepared = preparedOwners.owners[item.id] else { throw RelatedFailure.changedItem }
           try guardService.validate(item, plan: plan, preparedOwner: prepared, movedOwner: movedOwners[proof.appPath])
         } else {
-          try guardService.validate(item)
+          try guardService.validate(item, plan: plan)
         }
         try await beforeMutation?(item)
         // The hook models the final window. Never move on its prior validation.
@@ -325,7 +326,7 @@ public actor ActionExecutor {
           guard let prepared = preparedOwners.owners[item.id] else { throw RelatedFailure.changedItem }
           try guardService.validate(item, plan: plan, preparedOwner: prepared, movedOwner: movedOwners[proof.appPath])
         } else {
-          try guardService.validate(item)
+          try guardService.validate(item, plan: plan)
         }
       } catch {
         let detail = String(describing: error)
