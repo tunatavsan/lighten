@@ -32,8 +32,29 @@ public struct ActionGuard: Sendable {
     try validate(item, installedScopePrepared: false)
   }
 
-  private func validate(_ item: PlanItem, installedScopePrepared: Bool) throws {
+  func validate(
+    _ item: PlanItem, plan: ActionPlan, preparedLink: PreparedApplicationLink,
+    movedOwner: MovedApplicationOwner? = nil
+  ) throws {
+    try preparedLink.validate(item, plan: plan, movedOwner: movedOwner)
+    if let movedOwner { try validate(movedOwner.movedPackage) } else { try validate(preparedLink.package.item) }
+    try validate(item, installedScopePrepared: false, applicationLinkPrepared: true)
+  }
+
+  private func validate(
+    _ item: PlanItem, installedScopePrepared: Bool, applicationLinkPrepared: Bool = false
+  ) throws {
     let policy = item.policy
+    if policy == .applicationLink {
+      guard applicationLinkPrepared, item.inventory.count == 1,
+        item.packageLinkTargetItemID != nil, item.applicationPackageObservation == nil,
+        item.applicationBundleID == nil, (item.nestedApplicationIDs ?? []).isEmpty
+      else { throw GuardFailure.unsupportedItem }
+    } else {
+      guard item.packageLinkTargetItemID == nil,
+        item.applicationPackageObservation == nil || policy == .wholeBundle
+      else { throw GuardFailure.unsupportedItem }
+    }
     let relatedPolicy = policy == .relatedTrash || policy == .relatedContainer || policy == .relatedGroupContainer
     if relatedPolicy {
       guard item.catalogProof == nil, item.duplicateProof == nil,
@@ -74,13 +95,9 @@ public struct ActionGuard: Sendable {
     }
     if policy == .wholeBundle {
       guard item.inventory.first?.identity?.kind == .directory,
-        ExactInventory.isApplicationName(item.sourcePath)
+        ExactInventory.isApplicationName(item.sourcePath), !ScanService.isInsidePackage(item.sourcePath)
       else { throw GuardFailure.unsupportedItem }
-      if let identifier = ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath),
-        identifier.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
-      {
-        throw PlanRejection(.lightenItself, path: item.sourcePath, ruleID: identifier)
-      }
+      _ = try ApplicationPackagePlanning.validatePackage(item)
     }
     if policy == .catalogTrash || policy == .catalogBuildOutput || relatedPolicy
       || policy == .spaceTrash || policy == .wholeBundle
@@ -111,10 +128,16 @@ public struct ActionGuard: Sendable {
     let rootIsDirectory = item.inventory.first?.identity?.kind == .directory
     let rootIsPackage = ScanService.isPackage(item.sourcePath) && (policy == nil || rootIsDirectory)
     let rootIsApplication = rootIsDirectory && ExactInventory.isApplicationName(item.sourcePath)
+    if policy == .wholeBundle || policy == .applicationLink {
+      guard let expectedVolume = item.volumeID,
+        (try? DescriptorFileSystem.volumeID(at: item.sourcePath)) == expectedVolume
+      else { throw PlanRejection(.differentVolume, path: item.sourcePath) }
+    }
     guard let root = item.inventory.first, root.id == item.id,
       root.path == item.sourcePath,
       root.identity?.kind == .regular || root.identity?.kind == .directory
-        || (root.identity?.kind == .symbolicLink && (policy == .catalogTrash || policy == .catalogBuildOutput)),
+        || (root.identity?.kind == .symbolicLink
+          && (policy == .catalogTrash || policy == .catalogBuildOutput || policy == .applicationLink)),
       !PlanService.isBulkRoot(item.sourcePath, homeDirectory: homeDirectory),
       !rootIsPackage || policy != nil,
       policy != .wholeBundle || rootIsApplication,
@@ -139,7 +162,7 @@ public struct ActionGuard: Sendable {
       do { current = try DescriptorFileSystem.identity(at: ancestor.path) } catch { throw GuardFailure.changedAncestor }
       let rules = ProtectionPolicy.rules(for: ancestor.path, homeDirectory: homeDirectory)
       let permitted =
-        (policy == .spaceTrash || policy == .wholeBundle)
+        (policy == .spaceTrash || policy == .wholeBundle || policy == .applicationLink)
         ? ProtectionPolicy.spaceTrashPermits(
           rules, path: ancestor.path, rootPath: item.sourcePath, homeDirectory: homeDirectory, ancestor: true)
         : rules.allSatisfy { policy == .relatedGroupContainer && $0.id == "group-containers" }
@@ -147,7 +170,7 @@ public struct ActionGuard: Sendable {
       else {
         if current.sameStableDirectory(as: ancestor.identity), !permitted,
           let rule = rules.first(where: { rule in
-            (policy == .spaceTrash || policy == .wholeBundle)
+            (policy == .spaceTrash || policy == .wholeBundle || policy == .applicationLink)
               ? !ProtectionPolicy.spaceTrashPermits(
                 [rule], path: ancestor.path, rootPath: item.sourcePath, homeDirectory: homeDirectory, ancestor: true)
               : !(policy == .relatedGroupContainer && rule.id == "group-containers")
@@ -202,7 +225,8 @@ public struct ActionGuard: Sendable {
         let exempt =
           ((entry.id != item.id && entry.path.hasPrefix(item.sourcePath + "/"))
             || (entry.id == item.id
-              && (policy == .relatedGroupContainer || policy == .spaceTrash || policy == .wholeBundle)))
+              && (policy == .relatedGroupContainer || policy == .spaceTrash || policy == .wholeBundle
+                || policy == .applicationLink)))
           && policy.map {
             ExactInventory.permits(
               rules, policy: $0, path: entry.path, rootPath: item.sourcePath, homeDirectory: homeDirectory)
@@ -211,7 +235,8 @@ public struct ActionGuard: Sendable {
           let rule = rules.first { rule in
             !(((entry.id != item.id && entry.path.hasPrefix(item.sourcePath + "/"))
               || (entry.id == item.id
-                && (policy == .relatedGroupContainer || policy == .spaceTrash || policy == .wholeBundle)))
+                && (policy == .relatedGroupContainer || policy == .spaceTrash || policy == .wholeBundle
+                  || policy == .applicationLink)))
               && policy.map {
                 ExactInventory.permits(
                   [rule], policy: $0, path: entry.path, rootPath: item.sourcePath, homeDirectory: homeDirectory)
@@ -227,7 +252,9 @@ public struct ActionGuard: Sendable {
       if packageBoundary
         || expected.device != root.identity?.device
         || (expected.kind == .symbolicLink
-          && (policy == nil || (entry.id == item.id && policy != .catalogTrash && policy != .catalogBuildOutput)))
+          && (policy == nil
+            || (entry.id == item.id && policy != .catalogTrash && policy != .catalogBuildOutput
+              && policy != .applicationLink)))
         || (expected.kind == .other
           && (entry.id == item.id || (policy != .spaceTrash && policy != .wholeBundle)
             || !Self.isMovableSpecialLeaf(entry.path)))
@@ -241,6 +268,7 @@ public struct ActionGuard: Sendable {
         guard (try? DescriptorFileSystem.volumeID(at: entry.path)) == volumeID
         else { throw GuardFailure.changedItem }
         do { try ExactInventory.validateOpaqueRoot(path: entry.path, expected: expected) } catch {
+          if policy == .wholeBundle { throw error }
           throw GuardFailure.changedItem
         }
         opaqueRoots.append(entry.path)
@@ -279,6 +307,7 @@ public struct ActionGuard: Sendable {
       let current = try? DescriptorFileSystem.identity(at: item.sourcePath),
       original.matchesStableTrashIdentity(current)
     else { throw GuardFailure.changedItem }
+    if item.policy == .wholeBundle { _ = try ApplicationPackagePlanning.validatePackage(item) }
     let result = try ExactInventory(homeDirectory: homeDirectory).collect(
       rootPath: item.sourcePath, expected: (original.device, original.inode), policy: item.policy)
     guard result.volumeID == item.volumeID,
@@ -298,7 +327,10 @@ public struct ActionGuard: Sendable {
       id: item.id, sourcePath: item.sourcePath, volumeID: result.volumeID,
       inventory: entries, ancestors: item.ancestors, policy: result.policy,
       applicationBundleID: item.applicationBundleID, nestedApplicationIDs: result.nestedApplicationIDs,
-      snapshotRunID: item.snapshotRunID)
+      snapshotRunID: item.snapshotRunID, observedSize: item.observedSize,
+      sizeMetadataVersion: item.sizeMetadataVersion,
+      applicationPackageObservation: item.applicationPackageObservation,
+      packageLinkTargetItemID: item.packageLinkTargetItemID)
     try validate(refreshed)
     return refreshed
   }

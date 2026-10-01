@@ -9,6 +9,9 @@ public enum TreePolicy: String, Codable, Sendable {
   /// A whole application package moved intact. Its root still receives every
   /// protection check; its contents do not supply Trash or Undo authority.
   case wholeBundle
+  /// Only a private, fresh whole-plan binding to a physical application can
+  /// authorize this symbolic-link leaf. This policy never follows its target.
+  case applicationLink
   /// Catalog cache packages and symbolic links, authorized only by a Trash proof.
   case catalogTrash
   /// Regenerable build output also permits debug symbols below the selected root.
@@ -72,13 +75,13 @@ public struct ExactInventory: Sendable {
   static func permits(
     _ rules: [NeverRule], policy: TreePolicy, path: String, rootPath: String, homeDirectory: String
   ) -> Bool {
-    if policy == .spaceTrash || policy == .wholeBundle {
+    if policy == .spaceTrash || policy == .wholeBundle || policy == .applicationLink {
       return ProtectionPolicy.spaceTrashPermits(
         rules, path: path, rootPath: rootPath, homeDirectory: homeDirectory)
     }
     let exemptions: Set<String>
     switch policy {
-    case .spaceTrash: exemptions = []
+    case .spaceTrash, .applicationLink: exemptions = []
     case .wholeBundle, .catalogTrash: exemptions = applicationRules
     case .catalogBuildOutput: exemptions = applicationRules.union(["xcode-debug-symbols"])
     case .relatedTrash: exemptions = applicationRules
@@ -135,8 +138,9 @@ public struct ExactInventory: Sendable {
     let policy: TreePolicy = requestedPolicy ?? (wholeBundle ? .wholeBundle : .spaceTrash)
     let opaque = Self.isOpaquePackage(path: rootPath, identity: root, policy: policy)
     if wholeBundle,
-      ApplicationIdentity.bundleIdentifier(ofApplicationAt: rootPath)?
-        .caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
+      (try? ApplicationPackagePlanning.observedBundleIdentifiers(at: rootPath))?.contains(where: {
+        $0.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
+      }) == true
     {
       throw PlanRejection(.lightenItself, path: rootPath)
     }
@@ -146,7 +150,7 @@ public struct ExactInventory: Sendable {
     let relatedPolicy =
       requestedPolicy == .relatedTrash || requestedPolicy == .relatedContainer
       || requestedPolicy == .relatedGroupContainer
-    if (relatedPolicy || opaque) && !RelatedDataService.currentUserOwns(rootPath) {
+    if (relatedPolicy || opaque || policy == .applicationLink) && !RelatedDataService.currentUserOwns(rootPath) {
       throw PlanRejection(.needsAdministrator, path: rootPath)
     }
     if let expected, root.device != expected.device || root.inode != expected.inode {
@@ -154,11 +158,17 @@ public struct ExactInventory: Sendable {
     }
     switch root.kind {
     case .symbolicLink:
-      guard requestedPolicy == .catalogTrash || requestedPolicy == .catalogBuildOutput else {
+      guard
+        requestedPolicy == .catalogTrash || requestedPolicy == .catalogBuildOutput
+          || requestedPolicy == .applicationLink
+      else {
         throw PlanRejection(.symbolicLinkRoot, path: rootPath)
       }
     case .other: throw PlanRejection(.specialFile, path: rootPath)
     case .regular, .directory: break
+    }
+    if policy == .applicationLink, root.kind != .symbolicLink {
+      throw PlanRejection(.symbolicLinkRoot, path: rootPath)
     }
     guard opaque ? root.hasOpaquePackageProof : root.hasStableTrashProof else {
       throw PlanRejection(.missingMetadata, path: rootPath)
@@ -185,13 +195,13 @@ public struct ExactInventory: Sendable {
     // Catalog Trash permissions come from a later manifest-proof validation.
     let rootRules = ProtectionPolicy.rules(for: rootPath, homeDirectory: homeDirectory)
     let permittedRoot =
-      (policy == .spaceTrash || policy == .wholeBundle)
+      (policy == .spaceTrash || policy == .wholeBundle || policy == .applicationLink)
       ? ProtectionPolicy.spaceTrashPermits(rootRules, path: rootPath, rootPath: rootPath, homeDirectory: homeDirectory)
       : rootRules.allSatisfy { policy == .relatedGroupContainer && $0.id == "group-containers" }
     if !permittedRoot, let rule = rootRules.first {
       let blockingRule =
         rootRules.first { candidate in
-          (policy == .spaceTrash || policy == .wholeBundle)
+          (policy == .spaceTrash || policy == .wholeBundle || policy == .applicationLink)
             ? !ProtectionPolicy.spaceTrashPermits(
               [candidate], path: rootPath, rootPath: rootPath, homeDirectory: homeDirectory)
             : !(policy == .relatedGroupContainer && candidate.id == "group-containers")
@@ -201,14 +211,14 @@ public struct ExactInventory: Sendable {
     for ancestor in ancestors {
       let rules = ProtectionPolicy.rules(for: ancestor.path, homeDirectory: homeDirectory)
       let permitted =
-        (policy == .spaceTrash || policy == .wholeBundle)
+        (policy == .spaceTrash || policy == .wholeBundle || policy == .applicationLink)
         ? ProtectionPolicy.spaceTrashPermits(
           rules, path: ancestor.path, rootPath: rootPath, homeDirectory: homeDirectory, ancestor: true)
         : rules.allSatisfy { policy == .relatedGroupContainer && $0.id == "group-containers" }
       if !permitted, let rule = rules.first {
         let blockingRule =
           rules.first { candidate in
-            (policy == .spaceTrash || policy == .wholeBundle)
+            (policy == .spaceTrash || policy == .wholeBundle || policy == .applicationLink)
               ? !ProtectionPolicy.spaceTrashPermits(
                 [candidate], path: ancestor.path, rootPath: rootPath, homeDirectory: homeDirectory, ancestor: true)
               : !(policy == .relatedGroupContainer && candidate.id == "group-containers")
@@ -366,10 +376,8 @@ public struct ExactInventory: Sendable {
       }
       let opened = DescriptorFileSystem.identity(from: openedDetails)
       if let expected, !opened.sameStableDirectory(as: expected) { throw PlanRejection(.changedSinceScan, path: path) }
-      if includeIdentifier, Self.isApplicationName(path),
-        let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: path)
-      {
-        result.applicationIDs.append(id)
+      if includeIdentifier, Self.isApplicationName(path) {
+        result.applicationIDs += try ApplicationPackagePlanning.observedBundleIdentifiers(at: path)
       }
       let copy = dup(fd)
       guard copy >= 0, let directory = fdopendir(copy) else {

@@ -11,7 +11,9 @@ struct MovedApplicationOwner: Sendable {
 
   init(planID: UUID, package: PlanItem, path: String, identity: FileIdentity) throws {
     guard package.policy == .wholeBundle, let original = package.inventory.first?.identity,
-      original.matchesStableTrashIdentity(identity), Self.isAbsent(package.sourcePath)
+      original.matchesStableTrashIdentity(identity), Self.isAbsent(package.sourcePath),
+      let volume = package.volumeID, (try? DescriptorFileSystem.volumeID(at: path)) == volume,
+      (try? KnownPathFileSystem.identity(at: path)).map({ identity.matchesStableTrashIdentity($0) }) == true
     else { throw RelatedFailure.changedItem }
     self.planID = planID
     self.originalPackage = package
@@ -27,20 +29,27 @@ struct MovedApplicationOwner: Sendable {
       id: package.id, sourcePath: path, volumeID: package.volumeID, inventory: entries,
       ancestors: try DescriptorFileSystem.ancestorIdentities(of: path), policy: .wholeBundle,
       applicationBundleID: package.applicationBundleID, nestedApplicationIDs: package.nestedApplicationIDs,
-      snapshotRunID: package.snapshotRunID)
+      snapshotRunID: package.snapshotRunID, observedSize: package.observedSize,
+      sizeMetadataVersion: package.sizeMetadataVersion,
+      applicationPackageObservation: package.applicationPackageObservation,
+      packageLinkTargetItemID: package.packageLinkTargetItemID)
+    do { _ = try ApplicationPackagePlanning.validatePackage(movedPackage) } catch { throw RelatedFailure.changedItem }
   }
 
   func mapped(_ item: PlanItem, planID: UUID) throws -> PlanItem {
+    let metadata: ApplicationPackageMetadata
+    do { metadata = try ApplicationPackagePlanning.validatePackage(movedPackage) } catch {
+      throw RelatedFailure.changedItem
+    }
     guard self.planID == planID, Self.isAbsent(originalPackage.sourcePath),
       let proof = item.installedRelatedProof,
       proof.appPath == originalPackage.sourcePath, proof.bundleID == originalPackage.applicationBundleID,
       proof.appIdentity == originalPackage.inventory.first?.identity,
-      proof.infoIdentity
-        == (try? DescriptorFileSystem.identity(at: movedPackage.sourcePath + "/Contents/Info.plist")),
+      proof.infoIdentity == metadata.observation.infoIdentity,
       (try? DescriptorFileSystem.identity(at: movedPackage.sourcePath)).map({
         movedIdentity.matchesStableTrashIdentity($0)
       }) == true,
-      ApplicationIdentity.bundleIdentifier(ofApplicationAt: movedPackage.sourcePath) == proof.bundleID
+      metadata.observation.bundleIdentifier == proof.bundleID
     else { throw RelatedFailure.changedItem }
     let mapped = InstalledRelatedProof(
       bundleID: proof.bundleID, appPath: movedPackage.sourcePath, appIdentity: movedIdentity,
@@ -49,11 +58,16 @@ struct MovedApplicationOwner: Sendable {
     return PlanItem(
       id: item.id, sourcePath: item.sourcePath, volumeID: item.volumeID, inventory: item.inventory,
       ancestors: item.ancestors, installedRelatedProof: mapped, policy: item.policy,
-      nestedApplicationIDs: item.nestedApplicationIDs, snapshotRunID: item.snapshotRunID)
+      nestedApplicationIDs: item.nestedApplicationIDs, snapshotRunID: item.snapshotRunID,
+      observedSize: item.observedSize, sizeMetadataVersion: item.sizeMetadataVersion,
+      applicationPackageObservation: item.applicationPackageObservation,
+      packageLinkTargetItemID: item.packageLinkTargetItemID)
   }
 
   static func isAbsent(_ path: String) -> Bool {
+    guard let (parentFD, name) = try? DescriptorFileSystem.openParent(of: path) else { return false }
+    defer { close(parentFD) }
     var details = stat()
-    return lstat(path, &details) != 0 && errno == ENOENT
+    return fstatat(parentFD, name, &details, AT_SYMLINK_NOFOLLOW_ANY) != 0 && errno == ENOENT
   }
 }

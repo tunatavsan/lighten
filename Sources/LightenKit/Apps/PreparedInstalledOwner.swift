@@ -14,10 +14,15 @@ struct PreparedInstalledOwner: Sendable {
       (try? DescriptorFileSystem.identity(at: item.sourcePath)) == originalProof.relatedIdentity
     else { throw RelatedFailure.changedItem }
     let current = try movedOwner?.mapped(item, planID: plan.id) ?? item
-    guard let proof = current.installedRelatedProof,
+    guard let proof = current.installedRelatedProof else { throw RelatedFailure.changedItem }
+    let metadata: ApplicationPackageMetadata
+    do { metadata = try ApplicationPackagePlanning.metadata(at: proof.appPath) } catch {
+      throw RelatedFailure.changedItem
+    }
+    guard
       (try? DescriptorFileSystem.identity(at: proof.appPath)) == proof.appIdentity,
-      (try? DescriptorFileSystem.identity(at: proof.appPath + "/Contents/Info.plist")) == proof.infoIdentity,
-      ApplicationIdentity.bundleIdentifier(ofApplicationAt: proof.appPath) == proof.bundleID
+      metadata.observation.infoIdentity == proof.infoIdentity,
+      metadata.observation.bundleIdentifier == proof.bundleID
     else { throw RelatedFailure.changedItem }
     for signature in signatures {
       if let movedOwner {

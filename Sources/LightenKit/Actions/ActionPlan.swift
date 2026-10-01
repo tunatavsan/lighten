@@ -85,6 +85,11 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   public let policy: TreePolicy?
   /// Bundle identifier of a whole application moved to the Trash; it must not be running.
   public let applicationBundleID: String?
+  /// An expected layout and Info identity, checked against a fresh native read.
+  public let applicationPackageObservation: ApplicationPackageObservation?
+  /// A symbolic-link leaf's expected physical item in this same plan. This ID
+  /// cannot grant authority without a current private package/link binding.
+  public let packageLinkTargetItemID: UUID?
   /// Application packages included by the inventory; none may be running.
   public let nestedApplicationIDs: [String]?
 
@@ -120,7 +125,8 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     duplicateProof: DuplicateProof? = nil, policy: TreePolicy? = nil, applicationBundleID: String? = nil,
     nestedApplicationIDs: [String]? = nil, snapshotRunID: UUID? = nil,
     orphanRelatedProof: OrphanRelatedProof? = nil, observedSize: ObservedPlanSize? = nil,
-    sizeMetadataVersion: Int? = 1
+    sizeMetadataVersion: Int? = 1, applicationPackageObservation: ApplicationPackageObservation? = nil,
+    packageLinkTargetItemID: UUID? = nil
   ) {
     self.id = id
     self.sourcePath = sourcePath
@@ -135,6 +141,8 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     self.duplicateProof = duplicateProof
     self.policy = policy
     self.applicationBundleID = applicationBundleID
+    self.applicationPackageObservation = applicationPackageObservation
+    self.packageLinkTargetItemID = packageLinkTargetItemID
     self.nestedApplicationIDs = nestedApplicationIDs
     self.observedSize = observedSize?.validated
     self.sizeMetadataVersion = sizeMetadataVersion
@@ -394,8 +402,13 @@ public struct PlanService: Sendable {
         let result = try inventory.collect(
           rootPath: root.path, expected: (root.device, root.inode), isCancelled: isCancelled)
         var bundleID: String?
+        var packageObservation: ApplicationPackageObservation?
         if result.policy == .wholeBundle {
-          bundleID = ApplicationIdentity.bundleIdentifier(ofApplicationAt: root.path)
+          do {
+            let metadata = try ApplicationPackagePlanning.metadata(at: root.path)
+            bundleID = metadata.observation.bundleIdentifier
+            packageObservation = metadata.observation
+          } catch { throw ApplicationPackagePlanning.refusal(error, path: root.path) }
           let identifiers = [bundleID].compactMap { $0 } + result.nestedApplicationIDs
           if identifiers.contains(where: {
             $0.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
@@ -407,7 +420,8 @@ public struct PlanService: Sendable {
           PlanItem(
             id: result.entries[0].id, sourcePath: root.path, volumeID: result.volumeID, inventory: result.entries,
             ancestors: result.ancestors, policy: result.policy, applicationBundleID: bundleID,
-            nestedApplicationIDs: result.nestedApplicationIDs))
+            nestedApplicationIDs: result.nestedApplicationIDs,
+            applicationPackageObservation: packageObservation))
       } catch {
         rejections.append(error)
       }

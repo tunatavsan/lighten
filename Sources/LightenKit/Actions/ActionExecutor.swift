@@ -165,6 +165,14 @@ public actor ActionExecutor {
     var preparationFailures = preparedOwners.failures
     var ownerFailures: [String: String] = [:]
     var ownerPackages: [String: PlanItem] = [:]
+    let packagePlanning = ApplicationPackagePlanning(homeDirectory: guardService.homeDirectory)
+    let initialPackages = packagePlanning.prepare(plan: plan)
+    for (id, failure) in initialPackages.failures {
+      preparationFailures[id] = String(describing: failure)
+      if let package = plan.items.first(where: { $0.id == id && $0.policy == .wholeBundle }) {
+        ownerFailures[package.sourcePath] = String(describing: failure)
+      }
+    }
     let installedItems = plan.items.filter { $0.installedRelatedProof != nil }
     for item in installedItems {
       guard let proof = item.installedRelatedProof,
@@ -188,7 +196,7 @@ public actor ActionExecutor {
             return binding.bundleID == package.applicationBundleID
               && binding.appIdentity == package.inventory.first?.identity
               && binding.infoIdentity
-                == (try? DescriptorFileSystem.identity(at: package.sourcePath + "/Contents/Info.plist"))
+                == (try? ApplicationPackagePlanning.metadata(at: package.sourcePath).observation.infoIdentity)
           })
         else { throw RelatedFailure.changedItem }
         try guardService.validate(package)
@@ -199,10 +207,16 @@ public actor ActionExecutor {
         ownerFailures[proof.appPath] = String(describing: error)
       }
     }
+    let linkedPackageIDs = Set(
+      plan.items.filter { $0.policy == .applicationLink }.compactMap(\.packageLinkTargetItemID))
+    for package in plan.items where package.policy == .wholeBundle && linkedPackageIDs.contains(package.id) {
+      ownerPackages[package.sourcePath] = package
+    }
     var preparedItems: [PlanItem] = []
     var deltas: [UUID: (Int, Int64)] = [:]
     for item in plan.items {
       do {
+        if let detail = preparationFailures[item.id] { throw SpaceValidationFailure(detail: detail) }
         if let owner = item.installedRelatedProof?.appPath ?? ownerPackages[item.sourcePath]?.sourcePath,
           let detail = ownerFailures[owner]
         {
@@ -236,7 +250,15 @@ public actor ActionExecutor {
       schema: plan.schema, id: plan.id, snapshotRunID: plan.snapshotRunID,
       kind: plan.kind, createdAt: plan.createdAt,
       items: preparedItems.filter { ownerPackages[$0.sourcePath] != nil }
-        + preparedItems.filter { ownerPackages[$0.sourcePath] == nil })
+        + preparedItems.filter { ownerPackages[$0.sourcePath] == nil && $0.policy == .applicationLink }
+        + preparedItems.filter { ownerPackages[$0.sourcePath] == nil && $0.policy != .applicationLink })
+    let preparedPackages = packagePlanning.prepare(plan: executionPlan)
+    for (id, failure) in preparedPackages.failures {
+      preparationFailures[id] = String(describing: failure)
+      if let package = executionPlan.items.first(where: { $0.id == id && $0.policy == .wholeBundle }) {
+        ownerFailures[package.sourcePath] = String(describing: failure)
+      }
+    }
     // The complete immutable inventory is durable before any OS mutation.
     try await journal.append(JournalRecord(kind: .intent, planID: plan.id, plan: executionPlan))
 
@@ -266,7 +288,9 @@ public actor ActionExecutor {
         }
         try await validateApplication(item)
         try await validateSpaceActivity(item)
-        if let proof = item.installedRelatedProof {
+        if item.policy == .applicationLink {
+          try await validateApplicationLink(item, plan: executionPlan, prepared: preparedPackages, moved: movedOwners)
+        } else if let proof = item.installedRelatedProof {
           guard let prepared = preparedOwners.owners[item.id] else { throw RelatedFailure.changedItem }
           try guardService.validate(item, plan: plan, preparedOwner: prepared, movedOwner: movedOwners[proof.appPath])
         } else {
@@ -295,7 +319,9 @@ public actor ActionExecutor {
         }
         try await validateApplication(item)
         try await validateSpaceActivity(item)
-        if let proof = item.installedRelatedProof {
+        if item.policy == .applicationLink {
+          try await validateApplicationLink(item, plan: executionPlan, prepared: preparedPackages, moved: movedOwners)
+        } else if let proof = item.installedRelatedProof {
           guard let prepared = preparedOwners.owners[item.id] else { throw RelatedFailure.changedItem }
           try guardService.validate(item, plan: plan, preparedOwner: prepared, movedOwner: movedOwners[proof.appPath])
         } else {
@@ -356,7 +382,9 @@ public actor ActionExecutor {
         guard let original = item.inventory.first?.identity,
           let volumeID = item.volumeID,
           (try? DescriptorFileSystem.volumeID(at: returnedPath)) == volumeID,
-          moved.matchesStableTrashIdentity(original)
+          moved.matchesStableTrashIdentity(original),
+          (item.policy != .wholeBundle && item.policy != .applicationLink)
+            || MovedApplicationOwner.isAbsent(item.sourcePath)
         else {
           results.append(
             ItemActionResult(
@@ -450,12 +478,7 @@ public actor ActionExecutor {
       return
     }
     guard item.policy == .wholeBundle else { return }
-    let currentIdentifier = ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath)
-    if let expected = item.applicationBundleID,
-      currentIdentifier != expected
-    {
-      throw RelatedFailure.changedItem
-    }
+    let currentIdentifier = try ApplicationPackagePlanning.validatePackage(item).observation.bundleIdentifier
     let everyID = [currentIdentifier].compactMap { $0 } + (item.nestedApplicationIDs ?? [])
     if everyID.contains(where: { $0.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame }) {
       throw ExecutionFailure.selfRemoval
@@ -463,6 +486,18 @@ public actor ActionExecutor {
     for id in everyID where await runningApplications.isRunning(bundleID: id) != false {
       throw RelatedFailure.runningOrUnknown
     }
+  }
+
+  private func validateApplicationLink(
+    _ item: PlanItem, plan: ActionPlan, prepared: ApplicationPackagePreparation,
+    moved: [String: MovedApplicationOwner]
+  ) async throws {
+    guard let link = prepared.links[item.id],
+      let owner = moved[link.package.item.sourcePath], owner.originalPackage.id == item.packageLinkTargetItemID
+    else { throw RelatedFailure.changedItem }
+    try await validateApplication(owner.movedPackage)
+    try await validateSpaceActivity(owner.movedPackage)
+    try guardService.validate(item, plan: plan, preparedLink: link, movedOwner: owner)
   }
 
   private func validateInstalledData(

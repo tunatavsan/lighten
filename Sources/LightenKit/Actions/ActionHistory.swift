@@ -262,7 +262,10 @@ public actor ActionHistory {
       for (item, records, failure) in refused {
         try await self.recordUndoFailure(plan: plan, item: item, records: records, failure: failure)
       }
-      for (item, records) in pending {
+      let ordered =
+        pending.filter { $0.0.policy != .applicationLink }
+        + pending.filter { $0.0.policy == .applicationLink }
+      for (item, records) in ordered {
         do {
           try await self.restoreLeased(plan: plan, item: item, records: records)
           outcomes[item.id] = UndoItemResult(itemID: item.id, outcome: .restored, detail: nil, failure: nil)
@@ -428,7 +431,9 @@ public actor ActionHistory {
   }
 
   private nonisolated func permittedRestoreAncestor(_ path: String, item: PlanItem, plan: ActionPlan) -> Bool {
-    if plan.kind == .trash, item.policy == .spaceTrash || item.policy == .wholeBundle {
+    if plan.kind == .trash,
+      item.policy == .spaceTrash || item.policy == .wholeBundle || item.policy == .applicationLink
+    {
       return ProtectionPolicy.spaceTrashPermits(
         ProtectionPolicy.rules(for: path, homeDirectory: homeDirectory), path: path,
         rootPath: item.sourcePath, homeDirectory: homeDirectory, ancestor: true)
