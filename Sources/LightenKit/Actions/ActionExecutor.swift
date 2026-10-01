@@ -10,6 +10,15 @@ public enum ActionOutcome: String, Codable, Sendable {
   case applied, skipped, failed, uncertain, notAttempted
 }
 
+/// An observation for explaining an execution result, never removal or Undo authority.
+public enum ActionMutationStage: String, Codable, Sendable {
+  case notStarted
+  case sourceRetained
+  case trashCallUnverified
+  case trashMoveObserved
+  case permanentMutation
+}
+
 public struct ItemActionResult: Codable, Sendable {
   public let itemID: UUID
   public let outcome: ActionOutcome
@@ -18,11 +27,14 @@ public struct ItemActionResult: Codable, Sendable {
   public let logicalByteDelta: Int64?
   public let deletedCount: Int
   public let deletedLogicalBytes: Int64
+  /// Older results have no stage and must be presented as unverified.
+  public let mutationStage: ActionMutationStage?
 
   public init(
     itemID: UUID, outcome: ActionOutcome, detail: String? = nil,
     deletedCount: Int = 0, deletedLogicalBytes: Int64 = 0,
-    addedFileCount: Int? = nil, logicalByteDelta: Int64? = nil
+    addedFileCount: Int? = nil, logicalByteDelta: Int64? = nil,
+    mutationStage: ActionMutationStage? = nil
   ) {
     self.addedFileCount = addedFileCount
     self.logicalByteDelta = logicalByteDelta
@@ -31,6 +43,7 @@ public struct ItemActionResult: Codable, Sendable {
     self.detail = detail
     self.deletedCount = deletedCount
     self.deletedLogicalBytes = deletedLogicalBytes
+    self.mutationStage = mutationStage
   }
 }
 
@@ -339,7 +352,9 @@ public actor ActionExecutor {
           results.append(ItemActionResult(itemID: item.id, outcome: .skipped, detail: detail))
           continue
         } catch {
-          results.append(ItemActionResult(itemID: item.id, outcome: .uncertain, detail: "journal failure"))
+          results.append(
+            ItemActionResult(
+              itemID: item.id, outcome: .uncertain, detail: "journal failure", mutationStage: .notStarted))
           break
         }
       }
@@ -362,7 +377,7 @@ public actor ActionExecutor {
           results.append(
             ItemActionResult(
               itemID: item.id, outcome: .uncertain,
-              detail: "Trash call failed and source identity is unverified"))
+              detail: "Trash call failed and source identity is unverified", mutationStage: .trashCallUnverified))
           break
         }
         do {
@@ -372,7 +387,9 @@ public actor ActionExecutor {
             ))
           results.append(ItemActionResult(itemID: item.id, outcome: .failed, detail: detail))
         } catch {
-          results.append(ItemActionResult(itemID: item.id, outcome: .uncertain, detail: "journal failure"))
+          results.append(
+            ItemActionResult(
+              itemID: item.id, outcome: .uncertain, detail: "journal failure", mutationStage: .sourceRetained))
           break
         }
         continue
@@ -389,7 +406,8 @@ public actor ActionExecutor {
         else {
           results.append(
             ItemActionResult(
-              itemID: item.id, outcome: .uncertain, detail: "moved identity mismatch"
+              itemID: item.id, outcome: .uncertain, detail: "moved identity mismatch",
+              mutationStage: .trashCallUnverified
             ))
           break
         }
@@ -400,7 +418,10 @@ public actor ActionExecutor {
               returnedTrashPath: returnedPath, movedIdentity: moved
             ))
         } catch {
-          results.append(ItemActionResult(itemID: item.id, outcome: .uncertain, detail: "applied journal failure"))
+          results.append(
+            ItemActionResult(
+              itemID: item.id, outcome: .uncertain, detail: "applied journal failure",
+              mutationStage: .trashMoveObserved))
           break
         }
         if ownerPackages[item.sourcePath] != nil {
@@ -416,12 +437,13 @@ public actor ActionExecutor {
         results.append(
           ItemActionResult(
             itemID: item.id, outcome: .applied,
-            addedFileCount: deltas[item.id]?.0, logicalByteDelta: deltas[item.id]?.1))
+            addedFileCount: deltas[item.id]?.0, logicalByteDelta: deltas[item.id]?.1,
+            mutationStage: .trashMoveObserved))
       } catch {
         results.append(
           ItemActionResult(
             itemID: item.id, outcome: .uncertain,
-            detail: "moved result could not be verified"))
+            detail: "moved result could not be verified", mutationStage: .trashCallUnverified))
         break
       }
     }
@@ -430,7 +452,7 @@ public actor ActionExecutor {
       results.append(
         ItemActionResult(
           itemID: item.id, outcome: .notAttempted,
-          detail: "stopped after an uncertain result"))
+          detail: "stopped after an uncertain result", mutationStage: .notStarted))
     }
     return ActionResult(planID: plan.id, items: results)
   }
@@ -722,7 +744,8 @@ public actor ActionExecutor {
           return ItemActionResult(
             itemID: item.id, outcome: .uncertain,
             detail: "journal failure after irreversible deletion",
-            deletedCount: count, deletedLogicalBytes: bytes)
+            deletedCount: count, deletedLogicalBytes: bytes,
+            mutationStage: count == 0 ? .notStarted : .permanentMutation)
         }
       }
     }
@@ -740,7 +763,7 @@ public actor ActionExecutor {
       return ItemActionResult(
         itemID: item.id, outcome: .uncertain,
         detail: "journal failure after irreversible deletion",
-        deletedCount: count, deletedLogicalBytes: bytes)
+        deletedCount: count, deletedLogicalBytes: bytes, mutationStage: .permanentMutation)
     }
   }
 

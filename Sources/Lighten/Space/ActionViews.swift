@@ -136,7 +136,10 @@ struct ActionFeedbackView: View {
             .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         }
         if !actions.resultFailures.isEmpty || !actions.resultRejections.isEmpty {
-          DisclosureGroup(String(localized: "Items that stayed in place")) {
+          DisclosureGroup(
+            actions.unverifiedResultCount > 0
+              ? String(localized: "Items needing review") : String(localized: "Items that stayed in place")
+          ) {
             ForEach(actions.resultRejections, id: \.path) { rejection in
               Text(SpaceText.rejection(rejection))
                 .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)

@@ -137,6 +137,38 @@
         }
       }
     },
+    "%lld item outcomes could not be verified. Check History and Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld item outcomes could not be verified. Check History and Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld öğenin sonucu doğrulanamadı. Geçmiş’i ve Finder’ı kontrol edin."
+          }
+        }
+      }
+    },
+    "A permanent change occurred, but completion could not be verified. Check History; this change cannot be undone.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A permanent change occurred, but completion could not be verified. Check History; this change cannot be undone."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kalıcı bir değişiklik oldu, ancak tamamlandığı doğrulanamadı. Geçmiş’i kontrol edin; bu değişiklik geri alınamaz."
+          }
+        }
+      }
+    },
     "A related process is running. Quit it before cleaning.": {
       "localizations": {
         "en": {
@@ -1930,6 +1962,22 @@
         }
       }
     },
+    "Items needing review": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Items needing review"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İncelenmesi gereken öğeler"
+          }
+        }
+      }
+    },
     "Items that stayed in place": {
       "extractionState": "manual",
       "localizations": {
@@ -3673,6 +3721,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kalan boyutlar ölçülüyor"
+          }
+        }
+      }
+    },
+    "Removal could not be verified. Check the item in History and Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removal could not be verified. Check the item in History and Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaldırma doğrulanamadı. Öğeyi Geçmiş’ten ve Finder’dan kontrol edin."
+          }
+        }
+      }
+    },
+    "Removal could not be verified. The item may be in Trash; check History or Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removal could not be verified. The item may be in Trash; check History or Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaldırma doğrulanamadı. Öğe Çöp’te olabilir; Geçmiş’ten veya Finder’dan kontrol edin."
           }
         }
       }
@@ -5856,6 +5936,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu öğe kaldırılmadı."
+          }
+        }
+      }
+    },
+    "This library may contain your projects, recordings or edits, and another copy is not known. Check what you need before moving it to Trash.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This library may contain your projects, recordings or edits, and another copy is not known. Check what you need before moving it to Trash."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu kütüphane projelerinizi, kayıtlarınızı veya düzenlemelerinizi içerebilir; başka bir kopyası bilinmiyor. Çöp’e taşımadan önce ihtiyacınız olanları kontrol edin."
           }
         }
       }

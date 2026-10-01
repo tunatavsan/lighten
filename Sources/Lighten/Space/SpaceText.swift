@@ -22,6 +22,11 @@ enum SpaceText {
           "This item contains names associated with keys or secrets; check before moving it to Trash.",
           "Bu öğede anahtar veya gizli bilgilerle ilişkili dosya adları var; Çöp’e taşımadan önce kontrol edin."
         )
+      case .personalLibrary:
+        (
+          "This library may contain your projects, recordings or edits, and another copy is not known. Check what you need before moving it to Trash.",
+          "Bu kütüphane projelerinizi, kayıtlarınızı veya düzenlemelerinizi içerebilir; başka bir kopyası bilinmiyor. Çöp’e taşımadan önce ihtiyacınız olanları kontrol edin."
+        )
       case .copyUnknown:
         (
           "This item contains mostly personal files and another copy is not known; check before moving it to Trash.",

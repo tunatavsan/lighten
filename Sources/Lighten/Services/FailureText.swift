@@ -227,6 +227,39 @@ enum FailureText {
     return recognized ? message : message + " " + raw
   }
 
+  static func executionIsUnverified(_ item: ItemActionResult) -> Bool {
+    guard item.outcome != .applied else { return false }
+    switch item.mutationStage {
+    case .notStarted, .sourceRetained: return false
+    case .trashCallUnverified, .trashMoveObserved, .permanentMutation: return true
+    case nil: return item.outcome == .uncertain || item.outcome == .failed
+    }
+  }
+
+  static func execution(_ item: ItemActionResult, turkish: Bool? = nil) -> String {
+    if !executionIsUnverified(item) {
+      return item.detail.map { describe($0, turkish: turkish) }
+        ?? text("This item was not removed.", "Bu öğe kaldırılmadı.", turkish: turkish)
+    }
+    switch item.mutationStage {
+    case .trashCallUnverified, .trashMoveObserved:
+      return text(
+        "Removal could not be verified. The item may be in Trash; check History or Finder.",
+        "Kaldırma doğrulanamadı. Öğe Çöp’te olabilir; Geçmiş’ten veya Finder’dan kontrol edin.", turkish: turkish)
+    case .permanentMutation:
+      return text(
+        "A permanent change occurred, but completion could not be verified. Check History; this change cannot be undone.",
+        "Kalıcı bir değişiklik oldu, ancak tamamlandığı doğrulanamadı. Geçmiş’i kontrol edin; bu değişiklik geri alınamaz.",
+        turkish: turkish)
+    case nil:
+      return text(
+        "Removal could not be verified. Check the item in History and Finder.",
+        "Kaldırma doğrulanamadı. Öğeyi Geçmiş’ten ve Finder’dan kontrol edin.", turkish: turkish)
+    case .notStarted, .sourceRetained:
+      return text("This item was not removed.", "Bu öğe kaldırılmadı.", turkish: turkish)
+    }
+  }
+
   static func posixDetails(_ number: Int32) -> String {
     "\(String(cString: strerror(number))) (\(number))"
   }

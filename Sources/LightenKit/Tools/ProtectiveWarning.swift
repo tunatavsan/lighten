@@ -1,17 +1,20 @@
 import Foundation
 
-/// A reminder based only on exact inventory metadata. It never changes a plan,
+/// A reminder based only on inventory names and kinds. It never changes a plan,
 /// reads file contents, or establishes that a file is the sole remaining copy.
 public enum ProtectiveWarning: String, Sendable, Equatable {
-  case valuableData, secrets, copyUnknown
+  case valuableData, secrets, copyUnknown, personalLibrary
 
   public static func evaluate(
     _ item: PlanItem, homeDirectory: String = NSHomeDirectory(), knownOtherCopy: Bool = false
   ) -> Self? {
     guard !knownOtherCopy, item.duplicateProof == nil else { return nil }
+    // These roots can be opaque to the inventory. Their known library/project
+    // type warrants a reminder without reading any payload or assuming a copy.
+    let personalLibrary = item.inventory.contains(where: Self.isPersonalLibrary)
     let components = item.sourcePath.split(separator: "/").map { $0.lowercased() }
     let rebuildable: Set<String> = ["caches", "logs", "node_modules", "deriveddata"]
-    guard !components.contains(where: rebuildable.contains) else { return nil }
+    guard personalLibrary || !components.contains(where: rebuildable.contains) else { return nil }
     let rootExtension = URL(fileURLWithPath: item.sourcePath).pathExtension.lowercased()
     guard !["dmg", "pkg", "mpkg"].contains(rootExtension) else { return nil }
     let explicit = NeverRule.all.filter { $0.scope == .explicitTrashOnly }
@@ -27,6 +30,7 @@ public enum ProtectiveWarning: String, Sendable, Equatable {
     }) {
       return .secrets
     }
+    if personalLibrary { return .personalLibrary }
     let personalExtensions = Self.personalExtensions
     let personal = files.filter {
       personalExtensions.contains(URL(fileURLWithPath: $0.path).pathExtension.lowercased())
@@ -40,6 +44,12 @@ public enum ProtectiveWarning: String, Sendable, Equatable {
     "ppt", "pptx", "key", "txt", "md", "rtf", "swift", "m", "h", "c", "cpp", "rs", "go", "py",
     "js", "jsx", "ts", "tsx", "java", "kt", "rb", "php", "html", "css", "sql", "sh",
   ]
+
+  private static func isPersonalLibrary(_ entry: ScanEntry) -> Bool {
+    guard entry.identity?.kind == .directory else { return false }
+    return ["fcpbundle", "logicx", "band", "imovielibrary", "musiclibrary"].contains(
+      URL(fileURLWithPath: entry.path).pathExtension.lowercased())
+  }
 
   private static func isSecretName(_ url: URL) -> Bool {
     let name = url.lastPathComponent.lowercased()
@@ -60,6 +70,8 @@ public enum ProtectiveWarning: String, Sendable, Equatable {
       case .copyUnknown:
         return entry.identity?.kind == .regular
           && Self.personalExtensions.contains(URL(fileURLWithPath: entry.path).pathExtension.lowercased())
+      case .personalLibrary:
+        return Self.isPersonalLibrary(entry)
       }
     }
     return Array(Set(matches.map(\.path)).sorted().prefix(3))

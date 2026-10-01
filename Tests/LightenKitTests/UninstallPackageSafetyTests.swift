@@ -225,6 +225,7 @@ struct UninstallPackageSafetyTests {
     ).execute(plan)
     #expect(result.items.first { $0.itemID == package.id }?.outcome == .uncertain)
     #expect(result.items.first { $0.itemID == package.id }?.detail == "applied journal failure")
+    #expect(result.items.first { $0.itemID == package.id }?.mutationStage == .trashMoveObserved)
     #expect(result.items.first { $0.itemID == data.id }?.outcome == .notAttempted)
     #expect(result.items.first { $0.itemID == own.id }?.outcome == .notAttempted)
     #expect(await trash.paths() == [fixture.app])

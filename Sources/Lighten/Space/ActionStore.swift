@@ -308,7 +308,7 @@ final class ActionStore {
         guard let outcome = outcomes[item.id], outcome.outcome != .applied else { return nil }
         return ActionDisplayFailure(
           itemID: item.id, path: item.sourcePath, outcome: outcome.outcome,
-          detail: outcome.detail.map { FailureText.describe($0) } ?? String(localized: "This item was not removed."))
+          detail: FailureText.execution(outcome))
       }
       for item in applied {
         appliedDisplayItems[item.itemID] = item
@@ -351,7 +351,20 @@ final class ActionStore {
       ?? resultRejections.first { $0.path == path }.map(SpaceText.rejection)
   }
 
+  var unverifiedResultCount: Int {
+    result?.items.filter { FailureText.executionIsUnverified($0) }.count ?? 0
+  }
+
   var completedSummary: String? {
+    guard let appliedSummary else { return nil }
+    guard unverifiedResultCount > 0 else { return appliedSummary }
+    let unverified = String.localizedStringWithFormat(
+      String(localized: "%lld item outcomes could not be verified. Check History and Finder."), unverifiedResultCount)
+    return result?.items.contains { $0.outcome == .applied } == true
+      ? appliedSummary + " " + unverified : unverified
+  }
+
+  private var appliedSummary: String? {
     guard let result else { return nil }
     let appliedIDs = Set(result.items.filter { $0.outcome == .applied }.map(\.itemID))
     let applied = resultSummaries.filter { appliedIDs.contains($0.id) }

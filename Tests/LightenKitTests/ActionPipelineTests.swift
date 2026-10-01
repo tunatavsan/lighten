@@ -191,6 +191,7 @@ private func localMover(destination: String) -> TestMover {
   ).execute(plan)
   #expect(result.items.count == 3)
   #expect(result.items.map(\.outcome) == [.uncertain, .notAttempted, .notAttempted])
+  #expect(result.items.map(\.mutationStage) == [.trashMoveObserved, .notStarted, .notStarted])
   #expect(FileManager.default.fileExists(atPath: paths[1]))
   #expect(FileManager.default.fileExists(atPath: paths[2]))
 }
@@ -574,6 +575,7 @@ private func localMover(destination: String) -> TestMover {
     }
   ).execute(action)
   #expect(result.items.map(\.outcome) == [.uncertain])
+  #expect(result.items.first?.mutationStage == .trashCallUnverified)
   #expect(FileManager.default.fileExists(atPath: target))
   #expect((await journal.read()).records.map(\.kind) == [.intent])
 }
@@ -607,6 +609,7 @@ private func localMover(destination: String) -> TestMover {
     trash: localMover(destination: trash)
   ).execute(next)
   #expect(uncertain.items.map(\.outcome) == [.uncertain])
+  #expect(uncertain.items.first?.mutationStage == .trashMoveObserved)
   #expect(!FileManager.default.fileExists(atPath: third))
   #expect((await failing.read()).records.map(\.kind) == [.intent])
   let restart = try await ActionHistory(journal: failing).reconcile()
@@ -627,8 +630,60 @@ private func localMover(destination: String) -> TestMover {
   }
   let result = try await ActionExecutor(journal: journal, trash: mover).execute(action)
   #expect(result.items.map(\.outcome) == [.uncertain])
+  #expect(result.items.first?.mutationStage == .trashCallUnverified)
   #expect(FileManager.default.fileExists(atPath: destination))
   #expect((await journal.read()).records.map(\.kind) == [.intent])
+}
+
+@Test("An unsaved refusal is uncertain history without a Trash attempt")
+func skippedRecordFailureDoesNotClaimATrashMove() async throws {
+  let root = try actionFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let source = root + "/item"
+  try put(source)
+  let plan = try await makeAction(root, paths: [source])
+  let journal = TestJournal(failing: .skipped)
+  let calls = Mutex(0)
+  let result = try await ActionExecutor(
+    journal: journal,
+    trash: TestMover { _ in
+      calls.withLock { $0 += 1 }
+      throw TestFailure.injected
+    }, beforeMutation: { _ in throw TestFailure.injected }
+  ).execute(plan)
+  #expect(result.items.first?.outcome == .uncertain)
+  #expect(result.items.first?.mutationStage == .notStarted)
+  #expect(calls.withLock { $0 } == 0)
+  #expect(FileManager.default.fileExists(atPath: source))
+  #expect((try await ActionHistory(journal: journal).reconcile()).items.first?.state == .atSource)
+}
+
+@Test("An unsaved failed Trash call records the observed retained source")
+func failedRecordFailureDistinguishesRetainedSource() async throws {
+  let root = try actionFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let source = root + "/item"
+  try put(source)
+  let plan = try await makeAction(root, paths: [source])
+  let journal = TestJournal(failing: .failed)
+  let result = try await ActionExecutor(
+    journal: journal, trash: TestMover { _ in throw TestFailure.injected }
+  ).execute(plan)
+  #expect(result.items.first?.outcome == .uncertain)
+  #expect(result.items.first?.mutationStage == .sourceRetained)
+  #expect(FileManager.default.fileExists(atPath: source))
+  #expect((try await ActionHistory(journal: journal).reconcile()).items.first?.state == .atSource)
+}
+
+@Test("A legacy result has no inferred mutation stage")
+func legacyActionResultHasUnknownMutationStage() throws {
+  let legacy = """
+    {"itemID":"\(UUID().uuidString)","outcome":"uncertain","detail":"journal failure",\
+    "deletedCount":0,"deletedLogicalBytes":0}
+    """
+  let decoded = try JSONDecoder().decode(ItemActionResult.self, from: Data(legacy.utf8))
+  #expect(decoded.outcome == .uncertain)
+  #expect(decoded.mutationStage == nil)
 }
 
 @Test func nativeTrashCollisionUndoAndRestart() async throws {
