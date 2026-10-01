@@ -572,7 +572,9 @@ struct SpaceView: View {
               Text(state).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
                 .fixedSize(horizontal: false, vertical: true)
             }
-            if let reason = SpaceText.unselectable(item), reason != SpaceText.state(item) {
+            if !ActionStore.canManuallySelect(item), let reason = SpaceText.unselectable(item),
+              reason != SpaceText.state(item)
+            {
               Text(reason).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -581,12 +583,14 @@ struct SpaceView: View {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
               }
               Spacer()
-              if item.canSelect {
+              if ActionStore.canManuallySelect(item) {
                 Button(
                   actions.basket[item.path] == nil
                     ? String(localized: "Add to basket") : String(localized: "In basket")
                 ) {
-                  withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) { actions.add(item) }
+                  withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) {
+                    actions.add(item, warningPath: store.observedWarningPath(for: item))
+                  }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(store.isShowingCache || actions.basket[item.path] != nil)

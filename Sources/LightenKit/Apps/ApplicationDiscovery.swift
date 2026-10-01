@@ -45,8 +45,11 @@ public struct ApplicationReport: Identifiable, Sendable {
 }
 
 public struct ApplicationDiscovery: Sendable {
+  typealias Measurement = (logical: ByteAggregate, allocated: ByteAggregate, count: Int, partial: Bool)
   private let related: RelatedDataService
   private let uptime: @Sendable () -> TimeInterval
+  private let lightweightListing: @Sendable () -> [ApplicationListEntry]
+  private let measurement: @Sendable (String, String) async -> Measurement
 
   public init(
     related: RelatedDataService = RelatedDataService(),
@@ -54,10 +57,25 @@ public struct ApplicationDiscovery: Sendable {
   ) {
     self.related = related
     self.uptime = uptime
+    self.lightweightListing = { ApplicationListing.observe(roots: related.lightweightListingRoots) }
+    self.measurement = Self.measure
+  }
+
+  init(
+    related: RelatedDataService,
+    uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+    lightweightListing: @escaping @Sendable () -> [ApplicationListEntry],
+    measurement: @escaping @Sendable (String, String) async -> Measurement
+  ) {
+    self.related = related
+    self.uptime = uptime
+    self.lightweightListing = lightweightListing
+    self.measurement = measurement
   }
 
   public enum Event: Sendable {
     case session(ApplicationScanSession)
+    case listed([ApplicationListEntry])
     case inventory(BundleInventory, [ApplicationReport])
     case related(path: String, candidates: [RelatedDataCandidate], ownershipPending: Bool)
     case ownershipReady(BundleInventory)
@@ -67,16 +85,17 @@ public struct ApplicationDiscovery: Sendable {
   }
 
   public func scanSession() -> ApplicationScanSession {
-    ApplicationScanSession(related: related, uptime: uptime)
+    ApplicationScanSession(
+      related: related, uptime: uptime, lightweightListing: lightweightListing, measurement: measurement)
   }
 
   /// The compatibility stream retains its session for selected review and
   /// planning. Dropping the stream cancels its owned workers.
-  public func events() -> AsyncStream<Event> {
+  public func events(includeAllRelated: Bool = false) -> AsyncStream<Event> {
     let session = scanSession()
     return AsyncStream { continuation in
       let worker = Task {
-        for await event in await session.events() { continuation.yield(event) }
+        for await event in await session.events(includeAllRelated: includeAllRelated) { continuation.yield(event) }
         continuation.finish()
       }
       continuation.onTermination = { @Sendable termination in
@@ -92,7 +111,7 @@ public struct ApplicationDiscovery: Sendable {
     let session = scanSession()
     var inventory = BundleInventory(applications: [], unidentifiedPaths: [], complete: false, observedAt: Date())
     var reports: [ApplicationReport] = []
-    for await event in await session.events() {
+    for await event in await session.events(includeAllRelated: true) {
       switch event {
       case .inventory(let listing, let metadata):
         inventory = listing
@@ -114,8 +133,12 @@ public struct ApplicationDiscovery: Sendable {
 
   static func run(
     session: ApplicationScanSession, related: RelatedDataService,
-    uptime: @escaping @Sendable () -> TimeInterval, emit: @escaping @Sendable (Event) -> Void
+    uptime: @escaping @Sendable () -> TimeInterval, includeAllRelated: Bool,
+    emit: @escaping @Sendable (Event) -> Void
   ) async {
+    let entries = await session.displayListing()
+    guard !Task.isCancelled else { return }
+    emit(.listed(entries))
     let listing = await session.installedListing()
     let metadata = metadataReports(listing)
     guard !Task.isCancelled else { return }
@@ -125,12 +148,15 @@ public struct ApplicationDiscovery: Sendable {
     var candidates: [RelatedDataCandidate] = []
     await withTaskGroup(of: Result.self) { group in
       group.addTask {
-        .sizes(await measureReports(metadata, homeDirectory: related.homeDirectory, uptime: uptime, emit: emit))
+        .sizes(
+          await measureReports(
+            metadata, session: session, homeDirectory: related.homeDirectory, uptime: uptime, emit: emit))
       }
       group.addTask {
         let context = await session.context(base: listing)
         guard !Task.isCancelled else { return .related(context.inventory, []) }
         emit(.ownershipReady(context.inventory))
+        guard includeAllRelated else { return .related(context.inventory, []) }
         let candidates = await session.observedRelatedCandidates()
         guard !Task.isCancelled else { return .related(context.inventory, []) }
         for app in context.inventory.applications {
@@ -162,7 +188,8 @@ public struct ApplicationDiscovery: Sendable {
     // Registered application rows can arrive after the cheap initial listing.
     let extra = metadataReports(inventory).filter { row in !reports.contains { $0.path == row.path } }
     if !extra.isEmpty {
-      reports += await measureReports(extra, homeDirectory: related.homeDirectory, uptime: uptime, emit: emit)
+      reports += await measureReports(
+        extra, session: session, homeDirectory: related.homeDirectory, uptime: uptime, emit: emit)
     }
     guard !Task.isCancelled else { return }
     reports = reports.map { report in
@@ -224,18 +251,17 @@ public struct ApplicationDiscovery: Sendable {
   }
 
   private static func measureReports(
-    _ metadata: [ApplicationReport], homeDirectory: String, uptime: @Sendable () -> TimeInterval,
+    _ metadata: [ApplicationReport], session: ApplicationScanSession, homeDirectory: String,
+    uptime: @Sendable () -> TimeInterval,
     emit: @Sendable (Event) -> Void
   ) async -> [ApplicationReport] {
-    await withTaskGroup(of: ApplicationReport.self) { group in
+    await session.enqueueMeasurements(metadata)
+    return await withTaskGroup(of: ApplicationReport.self) { group in
       var reports: [ApplicationReport] = []
-      var next = 0
-      func enqueue() {
-        guard next < metadata.count, !Task.isCancelled else { return }
-        let app = metadata[next]
-        next += 1
+      func enqueue() async {
+        guard !Task.isCancelled, let app = await session.nextMeasurement() else { return }
         group.addTask {
-          let size = await measure(path: app.linkTarget ?? app.path, homeDirectory: homeDirectory)
+          let size = await session.measureApplication(path: app.linkTarget ?? app.path, homeDirectory: homeDirectory)
           var report = ApplicationReport(
             path: app.path, bundleID: app.bundleID, version: app.version, signerTeamID: nil,
             logical: size.logical, allocated: size.allocated, knownItemCount: size.count, partial: size.partial,
@@ -249,7 +275,7 @@ public struct ApplicationDiscovery: Sendable {
           return report
         }
       }
-      for _ in 0..<min(concurrentPackages, metadata.count) { enqueue() }
+      for _ in 0..<min(concurrentPackages, metadata.count) { await enqueue() }
       var unpublished: [ApplicationReport] = []
       var lastPublished = uptime()
       while let report = await group.next() {
@@ -261,7 +287,7 @@ public struct ApplicationDiscovery: Sendable {
           unpublished.removeAll(keepingCapacity: true)
           lastPublished = now
         }
-        enqueue()
+        await enqueue()
       }
       if !Task.isCancelled && !unpublished.isEmpty { emit(.measured(unpublished)) }
       return reports

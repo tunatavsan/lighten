@@ -3,6 +3,7 @@ import SwiftUI
 
 struct LightenSettingsView: View {
   @State private var cacheStore = SpaceStore()
+  @State private var removal = RemovalPreferences.shared
   @State private var settingsOpenFailed = false
   @State private var access: FullDiskAccessState?
   var space: SpaceStore?
@@ -19,6 +20,26 @@ struct LightenSettingsView: View {
       VStack(alignment: .leading, spacing: 18) {
         Text(String(localized: "Settings"))
           .font(.system(size: 24, weight: .semibold))
+        Group {
+          Picker(String(localized: "Default removal method"), selection: $removal.deletionDefault) {
+            ForEach(RemovalPreferences.DefaultMethod.allCases) { method in
+              Text(method.title).tag(method)
+            }
+          }
+          Toggle(
+            String(localized: "Automatically select discovered app data"), isOn: $removal.automaticallySelectRelatedData
+          )
+          Text(
+            String(
+              localized:
+                "Only data supported by independent evidence is selected automatically. You can select other rows yourself."
+            )
+          )
+          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+          Text(String(localized: "Permanent deletion always needs a separate confirmation and cannot be undone."))
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+          Divider()
+        }
         Label(String(localized: "File access"), systemImage: "hand.raised")
           .font(.system(size: 16, weight: .semibold))
           .foregroundStyle(LightenStyle.accent)

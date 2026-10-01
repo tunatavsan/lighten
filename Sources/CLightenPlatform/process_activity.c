@@ -68,6 +68,107 @@ static int read_process_identity(pid_t pid, struct kinfo_proc *details) {
          details->kp_proc.p_pid == pid;
 }
 
+static uint64_t activity_milliseconds(void);
+
+typedef struct {
+  uint64_t device, inode, address, size;
+  char path[MAXPATHLEN];
+} MappedExecutable;
+
+static int executable_mapping_snapshot(pid_t pid, uint32_t region_limit, uint64_t deadline,
+                                       MappedExecutable **records, size_t *count,
+                                       const MappedExecutable *expected, size_t expected_count) {
+  uint64_t address = 0;
+  size_t capacity = 0;
+  *count = 0;
+  for (uint32_t region = 0; region < region_limit; region++) {
+    uint64_t observed = activity_milliseconds();
+    if (!observed || observed >= deadline) return -1;
+    struct proc_regionwithpathinfo info;
+    memset(&info, 0, sizeof(info));
+    errno = 0;
+    if (proc_pidinfo(pid, PROC_PIDREGIONPATHINFO, address, &info, sizeof(info)) != sizeof(info)) {
+      // EINVAL after a valid region means there is no next region. A census
+      // with no executable vnode, or a different error, proves nothing.
+      return errno == EINVAL && region > 0 && *count > 0 &&
+             (!expected || *count == expected_count) ? 0 : -1;
+    }
+    if (info.prp_prinfo.pri_address < address ||
+        info.prp_prinfo.pri_size > UINT64_MAX - info.prp_prinfo.pri_address) return -1;
+    uint64_t next = info.prp_prinfo.pri_address + info.prp_prinfo.pri_size;
+    if (next <= address) return -1;
+    address = next;
+    if (!(info.prp_prinfo.pri_protection & VM_PROT_EXECUTE)) continue;
+    if (info.prp_vip.vip_path[0] != '/' ||
+        strnlen(info.prp_vip.vip_path, sizeof(info.prp_vip.vip_path)) >= sizeof(info.prp_vip.vip_path) - 1 ||
+        !S_ISREG(info.prp_vip.vip_vi.vi_stat.vst_mode)) return -1;
+    MappedExecutable current = {
+      .device = info.prp_vip.vip_vi.vi_stat.vst_dev,
+      .inode = info.prp_vip.vip_vi.vi_stat.vst_ino,
+      .address = info.prp_prinfo.pri_address,
+      .size = info.prp_prinfo.pri_size,
+    };
+    memcpy(current.path, info.prp_vip.vip_path, sizeof(current.path));
+    if (expected) {
+      if (*count >= expected_count || current.device != expected[*count].device ||
+          current.inode != expected[*count].inode || current.address != expected[*count].address ||
+          current.size != expected[*count].size || strcmp(current.path, expected[*count].path) != 0) return -1;
+    } else {
+      if (*count == capacity) {
+        size_t next_capacity = capacity ? capacity * 2 : 8;
+        if (next_capacity > region_limit || next_capacity * sizeof(current) > 8 * 1024 * 1024) {
+          next_capacity = region_limit;
+        }
+        MappedExecutable *grown = realloc(*records, next_capacity * sizeof(current));
+        if (!grown) return -1;
+        *records = grown;
+        capacity = next_capacity;
+      }
+      (*records)[*count] = current;
+    }
+    (*count)++;
+  }
+  // Hitting the bound is incomplete even when every observed path is outside
+  // the selected root. It cannot authorize a clear observation.
+  return -1;
+}
+
+int lighten_application_mapping_activity(int32_t pid, const char *root, uint32_t region_limit) {
+  if (pid <= 0 || !root || !lighten_path_is_under_root(root, root) ||
+      region_limit == 0 || region_limit > 4096) return -1;
+  uint64_t started = activity_milliseconds();
+  if (!started) return -1;
+  uint64_t deadline = started + 250;
+  struct kinfo_proc before, after;
+  if (!read_process_identity(pid, &before) || before.kp_proc.p_stat == SZOMB) return -1;
+  MappedExecutable *records = NULL;
+  size_t count = 0, checked = 0;
+  int first = executable_mapping_snapshot(pid, region_limit, deadline, &records, &count, NULL, 0);
+  int second = first == 0 ?
+    executable_mapping_snapshot(pid, region_limit, deadline, NULL, &checked, records, count) : -1;
+  int result = -1;
+  if (first == 0 && second == 0 && read_process_identity(pid, &after) &&
+      after.kp_proc.p_stat != SZOMB &&
+      after.kp_eproc.e_ucred.cr_uid == before.kp_eproc.e_ucred.cr_uid &&
+      after.kp_proc.p_starttime.tv_sec == before.kp_proc.p_starttime.tv_sec &&
+      after.kp_proc.p_starttime.tv_usec == before.kp_proc.p_starttime.tv_usec) {
+    result = 0;
+    for (size_t index = 0; index < count; index++) {
+      size_t length = strlen(root);
+      // A removed executable's old path may no longer be stat-able. Treat a
+      // component-bounded case alias conservatively as activity as well.
+      if (lighten_path_is_under_root(records[index].path, root) ||
+          (strncasecmp(records[index].path, root, length) == 0 &&
+           (records[index].path[length] == '\0' || records[index].path[length] == '/'))) {
+        result = 1;
+        break;
+      }
+    }
+  }
+  free(records);
+  return result;
+}
+
 static int pid_executes_root(pid_t pid, const char *root) {
   char path[PROC_PIDPATHINFO_MAXSIZE];
   memset(path, 0, sizeof(path));
@@ -87,6 +188,17 @@ static int pid_executes_root(pid_t pid, const char *root) {
     return 0;
   }
   int path_error = errno;
+  if (path_error == ENOENT) {
+    // An updater may unlink an executable while its process remains alive.
+    // Recover bounded mapped-vnode evidence instead of ignoring the missing
+    // path or making unrelated selections globally unavailable.
+    int mapped = lighten_application_mapping_activity(pid, root, 4096);
+    if (mapped >= 0) {
+      char after_path[PROC_PIDPATHINFO_MAXSIZE] = {0};
+      errno = 0;
+      if (proc_pidpath(pid, after_path, sizeof(after_path)) <= 0 && errno == ENOENT) return mapped;
+    }
+  }
   struct kinfo_proc details;
   if (read_process_identity(pid, &details)) {
     if (details.kp_proc.p_stat == SZOMB) return 0;

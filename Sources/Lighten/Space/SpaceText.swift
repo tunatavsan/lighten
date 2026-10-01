@@ -62,10 +62,10 @@ enum SpaceText {
     switch item.state {
     case .complete: return nil
     case .measuring: return String(localized: "Measuring. The size shown is a known minimum.")
-    case .protectedMetadataOnly(let ruleID):
-      let reason = NeverRule.all.first { $0.id == ruleID }.map { "\($0.id): \($0.reason)" } ?? ruleID
-      return
-        "\(String(localized: "Lighten protects this item and does not open it. Inspect it in Finder.")) \(reason)"
+    case .protectedMetadataOnly:
+      return String(
+        localized:
+          "This item was not opened during measurement. You can choose it yourself after reviewing its contents.")
     case .partial(let reason):
       switch reason {
       case .unreadable:
@@ -192,8 +192,8 @@ enum SpaceText {
         )
       case .needsAdministrator:
         (
-          "Your account cannot move this item. Check its owner and permissions in Finder.",
-          "Hesabınız bu öğeyi taşıyamıyor. Sahibini ve izinlerini Finder’da kontrol edin."
+          "Moving this item requires administrator permission. Use Show in Finder to remove it there.",
+          "Bu öğeyi taşımak için yönetici yetkisi gerekiyor. Oradan kaldırmak için Finder’da Göster’i kullanın."
         )
       case .userPermissionDenied:
         (

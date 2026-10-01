@@ -7,6 +7,12 @@ import Testing
 
 @Suite("Space scan state")
 struct SpaceStoreTests {
+  private struct FixtureApplicationActivity: ApplicationActivitySource {
+    func activity(applicationPath: String) async -> ApplicationActivity {
+      ApplicationActivity(state: .clearObservedProcesses)
+    }
+  }
+
   @MainActor @Test("Space timing waits for positive current-appearance geometry after treemap calculation")
   func firstLayoutRequiresGeometryEndpoint() async throws {
     let root = "/private/tmp/LightenQA-" + UUID().uuidString
@@ -72,14 +78,18 @@ struct SpaceStoreTests {
     let mover = RecordingMover(destination: destination)
     let store = ActionStore(
       journal: JSONLActionJournal(path: container + "/journal/actions-v1.jsonl"),
-      trash: mover)
+      trash: mover, applicationActivity: FixtureApplicationActivity())
     store.add(item)
     #expect(store.basket[item.path] != nil)
     await store.prepare(scanRoot: root, runID: run.runID)
     #expect(store.message == nil, "Fresh writable fixture should have no planning rejection")
     let presentation = try #require(
       store.pending, "basket=\(store.basket.count), busy=\(store.busy), message=\(store.message ?? "none")")
-    #expect(presentation.plan.items.map(\.policy) == [.spaceTrash])
+    #expect(presentation.plan.items.map(\.userSelection) == [true])
+    #expect(presentation.plan.items.map { $0.inventory.count } == [1])
+    let selectedRoot = try #require(presentation.plan.items.first?.inventory.first)
+    #expect(selectedRoot.path == item.path && selectedRoot.parentID == nil)
+    #expect(selectedRoot.identity?.device == item.device && selectedRoot.identity?.inode == item.inode)
     let confirmed = try #require(store.takeConfirmedPlan(presentation))
     store.pending = nil  // SwiftUI's sheet dismissal clears its binding.
     #expect(store.takeConfirmedPlan(presentation) == nil)

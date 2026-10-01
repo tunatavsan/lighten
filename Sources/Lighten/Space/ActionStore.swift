@@ -42,6 +42,9 @@ struct BasketEntry: Sendable, Equatable {
   let inode: UInt64
   let logical: ByteAggregate
   var allocated: ByteAggregate? = nil
+  var identity: FileIdentity? = nil
+  var warning: ProtectiveWarning? = nil
+  var warningPaths: [String] = []
 }
 
 struct ActionPresentation: Identifiable, Sendable {
@@ -49,16 +52,18 @@ struct ActionPresentation: Identifiable, Sendable {
   let items: [ActionItemSummary]
   let permanentPlanBuilder: (@MainActor @Sendable () async -> Void)?
   let rejectedItems: [PlanRejection]
+  let hasRunningApplications: Bool
 
   init(
     plan: ActionPlan, items: [ActionItemSummary],
     permanentPlanBuilder: (@MainActor @Sendable () async -> Void)? = nil,
-    rejectedItems: [PlanRejection] = []
+    rejectedItems: [PlanRejection] = [], hasRunningApplications: Bool = false
   ) {
     self.plan = plan
     self.items = items
     self.permanentPlanBuilder = permanentPlanBuilder
     self.rejectedItems = rejectedItems
+    self.hasRunningApplications = hasRunningApplications
   }
 
   var id: UUID { plan.id }
@@ -76,6 +81,9 @@ final class ActionStore {
   @ObservationIgnored private let journal: JSONLActionJournal
   @ObservationIgnored private let executor: ActionExecutor
   @ObservationIgnored private let planService: PlanService
+  @ObservationIgnored private let preferences: RemovalPreferences
+  @ObservationIgnored private let applicationActivity: any ApplicationActivitySource
+  @ObservationIgnored private var claimedCloseRunningApplications = false
   @ObservationIgnored private let historyService: ActionHistory
   @ObservationIgnored private var claimedPlan: ActionPlan?
   @ObservationIgnored private var alternatePlanID: UUID?
@@ -97,14 +105,18 @@ final class ActionStore {
     journal: JSONLActionJournal = JSONLActionJournal(),
     trash: any TrashMoving = MacOSTrashService(),
     historyService: ActionHistory? = nil, planService: PlanService = PlanService(),
-    runningApplications: any RunningApplicationSource = NativeRunningApplicationSource()
+    runningApplications: any RunningApplicationSource = NativeRunningApplicationSource(),
+    preferences: RemovalPreferences = .shared,
+    applicationActivity: any ApplicationActivitySource = NativeApplicationActivitySource()
   ) {
     self.journal = journal
+    self.preferences = preferences
+    self.applicationActivity = applicationActivity
     self.planService = planService
     self.executor = ActionExecutor(
-      journal: journal, trash: trash,
+      journal: journal, trash: trash, guardService: ActionGuard(homeDirectory: planService.homeDirectory),
       activity: MacOSProcessActivitySource(), related: .system,
-      runningApplications: runningApplications)
+      runningApplications: runningApplications, applicationActivity: applicationActivity)
     self.historyService = historyService ?? ActionHistory(journal: journal)
   }
 
@@ -121,11 +133,17 @@ final class ActionStore {
   private(set) var preparingAlternate = false
   var message: String?
 
-  func add(_ item: SpaceItem) {
-    guard !busy, item.canSelect, item.inode != 0 else { return }
+  func add(_ item: SpaceItem, warningPath: String? = nil) {
+    guard !busy, Self.canManuallySelect(item), item.inode != 0 else { return }
+    let identity = try? DescriptorFileSystem.identity(at: item.path)
     basket[item.path] = BasketEntry(
       path: item.path, label: item.name, device: item.device, inode: item.inode, logical: item.logical,
-      allocated: item.allocated)
+      allocated: item.allocated, identity: identity,
+      warningPaths: warningPath.map { [$0] } ?? [])
+  }
+
+  static func canManuallySelect(_ item: SpaceItem) -> Bool {
+    item.kind != .smallFiles && item.kind != .systemVolume && item.kind != .other
   }
 
   func remove(_ path: String) { basket.removeValue(forKey: path) }
@@ -163,46 +181,51 @@ final class ActionStore {
     history?.items.filter { $0.applied && $0.state == .inTrash && !restoredItemIDs.contains($0.itemID) }.count ?? 0
   }
 
-  /// Builds the plan from a fresh exact inventory of each basket item. The scan
-  /// tree only told us where to look.
+  /// Captures chosen roots without walking their descendants.
   func prepare(scanRoot: String, runID: UUID?) async {
     guard !basket.isEmpty, !busy, !preparingAlternate else { return }
     busy = true
     defer { busy = false }
-    let selections = basket.values.map {
-      PlanService.Selection(
-        path: $0.path, device: $0.device, inode: $0.inode,
-        observedSize: ObservedPlanSize(logical: $0.logical, allocated: $0.allocated))
-    }
-    let reason = String(localized: "Selected in Space")
-    let planner = planService
-    let outcome = await Task.detached {
-      await planner.makeAvailableSpacePlan(selections: selections, scanRootPath: scanRoot, runID: runID ?? UUID())
-    }.value
+    let chosen = Array(basket.values)
+    let outcome = await planService.makeAvailableUserSelectionPlan(
+      selections: chosen.map {
+        UserSelection(
+          path: $0.path, expectedIdentity: $0.identity,
+          observedSize: ObservedPlanSize(logical: $0.logical, allocated: $0.allocated),
+          warnings: $0.warningPaths.map { UserSelectionWarning(examplePath: $0) })
+      }, kind: preferences.deletionDefault.kind, runID: runID ?? UUID())
     guard let plan = outcome.plan else {
       pending = nil
       message = outcome.rejections.map { SpaceText.rejection($0) }.joined(separator: "\n")
       return
     }
-    let summary = await Task.detached {
-      plan.items.map { item in
-        let (logical, allocated) = PlanItemSize.measure(item)
-        return ActionItemSummary(
-          id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
-          path: item.sourcePath, reason: reason, logicalBytes: logical, allocatedBytes: allocated,
-          warning: ProtectiveWarning.evaluate(item, homeDirectory: planner.homeDirectory))
-      }
-    }.value
+    let summary = plan.items.map { item in
+      let entry = chosen.first { $0.path == item.sourcePath }
+      return ActionItemSummary(
+        id: item.id, label: entry?.label ?? URL(fileURLWithPath: item.sourcePath).lastPathComponent,
+        path: item.sourcePath, reason: String(localized: "Selected in Space"),
+        logicalBytes: nil, allocatedBytes: nil, warning: entry?.warning,
+        observedSize: item.observedSize,
+        warningPaths: item.userSelectionWarnings?.map(\.examplePath) ?? [])
+    }
+    let running = await containsRunningApplications(plan)
     busy = false
-    present(plan: plan, items: summary, rejectedItems: outcome.rejections)
+    present(plan: plan, items: summary, rejectedItems: outcome.rejections, hasRunningApplications: running)
     message = nil
+  }
+
+  func containsRunningApplications(_ plan: ActionPlan) async -> Bool {
+    for item in plan.items {
+      if await applicationActivity.activity(applicationPath: item.sourcePath).state == .active { return true }
+    }
+    return false
   }
 
   /// Other modules supply their own guarded plan and reason summary.
   func present(
     plan: ActionPlan, items: [ActionItemSummary],
     permanentPlanBuilder: (@MainActor @Sendable () async -> Void)? = nil,
-    rejectedItems: [PlanRejection] = []
+    rejectedItems: [PlanRejection] = [], hasRunningApplications: Bool = false
   ) {
     guard !busy, Set(plan.items.map(\.id)) == Set(items.map(\.id)),
       !preparingAlternate || pending?.plan.id == alternatePlanID
@@ -219,23 +242,43 @@ final class ActionStore {
           allocatedBytes: size.allocated?.completeTotal ?? size.allocated?.knownLowerBound,
           warning: summary.warning ?? ProtectiveWarning.evaluate(item, homeDirectory: planService.homeDirectory),
           observedSize: size,
-          warningPaths: (summary.warning ?? ProtectiveWarning.evaluate(item, homeDirectory: planService.homeDirectory))?
-            .examplePaths(item, homeDirectory: planService.homeDirectory) ?? [])
+          warningPaths: !summary.warningPaths.isEmpty
+            ? summary.warningPaths
+            : item.userSelectionWarnings?.map(\.examplePath)
+              ?? (summary.warning ?? ProtectiveWarning.evaluate(item, homeDirectory: planService.homeDirectory))?
+              .examplePaths(item, homeDirectory: planService.homeDirectory) ?? [])
       },
-      permanentPlanBuilder: plan.kind == .trash ? permanentPlanBuilder : nil, rejectedItems: rejectedItems)
+      permanentPlanBuilder: plan.kind == .trash ? { @MainActor in } : nil,
+      rejectedItems: rejectedItems, hasRunningApplications: hasRunningApplications)
   }
 
   func requestPermanent(_ presentation: ActionPresentation) async {
-    guard !busy, !preparingAlternate, pending?.plan == presentation.plan,
-      let builder = presentation.permanentPlanBuilder
-    else { return }
+    await changePendingMethod(presentation, kind: .catalogDelete)
+  }
+
+  func requestTrash(_ presentation: ActionPresentation) async {
+    await changePendingMethod(presentation, kind: .trash)
+  }
+
+  private func changePendingMethod(_ presentation: ActionPresentation, kind: ActionKind) async {
+    guard !busy, !preparingAlternate, pending?.plan == presentation.plan else { return }
     preparingAlternate = true
     alternatePlanID = presentation.plan.id
     defer {
       preparingAlternate = false
       alternatePlanID = nil
     }
-    await builder()
+    let outcome = await planService.finalizeUserSelection(plan: presentation.plan, kind: kind)
+    guard pending?.plan == presentation.plan else { return }
+    guard let plan = outcome.plan else {
+      message = outcome.rejections.map(SpaceText.rejection).joined(separator: "\n")
+      return
+    }
+    let paths = Set(plan.items.map(\.sourcePath))
+    present(
+      plan: plan, items: presentation.items.filter { paths.contains($0.path) },
+      rejectedItems: presentation.rejectedItems + outcome.rejections,
+      hasRunningApplications: presentation.hasRunningApplications)
   }
 
   func invalidatePending(expectedPlanID: UUID?) {
@@ -245,12 +288,15 @@ final class ActionStore {
 
   /// Claim synchronously while the confirmation sheet still owns its presentation.
   /// SwiftUI may clear `pending` as soon as the sheet begins dismissing.
-  func takeConfirmedPlan(_ presentation: ActionPresentation) -> ActionPlan? {
+  func takeConfirmedPlan(
+    _ presentation: ActionPresentation, permanentConfirmed: Bool = false, closeRunningApplications: Bool = false
+  ) -> ActionPlan? {
     guard !busy, !preparingAlternate, claimedPlan == nil,
       pending?.plan == presentation.plan,
-      presentation.plan.kind == .trash || presentation.plan.kind == .catalogDelete
+      presentation.plan.kind == .trash || (presentation.plan.kind == .catalogDelete && permanentConfirmed)
     else { return nil }
     claimedPlan = presentation.plan
+    claimedCloseRunningApplications = closeRunningApplications
     claimedSummaries = presentation.items
     claimedRejections = presentation.rejectedItems
     pending = nil
@@ -266,13 +312,29 @@ final class ActionStore {
   func executeConfirmed(_ plan: ActionPlan) async {
     guard claimedPlan == plan else { return }
     claimedPlan = nil
-    defer { busy = false }
+    defer {
+      busy = false
+      claimedCloseRunningApplications = false
+      claimedSummaries = []
+      claimedRejections = []
+    }
     do {
+      let outcome = await planService.finalizeUserSelection(plan: plan)
+      guard let freshPlan = outcome.plan else {
+        resultKind = plan.kind
+        resultRejections = claimedRejections + outcome.rejections
+        resultSummaries = claimedSummaries
+        message = nil
+        return
+      }
       let confirmation =
-        plan.kind == .catalogDelete
-        ? IrreversibleConfirmation(planID: plan.id, method: .catalogDelete) : nil
-      let completed = try await executor.execute(plan, confirmation: confirmation)
-      publishExecution(plan: plan, result: completed, summaries: claimedSummaries, rejections: claimedRejections)
+        freshPlan.kind == .catalogDelete
+        ? IrreversibleConfirmation(planID: freshPlan.id, method: .catalogDelete) : nil
+      let completed = try await executor.execute(
+        freshPlan, confirmation: confirmation, closeRunningApplications: claimedCloseRunningApplications)
+      publishExecution(
+        plan: freshPlan, result: completed, summaries: claimedSummaries,
+        rejections: claimedRejections + outcome.rejections)
       claimedSummaries = []
       claimedRejections = []
       message = nil
@@ -337,7 +399,8 @@ final class ActionStore {
             path: entry.path, label: entry.label, device: entry.device, inode: entry.inode,
             logical: subtract(entry.logical, amounts: descendants.map { $0.size.logical })
               ?? ByteAggregate(knownLowerBound: 0, completeTotal: nil),
-            allocated: subtract(entry.allocated, amounts: descendants.map { $0.size.allocated }))
+            allocated: subtract(entry.allocated, amounts: descendants.map { $0.size.allocated }),
+            identity: entry.identity, warning: entry.warning, warningPaths: entry.warningPaths)
         }
       }
       displayRevision += 1
@@ -356,7 +419,9 @@ final class ActionStore {
   }
 
   var completedSummary: String? {
-    guard let appliedSummary else { return nil }
+    guard let appliedSummary else {
+      return resultRejections.isEmpty ? nil : String(localized: "No items were removed.")
+    }
     guard unverifiedResultCount > 0 else { return appliedSummary }
     let unverified = String.localizedStringWithFormat(
       String(localized: "%lld item outcomes could not be verified. Check History and Finder."), unverifiedResultCount)

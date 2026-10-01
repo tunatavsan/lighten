@@ -17,7 +17,7 @@ struct CleanView: View {
     }
   }
   private var actionableRows: [CatalogRow] {
-    store.rows.filter { row in filtered.contains { $0.row.id == row.id && $0.canAct } }
+    store.rows.filter { row in filtered.contains { $0.row.id == row.id } }
   }
   private var related: [RelatedDataCandidate] {
     store.relatedCandidates.filter { searchTerm.isEmpty || $0.path.localizedStandardContains(searchTerm) }
@@ -112,7 +112,7 @@ struct CleanView: View {
   }
 
   private func categoryCard(_ row: CatalogRow) -> some View {
-    let candidates = filtered.filter { $0.row.id == row.id && $0.canAct }
+    let candidates = filtered.filter { $0.row.id == row.id }
     let ids = Set(candidates.map(\.id))
     let bytes = candidates.reduce(Int64(0)) { $0 + $1.logicalBytes }
     let incomplete = candidates.contains { !$0.sizeComplete }
@@ -158,7 +158,7 @@ struct CleanView: View {
   }
 
   private var reportOnly: some View {
-    DisclosureGroup(String(localized: "Report only")) {
+    DisclosureGroup(String(localized: "Needs review")) {
       ForEach(
         store.rows.filter { row in
           filtered.contains { $0.row.id == row.id && !$0.canAct }
@@ -203,7 +203,7 @@ struct CleanView: View {
             VStack(alignment: .leading, spacing: 4) {
               Text(URL(fileURLWithPath: candidate.path).lastPathComponent).font(.system(size: 12))
               Text(relatedReason(candidate.reason)).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-              if candidate.classification == .historicallyVerifiedAbsent {
+              if store.phase == .ready {
                 Button(String(localized: "Review Trash")) {
                   Task { await store.prepareRelated(candidate, actions: actions) }
                 }.disabled(store.phase != .ready || store.busy || actions.busy)
@@ -236,12 +236,11 @@ struct CleanView: View {
       if candidate.activity == .unknown {
         return String(localized: "Process activity could not be checked. Check Activity Monitor.")
       }
-      if let rule = ProtectionPolicy.rule(
+      if ProtectionPolicy.rule(
         for: candidate.entry.path,
-        homeDirectory: store.homeDirectory)
+        homeDirectory: store.homeDirectory) != nil
       {
         return String(localized: "A safety rule protects this item. Inspect it in Finder.")
-          + " \(rule.id): \(rule.reason)"
       }
       if row.relativeRoot == "Library/Caches" {
         if URL(fileURLWithPath: candidate.entry.path).lastPathComponent.lowercased().hasPrefix("com.apple.") {

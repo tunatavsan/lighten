@@ -14,7 +14,7 @@ struct AppsView: View {
     let term = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !term.isEmpty else { return store.reports }
     return store.reports.filter {
-      $0.path.localizedStandardContains(term)
+      store.displayName($0).localizedStandardContains(term) || $0.path.localizedStandardContains(term)
         || ($0.bundleID?.localizedStandardContains(term) == true)
     }
   }
@@ -236,6 +236,8 @@ struct AppsView: View {
             ForEach(filtered) { app in
               VStack(alignment: .leading, spacing: 2) {
                 appRow(app)
+                  .onAppear { store.rowVisibilityChanged(app.path, visible: true) }
+                  .onDisappear { store.rowVisibilityChanged(app.path, visible: false) }
                 if let reason = actions.failure(at: app.path) {
                   Text(reason).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
                     .fixedSize(horizontal: false, vertical: true)
@@ -341,7 +343,7 @@ struct AppsView: View {
         Button(String(localized: "Review selected removed-app data")) {
           Task { await store.prepareOrphans(actions: actions) }
         }.disabled(
-          store.selectedOrphanPaths.isEmpty || store.busy || store.preparing || store.needsRescan || actions.busy)
+          store.selectedOrphanPaths.isEmpty || store.preparing || store.needsRescan || actions.busy)
       }
     }.padding(.top, groups.isEmpty ? 0 : 14)
   }
@@ -376,7 +378,7 @@ struct AppsView: View {
       HStack(spacing: 10) {
         ApplicationIconView(path: app.path)
         VStack(alignment: .leading, spacing: 3) {
-          Text(URL(fileURLWithPath: app.path).deletingPathExtension().lastPathComponent)
+          Text(store.displayName(app))
             .font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
           Text(app.bundleID ?? String(localized: "Identity unavailable"))
             .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
@@ -418,7 +420,7 @@ struct AppsView: View {
         HStack(alignment: .top, spacing: 12) {
           ApplicationIconView(path: app.path)
           VStack(alignment: .leading, spacing: 3) {
-            Text(URL(fileURLWithPath: app.path).deletingPathExtension().lastPathComponent)
+            Text(store.displayName(app))
               .font(.system(size: 19, weight: .semibold)).lineLimit(2).truncationMode(.middle)
             Text(app.path).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
               .lineLimit(2).truncationMode(.middle).help(app.path)
@@ -466,7 +468,7 @@ struct AppsView: View {
         }
         if let id = app.bundleID, store.runningIDs.contains(id) {
           Label(
-            String(localized: "App is running. Quit it normally before reviewing its data."),
+            String(localized: "App is running. You can close it and remove your selected items in the confirmation."),
             systemImage: "pause.circle"
           )
           .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
@@ -526,7 +528,7 @@ struct AppsView: View {
         Text(
           String(
             localized:
-              "The physical application and this link are separate Trash items. Each result is reported separately."
+              "Only this link is selected. The application it points to stays in place."
           )
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
@@ -660,7 +662,7 @@ struct AppsView: View {
           Text(
             String(
               localized:
-                "This data is also used by another installation. Remove that installation too before removing this data."
+                "This data is also used by another installation. Removing it may affect that installation."
             )
           )
           .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)

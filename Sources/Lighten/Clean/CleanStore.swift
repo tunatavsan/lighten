@@ -41,6 +41,9 @@ final class CleanStore: ToolSummaryProviding {
   typealias AvailablePlanBuilder =
     @Sendable (CleanCatalog, [CatalogSelection], ActionKind) async throws -> CatalogPlanOutcome
 
+  @ObservationIgnored private let userPlanner: PlanService
+  @ObservationIgnored private let preferences: RemovalPreferences
+  @ObservationIgnored private let usesInjectedPlanner: Bool
   @ObservationIgnored private let activity: any ProcessActivitySource
   @ObservationIgnored private let catalog: CleanCatalog?
   @ObservationIgnored private let catalogFailure: (any Error)?
@@ -79,8 +82,12 @@ final class CleanStore: ToolSummaryProviding {
       await RelatedDataService.system.discover()
     },
     planBuilder: PlanBuilder? = nil,
-    availablePlanBuilder: AvailablePlanBuilder? = nil
+    availablePlanBuilder: AvailablePlanBuilder? = nil,
+    preferences: RemovalPreferences = .shared, userPlanner: PlanService? = nil
   ) {
+    self.preferences = preferences
+    self.userPlanner = userPlanner ?? PlanService(homeDirectory: homeDirectory)
+    usesInjectedPlanner = availablePlanBuilder != nil || planBuilder != nil
     self.activity = activity
     self.homeDirectory = homeDirectory
     do {
@@ -270,7 +277,7 @@ final class CleanStore: ToolSummaryProviding {
 
   func toggleCategory(_ rowID: String, actions: ActionStore) {
     guard tool.phase == .ready, !actions.busy else { return }
-    let ids = Set(actionableCandidates.filter { $0.row.id == rowID }.map(\.id))
+    let ids = Set(candidates.filter { $0.row.id == rowID }.map(\.id))
     expirePreparation(actions: actions)
     if ids.isSubset(of: selected) { selected.subtract(ids) } else { selected.formUnion(ids) }
   }
@@ -278,7 +285,7 @@ final class CleanStore: ToolSummaryProviding {
   func selectAll(actions: ActionStore) {
     guard tool.phase == .ready, !actions.busy else { return }
     expirePreparation(actions: actions)
-    let ids = Set(actionableCandidates.map(\.id))
+    let ids = Set(candidates.map(\.id))
     selected = selected == ids ? [] : ids
   }
 
@@ -370,15 +377,27 @@ final class CleanStore: ToolSummaryProviding {
 
   func prepareRelated(_ candidate: RelatedDataCandidate, actions: ActionStore) async {
     guard tool.allowsPreparation, !actions.busy,
-      candidate.classification == .historicallyVerifiedAbsent,
       let token = tool.preparation.begin()
     else { return }
     defer { tool.preparation.finish(token) }
     do {
-      let task = Task { @concurrent in try RelatedDataService.system.plan(candidate: candidate) }
-      preparationTask = task
-      let plan = try await task.value
-      guard tool.preparation.accepts(token), !task.isCancelled else { return }
+      let outcome = await userPlanner.makeAvailableUserSelectionPlan(
+        selections: [
+          UserSelection(
+            path: candidate.path,
+            expectedIdentity: candidate.snapshot?.entries.first { $0.path == candidate.path }?.identity,
+            observedSize: candidate.observation.map { ObservedPlanSize(logical: $0.logical, allocated: $0.allocated) },
+            warnings: SelectionWarning.example(in: candidate.snapshot?.entries.map(\.path) ?? [candidate.path])
+              .map { [UserSelectionWarning(examplePath: $0)] } ?? [])
+        ],
+        kind: preferences.deletionDefault.kind)
+      guard tool.preparation.accepts(token) else { return }
+      guard let plan = outcome.plan else {
+        message = outcome.rejections.map(SpaceText.rejection).joined(separator: "\n")
+        return
+      }
+      let running = await actions.containsRunningApplications(plan)
+      guard tool.preparation.accepts(token) else { return }
       actions.present(
         plan: plan,
         items: plan.items.map { item in
@@ -388,7 +407,7 @@ final class CleanStore: ToolSummaryProviding {
             path: item.sourcePath,
             reason: String(localized: "Previously verified owner absent here; it may exist elsewhere"),
             logicalBytes: sizes.0, allocatedBytes: sizes.1)
-        })
+        }, hasRunningApplications: running)
       presentedPlanID = plan.id
       message = nil
     } catch {
@@ -399,8 +418,45 @@ final class CleanStore: ToolSummaryProviding {
   func prepare(actions: ActionStore, kind: ActionKind = .trash) async {
     guard let catalog, tool.allowsPreparation, !actions.busy, !selected.isEmpty else { return }
     let chosen = candidates.filter { selected.contains($0.id) }
-    guard chosen.count == selected.count, chosen.allSatisfy({ $0.canAct && $0.row.methods.contains(kind) }) else {
+    guard chosen.count == selected.count else {
       message = String(localized: "Some selected items are unavailable. Scan again before cleaning.")
+      return
+    }
+    if !usesInjectedPlanner {
+      guard let token = tool.preparation.begin() else { return }
+      defer { tool.preparation.finish(token) }
+      let selectedIDs = selected
+      let outcome = await userPlanner.makeAvailableUserSelectionPlan(
+        selections: chosen.map { candidate in
+          UserSelection(
+            path: candidate.entry.path, expectedIdentity: candidate.entry.identity,
+            observedSize: ObservedPlanSize(
+              logical: ByteAggregate(
+                knownLowerBound: candidate.logicalBytes,
+                completeTotal: candidate.sizeComplete ? candidate.logicalBytes : nil),
+              allocated: candidate.node.allocated),
+            warnings: SelectionWarning.example(
+              in: candidate.snapshot.entries.filter {
+                $0.path == candidate.entry.path || $0.path.hasPrefix(candidate.entry.path + "/")
+              }.map(\.path)
+            ).map { [UserSelectionWarning(examplePath: $0)] } ?? [])
+        }, kind: preferences.deletionDefault.kind)
+      guard tool.preparation.accepts(token), selected == selectedIDs else { return }
+      guard let plan = outcome.plan else {
+        message = outcome.rejections.map(SpaceText.rejection).joined(separator: "\n")
+        return
+      }
+      let running = await actions.containsRunningApplications(plan)
+      guard tool.preparation.accepts(token), selected == selectedIDs else { return }
+      actions.present(
+        plan: plan,
+        items: plan.items.map { item in
+          ActionItemSummary(
+            id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
+            path: item.sourcePath, reason: String(localized: "Selected for removal"),
+            logicalBytes: nil, allocatedBytes: nil, observedSize: item.observedSize)
+        }, rejectedItems: outcome.rejections, hasRunningApplications: running)
+      presentedPlanID = plan.id
       return
     }
     guard let token = tool.preparation.begin() else { return }

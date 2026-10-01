@@ -140,10 +140,19 @@ enum Bench {
   static func apps(focus: String) async -> [String: Any] {
     let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
     var inventoryAt: UInt64?
+    var listedAt: UInt64?
+    var firstListedCount: Int?
     var reports: [ApplicationReport] = []
     var complete = false
-    for await event in ApplicationDiscovery(related: RelatedDataService(writeVerifiedReceipts: false)).events() {
+    for await event in ApplicationDiscovery(related: RelatedDataService(writeVerifiedReceipts: false))
+      .events(includeAllRelated: true)
+    {
       switch event {
+      case .listed(let entries):
+        if listedAt == nil {
+          listedAt = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+          firstListedCount = entries.count
+        }
       case .inventory: inventoryAt = inventoryAt ?? clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
       case .measured, .orphans, .session, .related, .ownershipReady: break
       case .completed(let inventory, let final):
@@ -158,6 +167,11 @@ enum Bench {
     let focusEnd = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
     return [
       "engine": "apps", "apps": reports.count, "inventoryComplete": complete,
+      "firstListedSeconds": listedAt.map { seconds(from: start, to: $0) } as Any? ?? NSNull(),
+      "firstListedCount": firstListedCount as Any? ?? NSNull(),
+      "firstListingAuthority": "display-only Info rows; not an ownership inventory",
+      "firstListingIncludesIcons": false, "guiFirstLayoutMeasured": false,
+      "allRelatedRequested": true,
       "listVisibleSeconds": inventoryAt.map { seconds(from: start, to: $0) } ?? -1,
       "allMeasuredSeconds": seconds(from: start, to: finished),
       "unknownCount": unknown.count, "unknownPaths": unknown.map(\.path),

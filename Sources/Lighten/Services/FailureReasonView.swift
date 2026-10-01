@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct FailureReasonView: View {
@@ -17,6 +18,9 @@ struct FailureReasonView: View {
       Text(presentation.nextStep).foregroundStyle(LightenStyle.muted)
       if let path {
         Text(path).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
+        Button(String(localized: "Show in Finder")) {
+          NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        }.buttonStyle(.plain)
       }
     }
     .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)

@@ -98,7 +98,7 @@ func inventoryPrecedesMeasurement() async throws {
     case .completed(let inventory, let reports):
       #expect(inventory.complete)
       finished = reports
-    case .session, .related, .ownershipReady: break
+    case .session, .listed, .related, .ownershipReady: break
     }
   }
   #expect(sawInventory)
@@ -402,7 +402,7 @@ func unidentifiedReportsHaveNoPhantomData() async throws {
     signingMetadata: { _ in nil })
   let session = ApplicationDiscovery(related: service).scanSession()
   var reports: [ApplicationReport] = []
-  for await event in await session.events() {
+  for await event in await session.events(includeAllRelated: true) {
     if case .completed(_, let final) = event { reports = final }
   }
   #expect(try #require(reports.first { $0.path == launcher }).related.isEmpty)
@@ -670,7 +670,7 @@ func oneInventoryAcrossSession() async throws {
   let session = ApplicationDiscovery(related: service).scanSession()
   var completed: [ApplicationReport] = []
   var sawSession = false
-  for await event in await session.events() {
+  for await event in await session.events(includeAllRelated: true) {
     if case .session(let emitted) = event { sawSession = emitted.id == session.id }
     if case .completed(_, let reports) = event { completed = reports }
   }
@@ -743,7 +743,7 @@ func selectedReviewPrecedesOwnership() async throws {
       _ = release.wait(timeout: .now() + 5)
     })
   let session = ApplicationDiscovery(related: service).scanSession()
-  let observed = Task { for await _ in await session.events() {} }
+  let observed = Task { for await _ in await session.events(includeAllRelated: true) {} }
   // The semaphore is a test-only stall; no elapsed-time product claim is made.
   let didStart = await Task.detached { ownershipWalkStarted(started) }.value
   #expect(didStart)
@@ -786,7 +786,7 @@ func sessionRefusesChangedOwnerUniverse(_ change: String) async throws {
     ownershipCollected: { walks.withLock { $0 += 1 } })
   let session = ApplicationDiscovery(related: service).scanSession()
   var candidate: RelatedDataCandidate?
-  for await event in await session.events() {
+  for await event in await session.events(includeAllRelated: true) {
     if case .completed(_, let reports) = event {
       candidate = reports.first { $0.path == fixture.app }?.related.first { $0.path == fixture.cache }
     }
@@ -864,7 +864,7 @@ func allRelatedRowsKeepUncertainDenominator() async throws {
     ownershipCollected: { walks.withLock { $0 += 1 } })
   let session = ApplicationDiscovery(related: service).scanSession()
   var orphanPaths: [String] = []
-  for await event in await session.events() {
+  for await event in await session.events(includeAllRelated: true) {
     if case .orphans(let rows) = event { orphanPaths = rows.map(\.path) }
   }
   let all = await session.observedRelatedCandidates()
@@ -1288,7 +1288,7 @@ private func simulatorScopeObservationsSurviveDiscovery() async throws {
   let session = ApplicationDiscovery(related: service).scanSession()
   var seen: [BundleInventory] = []
   var reports: [ApplicationReport] = []
-  for await event in await session.events() {
+  for await event in await session.events(includeAllRelated: true) {
     switch event {
     case .inventory(let inventory, _), .ownershipReady(let inventory): seen.append(inventory)
     case .completed(let inventory, let final):

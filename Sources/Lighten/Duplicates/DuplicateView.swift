@@ -163,7 +163,7 @@ struct DuplicateView: View {
           Text(
             group.members.contains { $0.eligibility == .eligible }
               ? String(localized: "Choose one verified copy to keep, then select others.")
-              : String(localized: "Metadata differs or is unknown; this group is report only.")
+              : String(localized: "Metadata differs or is unknown. Review the copies before choosing.")
           )
           .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         }
@@ -184,7 +184,7 @@ struct DuplicateView: View {
   private func memberRow(_ member: DuplicateMember, group: DuplicateGroup) -> some View {
     let keeperID = store.keepers[group.id]
     let isKeeper = keeperID == member.id
-    let canTarget = keeperID.map { group.canTarget(member.id, keeperID: $0) } ?? false
+    let canTarget = keeperID.map { $0 != member.id } ?? false
     return HStack(spacing: 10) {
       Button {
         store.chooseKeeper(member.id, for: group, actions: actions)
@@ -193,7 +193,7 @@ struct DuplicateView: View {
           .frame(width: 20)
       }
       .buttonStyle(.plain)
-      .disabled(member.eligibility != .eligible || actions.busy)
+      .disabled(actions.busy)
       .accessibilityLabel(isKeeper ? String(localized: "Keep this copy") : String(localized: "Choose as keeper"))
       Button {
         store.toggleTarget(member.id, in: group, actions: actions)
@@ -230,8 +230,8 @@ struct DuplicateView: View {
   private func label(_ eligibility: DuplicateEligibility) -> String {
     switch eligibility {
     case .eligible: String(localized: "Metadata equal")
-    case .metadataDifferent: String(localized: "Metadata differs · report only")
-    case .metadataUnknown: String(localized: "Metadata unknown · report only")
+    case .metadataDifferent: String(localized: "Metadata differs · review before choosing")
+    case .metadataUnknown: String(localized: "Metadata unknown · review before choosing")
     }
   }
 

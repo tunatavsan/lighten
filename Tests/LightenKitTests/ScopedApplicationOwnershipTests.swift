@@ -509,7 +509,7 @@ struct ScopedApplicationOwnershipTests {
     let session = ApplicationDiscovery(related: service).scanSession()
     var reports: [ApplicationReport] = []
     var streamed: [RelatedDataCandidate] = []
-    for await event in await session.events() {
+    for await event in await session.events(includeAllRelated: true) {
       if case .related(let observedPath, let candidates, _) = event, observedPath == copy {
         #expect(!candidates.contains { $0.path == path })
       }

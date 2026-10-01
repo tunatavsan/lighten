@@ -4,6 +4,9 @@ import Observation
 
 @MainActor @Observable
 final class DuplicateStore {
+  @ObservationIgnored private let userPlanner: PlanService
+  @ObservationIgnored private let preferences: RemovalPreferences
+  @ObservationIgnored private let usesInjectedPlanner: Bool
   @ObservationIgnored private let service = DuplicateService()
   @ObservationIgnored private let planBuilder:
     @Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> ActionPlan
@@ -16,11 +19,13 @@ final class DuplicateStore {
   private(set) var displayRevision = 0
 
   init(
-    planBuilder: @escaping @Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> ActionPlan = {
-      try await DuplicateService().makePlan(report: $0, selections: $1)
-    }
+    planBuilder: (@Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> ActionPlan)? = nil,
+    userPlanner: PlanService = PlanService(), preferences: RemovalPreferences = .shared
   ) {
-    self.planBuilder = planBuilder
+    self.planBuilder = planBuilder ?? { try await DuplicateService().makePlan(report: $0, selections: $1) }
+    self.userPlanner = userPlanner
+    self.preferences = preferences
+    self.usesInjectedPlanner = planBuilder != nil
   }
 
   var folderPath: String?
@@ -125,7 +130,7 @@ final class DuplicateStore {
       partial: report.partial, comparisonCount: report.comparisonCount)
     targets.subtract(hidden)
     displayRevision += 1
-    if change.kind == .applied, !hidden.isEmpty { needsRescan = true }
+    if change.kind == .applied, !hidden.isEmpty { needsRescan = false }
   }
 
   func observeResult(actions: ActionStore) {
@@ -136,7 +141,7 @@ final class DuplicateStore {
     let applied = Set(actions.result?.items.filter { $0.outcome == .applied }.map(\.itemID) ?? [])
     targets.subtract(applied)
     keepers = [:]
-    needsRescan = true
+    needsRescan = false
   }
 
   private func invalidatePreparation(
@@ -156,7 +161,7 @@ final class DuplicateStore {
 
   func chooseKeeper(_ id: UUID, for group: DuplicateGroup, actions: ActionStore) {
     guard !needsRescan, !actions.busy,
-      group.members.contains(where: { $0.id == id && $0.eligibility == .eligible })
+      group.members.contains(where: { $0.id == id })
     else { return }
     invalidatePreparation(actions: actions)
     keepers[group.id] = id
@@ -165,7 +170,7 @@ final class DuplicateStore {
 
   func toggleTarget(_ id: UUID, in group: DuplicateGroup, actions: ActionStore) {
     guard !needsRescan, !actions.busy,
-      let keeperID = keepers[group.id], group.canTarget(id, keeperID: keeperID)
+      let keeperID = keepers[group.id], keeperID != id, group.members.contains(where: { $0.id == id })
     else { return }
     invalidatePreparation(actions: actions)
     if targets.contains(id) { targets.remove(id) } else { targets.insert(id) }
@@ -174,6 +179,41 @@ final class DuplicateStore {
   func prepare(actions: ActionStore) async {
     guard let report, !busy, !preparing, !actions.busy, !needsRescan, !targets.isEmpty
     else { return }
+    if !usesInjectedPlanner {
+      let generation = UUID()
+      preparationGeneration = generation
+      preparing = true
+      defer { if preparationGeneration == generation { preparing = false } }
+      let chosen = report.groups.flatMap(\.members).filter { targets.contains($0.id) }
+      let selected = targets
+      let outcome = await userPlanner.makeAvailableUserSelectionPlan(
+        selections: chosen.map { member in
+          UserSelection(
+            path: member.entry.path, expectedIdentity: member.entry.identity,
+            observedSize: member.entry.identity.map {
+              ObservedPlanSize(
+                logical: ByteAggregate(knownLowerBound: $0.logicalBytes, completeTotal: $0.logicalBytes),
+                allocated: ByteAggregate(knownLowerBound: $0.allocatedBytes, completeTotal: $0.allocatedBytes))
+            })
+        }, kind: preferences.deletionDefault.kind, runID: report.snapshot.runID)
+      guard preparationGeneration == generation, targets == selected else { return }
+      guard let plan = outcome.plan else {
+        message = outcome.rejections.map(SpaceText.rejection).joined(separator: "\n")
+        return
+      }
+      let running = await actions.containsRunningApplications(plan)
+      guard preparationGeneration == generation, targets == selected else { return }
+      actions.present(
+        plan: plan,
+        items: plan.items.map { item in
+          ActionItemSummary(
+            id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
+            path: item.sourcePath, reason: String(localized: "Selected copy"),
+            logicalBytes: nil, allocatedBytes: nil, observedSize: item.observedSize)
+        }, rejectedItems: outcome.rejections, hasRunningApplications: running)
+      presentedPlanID = plan.id
+      return
+    }
     let generation = UUID()
     preparationGeneration = generation
     preparing = true

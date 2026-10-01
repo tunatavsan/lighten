@@ -34,6 +34,21 @@ final class SpaceStore {
   private(set) var cacheUsageBytes: Int64 = 0
   private(set) var cacheMessage: String?
 
+  func observedWarningPath(for item: SpaceItem) -> String? {
+    guard let tree else { return SelectionWarning.example(in: [item.path]) }
+    var pending = [item]
+    var examined = 0
+    while let current = pending.popLast(), examined < 512 {
+      examined += 1
+      if let path = SelectionWarning.example(in: [current.path]) { return path }
+      if current.isProtected { return current.path }
+      if current.kind == .directory {
+        pending.append(contentsOf: tree.children(of: current.id, metric: .logical).prefix(64))
+      }
+    }
+    return nil
+  }
+
   func loadCacheUsage() {
     let cache = self.cache
     Task {

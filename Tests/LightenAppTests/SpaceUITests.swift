@@ -108,6 +108,12 @@ private struct UIClosedApplications: RunningApplicationSource {
   func isRunning(bundleID: String) async -> Bool? { false }
 }
 
+private struct UIFixtureApplicationActivity: ApplicationActivitySource {
+  func activity(applicationPath: String) async -> ApplicationActivity {
+    ApplicationActivity(state: .clearObservedProcesses)
+  }
+}
+
 private struct UIFixtureTrash: TrashMoving {
   let directory: String
   func moveToTrash(path: String) async throws -> String {
@@ -137,7 +143,8 @@ extension SpaceUITests {
     let store = ActionStore(
       journal: journal, trash: UIFixtureTrash(directory: trash),
       planService: PlanService(
-        homeDirectory: root, runningApplications: UIClosedApplications(), spaceActivity: UIObservedSpaceActivity()))
+        homeDirectory: root, runningApplications: UIClosedApplications(), spaceActivity: UIObservedSpaceActivity()),
+      applicationActivity: UIFixtureApplicationActivity())
     for item in run.tree.children(of: run.tree.rootID, metric: .logical) { store.add(item) }
     try FileManager.default.removeItem(atPath: root + "/missing.bin")
     await store.prepare(scanRoot: root, runID: run.runID)

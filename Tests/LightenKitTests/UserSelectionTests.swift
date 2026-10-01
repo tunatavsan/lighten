@@ -386,6 +386,62 @@ struct UserSelectionTests {
     #expect(processes.allSatisfy { !$0.isRunning })
   }
 
+  @Test("Unlinked executable mappings remain scoped and incomplete observations never authorize signals")
+  func nativeUnlinkedExecutableActivity() async throws {
+    let fixture = try UserSelectionFixture()
+    defer { fixture.cleanup() }
+    let app = fixture.home + "/LightenQA-unlinked.app"
+    let path = app + "/Contents/MacOS/helper"
+    let unrelated = fixture.home + "/LightenQA-unrelated"
+    try fixture.directory((path as NSString).deletingLastPathComponent)
+    try fixture.directory(unrelated)
+    try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: path)
+    let signer = Process()
+    signer.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+    signer.arguments = ["--force", "--sign", "-", path]
+    signer.environment = ["LC_ALL": "C", "LANG": "C"]
+    try signer.run()
+    defer { if signer.isRunning { _ = kill(signer.processIdentifier, SIGKILL) } }
+    let signingDeadline = ContinuousClock.now + .seconds(3)
+    while signer.isRunning && ContinuousClock.now < signingDeadline {
+      try await Task.sleep(for: .milliseconds(25))
+    }
+    if signer.isRunning { _ = kill(signer.processIdentifier, SIGKILL) }
+    try #require(!signer.isRunning && signer.terminationStatus == 0)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = ["30"]
+    process.environment = ["LC_ALL": "C", "LANG": "C"]
+    try process.run()
+    defer { if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) } }
+    var pointer: UnsafeMutablePointer<LightenApplicationProcess>?
+    var count: UInt32 = 0
+    let captured = app.withCString { lighten_copy_application_processes($0, &pointer, &count) }
+    defer { lighten_free_application_processes(pointer) }
+    try #require(captured == 0 && count == 1)
+    var original = try #require(pointer?.pointee)
+    try #require(original.pid == process.processIdentifier)
+    // Removing this exact owned leaf reproduces an updater's detached image.
+    try FileManager.default.removeItem(atPath: path)
+    #expect(!FileManager.default.fileExists(atPath: path))
+    #expect(app.withCString { lighten_application_mapping_activity(process.processIdentifier, $0, 4096) } == 1)
+    #expect(unrelated.withCString { lighten_application_mapping_activity(process.processIdentifier, $0, 4096) } == 0)
+    #expect(unrelated.withCString { lighten_application_mapping_activity(process.processIdentifier, $0, 1) } == -1)
+    #expect(unrelated.withCString { lighten_application_mapping_activity(process.processIdentifier, $0, 0) } == -1)
+    #expect(unrelated.withCString { lighten_application_mapping_activity(process.processIdentifier, $0, 4097) } == -1)
+    #expect(unrelated.withCString { lighten_application_mapping_activity(0, $0, 4096) } == -1)
+    #expect(lighten_application_mapping_activity(process.processIdentifier, "relative", 4096) == -1)
+    let source = NativeApplicationActivitySource()
+    #expect(await source.activity(applicationPath: app).state == .active)
+    #expect(await source.activity(applicationPath: unrelated).state == .clearObservedProcesses)
+    #expect(lighten_signal_application_process(&original, SIGTERM) == -1)
+    #expect(process.isRunning)
+    await #expect(throws: ProcessActivityFailure.self) {
+      try await NativeUserSelectionApplicationClosing().closeApplications(rootPath: app, forceAfterGraceful: true)
+    }
+    #expect(process.isRunning)
+  }
+
   @Test("A throwing Trash call after moving remains uncertain and cannot claim success")
   func unverifiedMoveRemainsUncertain() async throws {
     let fixture = try UserSelectionFixture()

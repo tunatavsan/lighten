@@ -385,7 +385,8 @@ private func selectedAppCandidate(_ path: String) -> RelatedDataCandidate {
   store.inventoryComplete = true
   store.runningCheckedIDs = [bundleID]
   store.selectedPath = firstPath
-  #expect(!store.canSelect(candidate, app: first))
+  #expect(store.canSelect(candidate, app: first))
+  #expect(!store.automaticSelectionAllowed(candidate))
   #expect(store.otherInstallationPaths(candidate: candidate, app: first) == [otherPath])
   await store.openOtherInstallation(otherPath, candidate: candidate, app: first, actions: actions)
   await store.waitForSelectedReview()
@@ -396,7 +397,7 @@ private func selectedAppCandidate(_ path: String) -> RelatedDataCandidate {
   #expect(actions.pending == nil)
 }
 
-@Test("Unknown owner observations cannot offer installed-owner navigation or data selection")
+@Test("Unknown owners offer no navigation or automatic choice but allow explicit selection")
 @MainActor func appsUnknownOwnerRemainsUnavailable() async {
   let path = "/Applications/LightenQA-first.app"
   let other = "/Applications/LightenQA-unknown.app"
@@ -421,7 +422,8 @@ private func selectedAppCandidate(_ path: String) -> RelatedDataCandidate {
   store.inventoryComplete = true
   store.selectedPath = path
   #expect(store.otherInstallationPaths(candidate: candidate, app: app).isEmpty)
-  #expect(!store.canSelect(candidate, app: app))
+  #expect(store.canSelect(candidate, app: app))
+  #expect(!store.automaticSelectionAllowed(candidate))
   await store.openOtherInstallation(other, candidate: candidate, app: app, actions: actions)
   #expect(store.selectedPath == path && actions.pending == nil)
 }
@@ -470,7 +472,7 @@ private func storeUnprovenCandidate(
 }
 
 @Test(
-  "Known app-data vetoes cannot become manual name-only choices",
+  "Discovery vetoes block recommendations while allowing explicit user choices",
   arguments: [
     (RelatedClassification.uncertain, RelatedReason.literalIdentifierOwner),
     (.shared, .sharedInstalledData), (.protected, .protected), (.protected, .foreignOwner),
@@ -489,13 +491,14 @@ private func storeUnprovenCandidate(
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.name"]
   store.select(path, actions: actions)
-  #expect(!store.canSelect(candidate, app: app))
+  #expect(store.canSelect(candidate, app: app))
+  #expect(!store.automaticSelectionAllowed(candidate))
   store.toggleData(candidate.path, actions: actions)
-  #expect(store.selectedDataPaths.isEmpty && actions.pending == nil)
+  #expect(store.selectedDataPaths == [candidate.path] && actions.pending == nil)
 }
 
 @Test(
-  "Running or unchecked applications cannot offer a name-only removal choice",
+  "Earlier running observations do not disable explicit app-data review",
   arguments: ["running", "unknown", "unchecked"])
 @MainActor func appsUnprovenKeepsRunningVeto(state: String) {
   let path = "/Applications/LightenQA-name.app"
@@ -510,7 +513,8 @@ private func storeUnprovenCandidate(
   if state != "unchecked" { store.runningCheckedIDs = [id] }
   if state == "running" { store.runningIDs = [id] }
   if state == "unknown" { store.runningUnknownIDs = [id] }
-  #expect(!store.canSelect(candidate, app: app))
+  #expect(store.canSelect(candidate, app: app))
+  #expect(!store.automaticSelectionAllowed(candidate))
 }
 
 @Test("A fresh name-only row preserves a choice only for the same observed identity", arguments: [false, true])

@@ -29,8 +29,14 @@ const char *lighten_process_name(const LightenProcessSample *sample);
 int lighten_process_activity(const char *root, char *process_name, size_t name_capacity);
 // 1: executable path from any UID is at/below root, 0: none observed, -1:
 // process table or a live executable/identity path could not be checked.
-// Uses proc_pidpath only; never reads arguments or the process environment.
+// Uses proc_pidpath, recovering complete mapped-vnode evidence only for ENOENT.
+// Never reads arguments or the process environment.
 int lighten_application_activity(const char *root, char *process_name, size_t name_capacity);
+// Per-PID mapped executable observation, never signal authority. Two complete
+// matching native snapshots and a stable UID/start binding are required.
+// 1: executable mapping under root, 0: all outside, -1: incomplete/unavailable.
+// region_limit is bounded to 1...4096; exhaustion is always unavailable.
+int lighten_application_mapping_activity(int32_t pid, const char *root, uint32_t region_limit);
 int lighten_path_is_under_root(const char *path, const char *root);
 
 typedef struct {

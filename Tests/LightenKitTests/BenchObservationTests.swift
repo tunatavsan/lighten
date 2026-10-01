@@ -82,7 +82,7 @@ func readOnlySurveyRetainsNameOnlyAndUnknownCandidates() async throws {
     packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   let session = ApplicationDiscovery(related: service).scanSession()
   var completedReports: [ApplicationReport] = []
-  for await event in await session.events() {
+  for await event in await session.events(includeAllRelated: true) {
     if case .completed(_, let reports) = event { completedReports = reports }
   }
   let raw = await session.observedRelatedCandidates()

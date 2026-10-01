@@ -14,12 +14,9 @@ struct FailurePresentation: Equatable, Sendable {
 /// Machine-readable failures are presented as a reason and one next step.
 enum FailureText {
   static func describe(_ error: any Error, turkish: Bool? = nil) -> String {
-    if let rejection = error as? PlanRejection {
-      return SpaceText.rejection(rejection, turkish: turkish)
-    }
+    if let rejection = error as? PlanRejection { return SpaceText.rejection(rejection, turkish: turkish) }
     if let refusals = error as? PlanRejections {
-      return refusals.rejections.map { SpaceText.rejection($0, turkish: turkish) }.joined(
-        separator: "\n")
+      return refusals.rejections.map { SpaceText.rejection($0, turkish: turkish) }.joined(separator: "\n")
     }
     if case FileSystemFailure.systemCall(_, let number) = error {
       return posixFailure(number, turkish: turkish)
@@ -27,18 +24,10 @@ enum FailureText {
     if case JournalFailure.systemCall(_, let number) = error {
       return posixFailure(number, turkish: turkish)
     }
-    if case UndoFailure.renameFailed(let number) = error {
-      return posixFailure(number, turkish: turkish)
-    }
-    if case ScanStartFailure.unavailable(let number) = error {
-      return posixFailure(number, turkish: turkish)
-    }
-    if case DirectoryReadFailure.open(let number) = error {
-      return posixFailure(number, turkish: turkish)
-    }
-    if case DirectoryReadFailure.read(let number) = error {
-      return posixFailure(number, turkish: turkish)
-    }
+    if case UndoFailure.renameFailed(let number) = error { return posixFailure(number, turkish: turkish) }
+    if case ScanStartFailure.unavailable(let number) = error { return posixFailure(number, turkish: turkish) }
+    if case DirectoryReadFailure.open(let number) = error { return posixFailure(number, turkish: turkish) }
+    if case DirectoryReadFailure.read(let number) = error { return posixFailure(number, turkish: turkish) }
     let systemError = error as NSError
     if systemError.domain == NSPOSIXErrorDomain, let number = Int32(exactly: systemError.code) {
       let path = systemError.userInfo[NSFilePathErrorKey] as? String
@@ -149,7 +138,7 @@ enum FailureText {
     "symbolicLinkRoot": "unsupportedItem",
     "missingMetadata": "invalidProof",
     "differentVolume": "volumeUnknown",
-    "needsAdministrator": "foreignOwnership",
+    "needsAdministrator": "administratorRequired",
     "userPermissionDenied": "folderAccessDenied",
     "processActive": "activeProcess",
     "activityUnavailable": "processActivityUnavailable",
@@ -191,24 +180,20 @@ enum FailureText {
 
   static func presentation(_ raw: String, turkish: Bool? = nil) -> FailurePresentation {
     let first =
-      raw.split(whereSeparator: {
-        $0 == ":" || $0 == "(" || $0 == ";" || $0 == "|" || $0.isWhitespace
-      }).first.map(String.init) ?? raw
+      raw.split(whereSeparator: { $0 == ":" || $0 == "(" || $0 == ";" || $0 == "|" || $0.isWhitespace }).first.map(
+        String.init) ?? raw
     var descriptions = [singleCodeDescription(first, turkish: turkish)]
     let components = raw.components(separatedBy: CharacterSet(charactersIn: ";|"))
     var unknown = descriptions[0].recognized ? [] : [first]
     for component in components.dropFirst() {
-      let description = singleCodeDescription(
-        component.trimmingCharacters(in: .whitespaces), turkish: turkish)
+      let description = singleCodeDescription(component.trimmingCharacters(in: .whitespaces), turkish: turkish)
       if description.recognized && !descriptions.contains(where: { $0.text == description.text }) {
         descriptions.append(description)
       } else if !description.recognized {
         let code = component.trimmingCharacters(in: .whitespaces)
         if code.range(of: #"^[A-Za-z][A-Za-z0-9-]*(?:[:(]|$)"#, options: .regularExpression) != nil {
           unknown.append(code)
-          if !descriptions.contains(where: { $0.text == description.text }) {
-            descriptions.append(description)
-          }
+          if !descriptions.contains(where: { $0.text == description.text }) { descriptions.append(description) }
         }
       }
     }
@@ -225,9 +210,8 @@ enum FailureText {
         return FailurePresentation(reasons: [copy.reason], nextStep: copy.step, unknownCodes: [])
       }
       let machineCode =
-        raw.split(whereSeparator: {
-          $0 == ":" || $0 == "(" || $0 == ";" || $0 == "|" || $0.isWhitespace
-        }).first.map(String.init) ?? raw
+        raw.split(whereSeparator: { $0 == ":" || $0 == "(" || $0 == ";" || $0 == "|" || $0.isWhitespace }).first.map(
+          String.init) ?? raw
       if singleCodeDescription(machineCode, turkish: turkish).recognized {
         return presentation(raw, turkish: turkish)
       }
@@ -237,9 +221,7 @@ enum FailureText {
     return FailurePresentation(reasons: [copy.reason], nextStep: copy.step, unknownCodes: [])
   }
 
-  static func candidate(_ candidate: RelatedDataCandidate, turkish: Bool? = nil)
-    -> FailurePresentation
-  {
+  static func candidate(_ candidate: RelatedDataCandidate, turkish: Bool? = nil) -> FailurePresentation {
     let evidence = candidate.refusalEvidence
     let primary =
       evidence.first.map { presentation($0.reason.rawValue, turkish: turkish) }
@@ -254,13 +236,10 @@ enum FailureText {
     let step = evidence.first.map { nextStep($0.nextStep, turkish: turkish) }
     return FailurePresentation(
       reasons: reasons, nextStep: step?.text ?? primary.nextStep,
-      unknownCodes: primary.unknownCodes + others.flatMap(\.unknownCodes)
-        + (step?.unknownCodes ?? []))
+      unknownCodes: primary.unknownCodes + others.flatMap(\.unknownCodes) + (step?.unknownCodes ?? []))
   }
 
-  static func nextStep(_ code: String, turkish: Bool? = nil) -> (
-    text: String, unknownCodes: [String]
-  ) {
+  static func nextStep(_ code: String, turkish: Bool? = nil) -> (text: String, unknownCodes: [String]) {
     let copy: (String, String)
     switch code {
     case "review-observed-owner":
@@ -268,9 +247,7 @@ enum FailureText {
     case "inspect-owner-metadata":
       copy = ("Inspect the possible owner in Finder.", "Olası sahibi Finder’da inceleyin.")
     case "review-other-installations":
-      copy = (
-        "Review the other installations in Apps.", "Diğer kurulumları Uygulamalar’da inceleyin."
-      )
+      copy = ("Review the other installations in Apps.", "Diğer kurulumları Uygulamalar’da inceleyin.")
     case "scan-again":
       copy = ("Scan again before cleaning.", "Temizlemeden önce yeniden tarayın.")
     default:
@@ -283,22 +260,13 @@ enum FailureText {
     let copy: (String, String)
     switch status {
     case "review":
-      copy = (
-        "The app was removed; this data needs review.", "Uygulama kaldırıldı; bu veri incelenmeli."
-      )
+      copy = ("The app was removed; this data needs review.", "Uygulama kaldırıldı; bu veri incelenmeli.")
     case "notMoved":
-      copy = (
-        "The app was removed; this data was not moved.", "Uygulama kaldırıldı; bu veri taşınmadı."
-      )
+      copy = ("The app was removed; this data was not moved.", "Uygulama kaldırıldı; bu veri taşınmadı.")
     case "refused":
-      copy = (
-        "The app was removed; this data was refused.", "Uygulama kaldırıldı; bu veri reddedildi."
-      )
+      copy = ("The app was removed; this data was refused.", "Uygulama kaldırıldı; bu veri reddedildi.")
     default:
-      copy = (
-        "The app was removed; this data was not selected.",
-        "Uygulama kaldırıldı; bu veri seçilmedi."
-      )
+      copy = ("The app was removed; this data was not selected.", "Uygulama kaldırıldı; bu veri seçilmedi.")
     }
     return text(copy.0, copy.1, turkish: turkish)
   }
@@ -308,13 +276,10 @@ enum FailureText {
       text("and %lld more reasons", "ve %lld neden daha", turkish: turkish), count)
   }
 
-  private static func singleCodeDescription(_ raw: String, turkish: Bool?) -> (
-    text: String, recognized: Bool
-  ) {
+  private static func singleCodeDescription(_ raw: String, turkish: Bool?) -> (text: String, recognized: Bool) {
     let first =
-      raw.split(whereSeparator: {
-        $0 == ":" || $0 == "(" || $0 == ";" || $0 == "|" || $0.isWhitespace
-      }).first.map(String.init) ?? raw
+      raw.split(whereSeparator: { $0 == ":" || $0 == "(" || $0 == ";" || $0 == "|" || $0.isWhitespace }).first.map(
+        String.init) ?? raw
     var code = first
     var seen = Set<String>()
     while let alias = codeAliases[code], seen.insert(code).inserted { code = alias }
@@ -348,8 +313,7 @@ enum FailureText {
       )
     case "selfRemoval":
       copy = (
-        "Lighten cannot remove itself. Choose another item.",
-        "Lighten kendisini kaldıramaz. Başka bir öğe seçin."
+        "Lighten cannot remove itself. Choose another item.", "Lighten kendisini kaldıramaz. Başka bir öğe seçin."
       )
     case "changedItem", "changedAncestor", "changedInventory", "changed", "changedSinceScan",
       "changedDuringInspection":
@@ -408,10 +372,7 @@ enum FailureText {
         "Tarama artık bu seçimle eşleşmiyor. Bu klasörü yeniden tarayın."
       )
     case "emptySelection":
-      copy = (
-        "No eligible item is selected. Select an eligible item.",
-        "Uygun bir öğe seçilmedi. Uygun bir öğe seçin."
-      )
+      copy = ("No eligible item is selected. Select an eligible item.", "Uygun bir öğe seçilmedi. Uygun bir öğe seçin.")
     case "invalidPlan", "planAlreadyUsed":
       copy = (
         "This review no longer matches the requested action. Review your selection again.",
@@ -424,8 +385,7 @@ enum FailureText {
       )
     case "alreadyRunning":
       copy = (
-        "Another action is running. Wait for it to finish.",
-        "Başka bir işlem çalışıyor. Tamamlanmasını bekleyin."
+        "Another action is running. Wait for it to finish.", "Başka bir işlem çalışıyor. Tamamlanmasını bekleyin."
       )
     case "nameOccupied":
       copy = (
@@ -542,6 +502,11 @@ enum FailureText {
         "Another observed app declares this data’s exact identifier. Review that app in Apps.",
         "Gözlenen başka bir uygulama bu verinin tam kimliğini bildiriyor. O uygulamayı Uygulamalar’da inceleyin."
       )
+    case "administratorRequired":
+      copy = (
+        "Moving this item requires administrator permission. Use Show in Finder to remove it there.",
+        "Bu öğeyi taşımak için yönetici yetkisi gerekiyor. Oradan kaldırmak için Finder’da Göster’i kullanın."
+      )
     case "foreignOwnership":
       copy = (
         "This item belongs to another account. Check its owner and permissions in Finder.",
@@ -637,12 +602,8 @@ enum FailureText {
     }
   }
 
-  static func executionPresentation(_ item: ItemActionResult, turkish: Bool? = nil)
-    -> FailurePresentation
-  {
-    if !executionIsUnverified(item), let detail = item.detail {
-      return presentation(detail, turkish: turkish)
-    }
+  static func executionPresentation(_ item: ItemActionResult, turkish: Bool? = nil) -> FailurePresentation {
+    if !executionIsUnverified(item), let detail = item.detail { return presentation(detail, turkish: turkish) }
     let copy = splitCopy(execution(item, turkish: turkish))
     return FailurePresentation(reasons: [copy.reason], nextStep: copy.step, unknownCodes: [])
   }
@@ -656,8 +617,7 @@ enum FailureText {
     case .trashCallUnverified, .trashMoveObserved:
       return text(
         "Removal could not be verified. The item may be in Trash; check History or Finder.",
-        "Kaldırma doğrulanamadı. Öğe Çöp’te olabilir; Geçmiş’ten veya Finder’dan kontrol edin.",
-        turkish: turkish)
+        "Kaldırma doğrulanamadı. Öğe Çöp’te olabilir; Geçmiş’ten veya Finder’dan kontrol edin.", turkish: turkish)
     case .permanentMutation:
       return text(
         "A permanent change occurred, but completion could not be verified. Check History; this change cannot be undone.",

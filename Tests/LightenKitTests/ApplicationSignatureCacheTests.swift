@@ -291,7 +291,7 @@ struct ApplicationSignatureCacheTests {
       ownershipCollected: { walks.withLock { $0 += 1 } })
     let session = ApplicationDiscovery(related: service).scanSession()
     var chosen: [RelatedDataCandidate] = []
-    for await event in await session.events() {
+    for await event in await session.events(includeAllRelated: true) {
       if case .completed(_, let reports) = event { chosen = reports.first { $0.path == fixture.app }?.related ?? [] }
     }
     let app = try #require(service.application(at: fixture.app))
@@ -322,7 +322,7 @@ struct ApplicationSignatureCacheTests {
     }
     let session = ApplicationDiscovery(related: service).scanSession()
     var candidate: RelatedDataCandidate?
-    for await event in await session.events() {
+    for await event in await session.events(includeAllRelated: true) {
       if case .completed(_, let reports) = event {
         candidate = reports.first { $0.path == fixture.app }?.related.first { $0.path == fixture.group }
       }
@@ -353,7 +353,7 @@ struct ApplicationSignatureCacheTests {
       ownershipCollected: { walks.withLock { $0 += 1 } })
     let session = ApplicationDiscovery(related: service).scanSession()
     var candidates: [RelatedDataCandidate] = []
-    for await event in await session.events() {
+    for await event in await session.events(includeAllRelated: true) {
       if case .completed(_, let reports) = event {
         candidates =
           reports.first { $0.path == fixture.app }?.related.filter {

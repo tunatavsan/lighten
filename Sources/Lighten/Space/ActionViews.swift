@@ -3,9 +3,22 @@ import LightenKit
 import SwiftUI
 
 struct ConfirmationView: View {
-  let presentation: ActionPresentation
+  private let initialPresentation: ActionPresentation
   @Bindable var actions: ActionStore
+
+  init(presentation: ActionPresentation, actions: ActionStore) {
+    initialPresentation = presentation
+    self.actions = actions
+  }
+
+  private var presentation: ActionPresentation {
+    if let current = actions.pending, current.id == initialPresentation.id { return current }
+    return initialPresentation
+  }
   @Environment(\.dismiss) private var dismiss
+  @State private var confirmingPermanent = false
+  @State private var permanentPresentation: ActionPresentation?
+  @State private var returnToTrashAfterCancel = false
 
   private var logicalSummary: String {
     let logical = ObservedPlanSize.total(presentation.items.map(\.observedSize)).logical
@@ -28,7 +41,7 @@ struct ConfirmationView: View {
           presentation.plan.kind == .trash
             ? String(
               localized: "These items move to macOS Trash. Space is not freed until Trash is emptied outside Lighten.")
-            : String(localized: "Permanent cleanup cannot be undone. Cached data may need to be downloaded or rebuilt.")
+            : String(localized: "Permanent deletion cannot be undone.")
         )
         .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
         .fixedSize(horizontal: false, vertical: true)
@@ -41,19 +54,19 @@ struct ConfirmationView: View {
             Image(systemName: "doc").foregroundStyle(LightenStyle.muted)
             VStack(alignment: .leading, spacing: 3) {
               Text(item.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
-              Text(item.reason).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-              if let planned = presentation.plan.items.first(where: { $0.id == item.id }),
-                planned.containsOpaquePackages, planned.observedSize?.logical != nil
-              {
-                Text(String(localized: "Measured in the scan"))
-                  .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-              }
               if let warning = item.warning {
-                Label(String(localized: "Check before removing"), systemImage: "exclamationmark.triangle.fill")
-                  .font(.system(size: 11, weight: .semibold)).foregroundStyle(LightenStyle.warning)
-                Text(SpaceText.warning(warning, paths: item.warningPaths))
+                Text(SpaceText.warning(warning, paths: Array(item.warningPaths.prefix(1))))
                   .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
                   .fixedSize(horizontal: false, vertical: true)
+              } else if let example = presentation.plan.items.first(where: { $0.id == item.id })?
+                .userSelectionWarnings?.first?.examplePath
+              {
+                Text(
+                  String(localized: "This selection may contain personal or sensitive data. Check it before removal.")
+                    + " — " + example
+                )
+                .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+                .fixedSize(horizontal: false, vertical: true)
               }
               Text(item.path).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
                 .lineLimit(1).truncationMode(.middle).help(item.path)
@@ -82,20 +95,34 @@ struct ConfirmationView: View {
           dismiss()
         }
         Spacer()
-        if presentation.permanentPlanBuilder != nil {
-          Button(String(localized: "Permanently clean instead")) {
-            Task { await actions.requestPermanent(presentation) }
+        if presentation.plan.kind == .trash {
+          Button(
+            presentation.hasRunningApplications
+              ? String(localized: "Close and permanently delete") : String(localized: "Permanently delete")
+          ) {
+            Task {
+              await actions.requestPermanent(presentation)
+              guard let permanent = actions.pending, permanent.plan.kind == .catalogDelete else { return }
+              permanentPresentation = permanent
+              returnToTrashAfterCancel = true
+              confirmingPermanent = true
+            }
+          }
+          .disabled(actions.busy || actions.preparingAlternate)
+        } else {
+          Button(String(localized: "Move to Trash instead")) {
+            Task { await actions.requestTrash(presentation) }
           }
           .disabled(actions.busy || actions.preparingAlternate)
         }
-        Button(
-          presentation.plan.kind == .trash
-            ? String(localized: "Move to Trash")
-            : String(localized: "Permanently clean — cannot undo")
-        ) {
-          guard let confirmedPlan = actions.takeConfirmedPlan(presentation) else { return }
-          dismiss()
-          Task { await actions.executeConfirmed(confirmedPlan) }
+        Button(primaryButtonTitle) {
+          if presentation.plan.kind == .catalogDelete {
+            permanentPresentation = presentation
+            returnToTrashAfterCancel = false
+            confirmingPermanent = true
+          } else {
+            confirm(permanent: false)
+          }
         }
         .buttonStyle(.borderedProminent)
         .disabled(actions.busy || actions.preparingAlternate)
@@ -104,6 +131,46 @@ struct ConfirmationView: View {
     }
     .tint(LightenStyle.accent)
     .frame(width: 560, height: 420)
+    .confirmationDialog(
+      String(localized: "Permanently delete these items?"), isPresented: $confirmingPermanent,
+      titleVisibility: .visible
+    ) {
+      Button(
+        (permanentPresentation ?? presentation).hasRunningApplications
+          ? String(localized: "Close and permanently delete") : String(localized: "Permanently delete — cannot undo"),
+        role: .destructive
+      ) {
+        confirm(permanent: true, selection: permanentPresentation)
+      }
+      Button(String(localized: "Cancel"), role: .cancel) {
+        if returnToTrashAfterCancel, let pending = actions.pending {
+          Task { await actions.requestTrash(pending) }
+        }
+        permanentPresentation = nil
+      }
+    } message: {
+      Text(String(localized: "This deletes the selected items without using Trash. This cannot be undone."))
+    }
+  }
+
+  private var primaryButtonTitle: String {
+    if presentation.plan.kind == .catalogDelete {
+      return presentation.hasRunningApplications
+        ? String(localized: "Close and permanently delete") : String(localized: "Permanently delete")
+    }
+    return presentation.hasRunningApplications
+      ? String(localized: "Close and move to Trash") : String(localized: "Move to Trash")
+  }
+
+  private func confirm(permanent: Bool, selection: ActionPresentation? = nil) {
+    let selected = selection ?? presentation
+    guard
+      let plan = actions.takeConfirmedPlan(
+        selected, permanentConfirmed: permanent,
+        closeRunningApplications: selected.hasRunningApplications)
+    else { return }
+    dismiss()
+    Task { await actions.executeConfirmed(plan) }
   }
 }
 

@@ -423,9 +423,10 @@ private actor ScopedCleanActivity: ProcessActivitySource {
   await actions.requestPermanent(presentation)
   let permanent = try #require(actions.pending)
   #expect(permanent.plan.kind == .catalogDelete)
-  #expect(permanent.id != presentation.id)
+  #expect(permanent.id == presentation.id)
   #expect(permanent.plan.items.count == 1)
-  #expect(permanent.plan.items.allSatisfy { $0.catalogProof?.method == .catalogDelete && $0.policy == nil })
+  #expect(
+    permanent.plan.items.allSatisfy { $0.userSelection == true && $0.catalogProof == nil && $0.inventory.count == 1 })
   #expect(permanent.rejectedItems.map(\.path) == [disappeared.entry.path])
   #expect(store.scannedAt != nil)
   #expect(store.candidates.count == candidateCount)
@@ -515,10 +516,11 @@ private actor ScopedCleanActivity: ProcessActivitySource {
   #expect(trash.permanentPlanBuilder != nil)
   await actions.requestPermanent(trash)
   let permanent = try #require(actions.pending)
-  #expect(permanent.id != trash.id)
+  #expect(permanent.id == trash.id)
   #expect(permanent.plan.kind == .catalogDelete)
   #expect(permanent.permanentPlanBuilder == nil)
-  #expect(permanent.plan.items.allSatisfy { $0.policy == nil && $0.catalogProof?.method == .catalogDelete })
+  #expect(
+    permanent.plan.items.allSatisfy { $0.userSelection == true && $0.catalogProof == nil && $0.inventory.count == 1 })
   #expect(actions.result == nil)
 }
 

@@ -7,6 +7,12 @@ import Testing
 
 private enum GateFailure: Error { case injected }
 
+private struct DuplicateFixtureApplicationActivity: ApplicationActivitySource {
+  func activity(applicationPath: String) async -> ApplicationActivity {
+    ApplicationActivity(state: .clearObservedProcesses)
+  }
+}
+
 private struct LocalDuplicateMover: TrashMoving {
   let destination: String
 
@@ -47,7 +53,7 @@ private actor PlanGate {
 @MainActor func staleDuplicatePreparationIsDiscarded() async throws {
   guard let resolved = realpath(NSTemporaryDirectory(), nil) else { throw GateFailure.injected }
   defer { free(resolved) }
-  let root = String(cString: resolved) + "/lighten-b4-store-" + UUID().uuidString
+  let root = String(cString: resolved) + "/LightenQA-" + UUID().uuidString
   try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
   defer { try? FileManager.default.removeItem(atPath: root) }
   for name in ["a", "b"] {
@@ -69,7 +75,8 @@ private actor PlanGate {
   try FileManager.default.createDirectory(atPath: trashDirectory, withIntermediateDirectories: true)
   let actions = ActionStore(
     journal: JSONLActionJournal(path: root + "/journal.jsonl"),
-    trash: LocalDuplicateMover(destination: trashDirectory))
+    trash: LocalDuplicateMover(destination: trashDirectory),
+    applicationActivity: DuplicateFixtureApplicationActivity())
   store.report = found
   store.chooseKeeper(keeper.id, for: group, actions: actions)
   store.toggleTarget(target.id, in: group, actions: actions)
@@ -106,12 +113,9 @@ private actor PlanGate {
   await actions.executeConfirmed(confirmed)
   #expect(actions.result?.items.map(\.outcome) == [.applied])
   store.observeResult(actions: actions)
-  #expect(store.needsRescan)
+  #expect(!store.needsRescan)
   #expect(store.targets.isEmpty)
   #expect(store.keepers.isEmpty)
   #expect(store.presentedPlanID == validPlan.id)
-  store.chooseKeeper(keeper.id, for: group, actions: actions)
-  #expect(store.keepers.isEmpty)
-  await store.prepare(actions: actions)
   #expect(actions.pending == nil)
 }

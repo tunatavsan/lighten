@@ -364,9 +364,12 @@ public actor ApplicationScanSession {
   public nonisolated let id = UUID()
   private let related: RelatedDataService
   private let uptime: @Sendable () -> TimeInterval
+  private let lightweightListing: @Sendable () -> [ApplicationListEntry]
+  private let measurement: @Sendable (String, String) async -> ApplicationDiscovery.Measurement
   private let metadata = ApplicationContextMetadata()
   private var ownership: Task<AuthenticApplicationContext, Never>?
   private var listing: Task<BundleInventory, Never>?
+  private var displayListingTask: Task<[ApplicationListEntry], Never>?
   private var worker: Task<Void, Never>?
   private var relatedCandidates: Task<[RelatedDataCandidate], Never>?
   private var enrichments: [Task<Void, Never>] = []
@@ -374,13 +377,23 @@ public actor ApplicationScanSession {
   private let activity = ApplicationSessionActivity()
   private var cancelled = false
   private var streamed = false
+  private var pendingMeasurements: [ApplicationReport] = []
+  private var visibleApplicationPaths: [String] = []
 
-  init(related: RelatedDataService, uptime: @escaping @Sendable () -> TimeInterval) {
+  init(
+    related: RelatedDataService, uptime: @escaping @Sendable () -> TimeInterval,
+    lightweightListing: (@Sendable () -> [ApplicationListEntry])? = nil,
+    measurement: @escaping @Sendable (String, String) async -> ApplicationDiscovery.Measurement = ApplicationDiscovery
+      .measure
+  ) {
     self.related = related
     self.uptime = uptime
+    self.lightweightListing =
+      lightweightListing ?? { ApplicationListing.observe(roots: related.lightweightListingRoots) }
+    self.measurement = measurement
   }
 
-  public func events() -> AsyncStream<ApplicationDiscovery.Event> {
+  public func events(includeAllRelated: Bool = false) -> AsyncStream<ApplicationDiscovery.Event> {
     guard !streamed, !cancelled else { return AsyncStream { $0.finish() } }
     streamed = true
     let pair = AsyncStream<ApplicationDiscovery.Event>.makeStream()
@@ -393,7 +406,9 @@ public actor ApplicationScanSession {
         pair.continuation.finish()
         return
       }
-      await ApplicationDiscovery.run(session: self, related: service, uptime: clock) { event in
+      await ApplicationDiscovery.run(
+        session: self, related: service, uptime: clock, includeAllRelated: includeAllRelated
+      ) { event in
         pair.continuation.yield(event)
       }
       await self.finishStream()
@@ -403,6 +418,39 @@ public actor ApplicationScanSession {
       if case .cancelled = termination { Task { await self.cancel() } }
     }
     return pair.stream
+  }
+
+  func displayListing() async -> [ApplicationListEntry] {
+    if let displayListingTask { return await displayListingTask.value }
+    let listing = lightweightListing
+    let task = Task.detached(priority: .userInitiated) { listing() }
+    displayListingTask = task
+    if cancelled { task.cancel() }
+    return await task.value
+  }
+
+  /// Visible rows are taken first whenever a package measurement slot becomes free.
+  public func prioritizeVisibleApplications(paths: [String]) {
+    visibleApplicationPaths = paths
+  }
+
+  func enqueueMeasurements(_ reports: [ApplicationReport]) {
+    guard !cancelled else { return }
+    pendingMeasurements.append(contentsOf: reports)
+  }
+
+  func nextMeasurement() -> ApplicationReport? {
+    guard !cancelled, !pendingMeasurements.isEmpty else { return nil }
+    if let path = visibleApplicationPaths.first(where: { path in pendingMeasurements.contains { $0.path == path } }),
+      let index = pendingMeasurements.firstIndex(where: { $0.path == path })
+    {
+      return pendingMeasurements.remove(at: index)
+    }
+    return pendingMeasurements.removeFirst()
+  }
+
+  func measureApplication(path: String, homeDirectory: String) async -> ApplicationDiscovery.Measurement {
+    await measurement(path, homeDirectory)
   }
 
   func installedListing() async -> BundleInventory {
@@ -548,10 +596,12 @@ public actor ApplicationScanSession {
 
   public func cancel() async {
     cancelled = true
+    pendingMeasurements.removeAll()
     activity.active.withLock { $0 = false }
     worker?.cancel()
     ownership?.cancel()
     listing?.cancel()
+    displayListingTask?.cancel()
     relatedCandidates?.cancel()
     for task in enrichments { task.cancel() }
     let pending = enrichments
@@ -561,6 +611,7 @@ public actor ApplicationScanSession {
     await worker?.value
     _ = await ownership?.value
     _ = await listing?.value
+    _ = await displayListingTask?.value
     _ = await relatedCandidates?.value
     for task in pending { await task.value }
   }

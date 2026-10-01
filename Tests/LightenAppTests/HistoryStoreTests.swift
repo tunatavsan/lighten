@@ -45,6 +45,12 @@ private struct HistoryFixtureTrash: TrashMoving {
   }
 }
 
+private struct HistoryFixtureApplicationActivity: ApplicationActivitySource {
+  func activity(applicationPath: String) async -> ApplicationActivity {
+    ApplicationActivity(state: .clearObservedProcesses)
+  }
+}
+
 private actor HistoryStoreJournalSpy: ActionJournal {
   let base: JSONLActionJournal
   private var fullReads = 0
@@ -69,7 +75,8 @@ private actor HistoryStoreJournalSpy: ActionJournal {
 @MainActor private func applyHistoryFixture(_ fixture: HistoryStoreFixture) async throws -> (ActionStore, ActionPlan) {
   let store = ActionStore(
     journal: fixture.journal, trash: HistoryFixtureTrash(directory: fixture.trash),
-    historyService: ActionHistory(journal: fixture.journal, homeDirectory: fixture.root))
+    historyService: ActionHistory(journal: fixture.journal, homeDirectory: fixture.root),
+    applicationActivity: HistoryFixtureApplicationActivity())
   let plan = try fixture.plan()
   store.present(
     plan: plan,
@@ -129,7 +136,7 @@ private actor HistoryStoreJournalSpy: ActionJournal {
   #expect(store.pendingTrashCount == 0)
 }
 
-@Test("History totals exclude failed planned items and preserve applied sizes after Undo")
+@Test("History totals exclude rejected roots and preserve applied sizes after Undo")
 @MainActor func historyStoreTotalsCountAppliedItemsOnly() async throws {
   let fixture = try HistoryStoreFixture()
   defer { fixture.cleanup() }
@@ -137,7 +144,8 @@ private actor HistoryStoreJournalSpy: ActionJournal {
   try FileManager.default.removeItem(atPath: fixture.paths[1])
   let store = ActionStore(
     journal: fixture.journal, trash: HistoryFixtureTrash(directory: fixture.trash),
-    historyService: ActionHistory(journal: fixture.journal, homeDirectory: fixture.root))
+    historyService: ActionHistory(journal: fixture.journal, homeDirectory: fixture.root),
+    applicationActivity: HistoryFixtureApplicationActivity())
   store.present(
     plan: plan,
     items: plan.items.map {
@@ -150,12 +158,14 @@ private actor HistoryStoreJournalSpy: ActionJournal {
   await store.executeConfirmed(confirmed)
   await store.setHistoryGroupExpanded(plan.id, expanded: true)
   let history = try #require(store.history?.plans.first)
-  #expect(history.metadata.count == 3)
+  #expect(history.metadata.count == 2)
+  #expect(Set(history.metadata.map(\.sourcePath)) == Set([fixture.paths[0], fixture.paths[2]]))
+  #expect(store.resultRejections.map(\.path) == [fixture.paths[1]])
   #expect(history.appliedCount == 2)
   #expect(history.logicalBytes == 22)
   #expect(store.pendingTrashCount == 2)
   #expect(store.pendingTrashLogicalBytes == 22)
-  #expect(history.items.contains { !$0.applied && $0.detail != nil })
+  #expect(history.items.allSatisfy { $0.applied })
   await store.undo(history)
   #expect(store.history?.plans.first?.appliedCount == 2)
   #expect(store.history?.plans.first?.logicalBytes == 22)
