@@ -13,23 +13,23 @@ public enum SafetyDocument {
       """
       # Safety
 
-      These rules protect sensitive locations and prevent changes to application contents. Generic cleanup suggestions, app-related cleanup, and AI recommendations continue to refuse every protected rule.
+      Lighten requires evidence for its cleanup suggestions. Name similarity alone is not evidence, shared installed data is not suggested, and incomplete ownership observations remain visible without automatic selection. The patterns below filter recommendations and explain valuable content.
 
-      Space permits explicitly selected Trash-only items after checking their complete current inventory. Device backups are selectable only as a whole `MobileSync/Backup/<device identifier>` folder. Virtual machines and container images require their related apps to be closed and no observed current-user process to hold a file or working directory beneath the selected root. Sparse images must be detached; an unavailable attachment check refuses the item. These permissions do not authorize permanent deletion.
+      A user's explicit selection follows the Finder model. Confirmation shows the chosen roots and observed sizes, with one warning example when valuable content is known. Moving to the Trash checks that the same roots remain present, protects base locations and Lighten itself, and requires running applications and executable-location-proven helpers to close. Descendant protection patterns, application metadata and a complete subtree inventory do not block the user's choice. Symbolic links move as links; their targets are never removed through the link.
 
-      Moving a whole candidate or application package to the Trash is not architecture thinning or language removal: its contents move together and can be restored together. Space Trash plans may include intact nested application packages, localization resources, and application executables; every included application must be closed. Selecting part of a package remains forbidden. Descendant sockets and FIFOs move only as leaves; device nodes and special-file operation roots remain forbidden.
+      Base locations are `/`, `/System`, `/Library`, `/Users`, `/Applications`, the home directory and its `Library` directory, including physical aliases. Root or other-user ownership requires macOS authorization; an unavailable authorization path remains an explicit permission requirement.
 
-      Catalog Trash plans may include descendants covered by the architecture-slice and localization rules; only regenerable build-output candidates may also include debug symbols. These exceptions do not authorize permanent deletion, which retains the strict protected-content rules.
+      Permanent removal requires a separate irreversible confirmation. It traverses pinned directory descriptors, never follows symbolic links, and records actual irreversible progress. The same base protections apply. History records the actual returned Trash path; Undo restores that item without replacing an occupied name and reports changed or missing Trash items honestly.
 
       This file is generated from `NeverRule.all`. Edit the rules, then regenerate this document with `LIGHTEN_UPDATE_SAFETY_DOC=1 swift test`.
 
-      ## Always protected
+      ## Recommendation protections
 
       | Protected pattern | Reason | Evidence |
       | --- | --- | --- |
       \(rows(.never))
 
-      ## Explicit selection, Trash only
+      ## Explicit selection warnings
 
       | Protected pattern | Reason | Evidence |
       | --- | --- | --- |

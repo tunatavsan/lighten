@@ -97,8 +97,15 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   public let observedSize: ObservedPlanSize?
   /// Absent in legacy plans, preserving the exact shape of their compact journal metadata.
   public let sizeMetadataVersion: Int?
+  /// Recovery provenance only; execution requires a private confirmation binding.
+  public let userSelection: Bool?
+  public let userSelectionWarnings: [UserSelectionWarning]?
 
   public var displaySize: ObservedPlanSize {
+    if userSelection == true {
+      return observedSize?.validated
+        ?? (inventory.first?.identity?.kind == .directory ? .unknown : ObservedPlanSize.inventory(inventory))
+    }
     if let sizeMetadataVersion, sizeMetadataVersion != 1 { return .unknown }
     return containsOpaquePackages ? (observedSize?.validated ?? .unknown) : ObservedPlanSize.inventory(inventory)
   }
@@ -126,7 +133,8 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     nestedApplicationIDs: [String]? = nil, snapshotRunID: UUID? = nil,
     orphanRelatedProof: OrphanRelatedProof? = nil, observedSize: ObservedPlanSize? = nil,
     sizeMetadataVersion: Int? = 1, applicationPackageObservation: ApplicationPackageObservation? = nil,
-    packageLinkTargetItemID: UUID? = nil
+    packageLinkTargetItemID: UUID? = nil, userSelection: Bool? = nil,
+    userSelectionWarnings: [UserSelectionWarning]? = nil
   ) {
     self.id = id
     self.sourcePath = sourcePath
@@ -146,6 +154,8 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     self.nestedApplicationIDs = nestedApplicationIDs
     self.observedSize = observedSize?.validated
     self.sizeMetadataVersion = sizeMetadataVersion
+    self.userSelection = userSelection
+    self.userSelectionWarnings = userSelectionWarnings
   }
 }
 

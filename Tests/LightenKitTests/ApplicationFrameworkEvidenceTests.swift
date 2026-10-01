@@ -507,8 +507,8 @@ struct ApplicationFrameworkEvidenceTests {
     #expect(groupPlan.rejections.contains { $0.ruleID == "registrationUnavailable" })
   }
 
-  @Test("Retained framework data requires a fresh owner check after its package was removed")
-  func retainedFrameworkDataUsesFreshOwnership() async throws {
+  @Test("Explicit retained data keeps its original observation without requiring its former owner")
+  func retainedFrameworkDataUsesUserSelection() async throws {
     let fixture = try FrameworkFixture()
     defer { fixture.cleanup() }
     try fixture.electron()
@@ -519,9 +519,9 @@ struct ApplicationFrameworkEvidenceTests {
     try FileManager.default.moveItem(atPath: fixture.app, toPath: fixture.home + "/.Trash/" + fixture.name + ".app")
     let available = await related.makeAvailableRemainingDataPlan(selected: [candidate])
     let plan = try #require(available.plan)
-    #expect(available.rejections.isEmpty && plan.items[0].policy == .spaceTrash)
+    #expect(available.rejections.isEmpty && plan.items[0].userSelection == true)
     #expect(plan.items[0].installedRelatedProof == nil && plan.items[0].orphanRelatedProof == nil)
-    try related.validateExplicitSelection(plan.items[0], plan: plan)
+    try ActionGuard(homeDirectory: fixture.home).validate(plan.items[0], plan: plan)
     let second = fixture.home + "/Applications/LightenQA-second.app"
     try fixture.directory(second + "/Contents")
     try PropertyListSerialization.data(
@@ -531,9 +531,9 @@ struct ApplicationFrameworkEvidenceTests {
     try PropertyListSerialization.data(
       fromPropertyList: ["dataDirectoryPath": fixture.dataPath], format: .xml, options: 0
     ).write(to: URL(fileURLWithPath: fixture.home + "/Library/Preferences/qa.lighten.other.plist"))
-    #expect(throws: (any Error).self) { try related.validateExplicitSelection(plan.items[0], plan: plan) }
-    let refused = await related.makeAvailableRemainingDataPlan(selected: [candidate])
-    #expect(refused.plan == nil && !refused.rejections.isEmpty)
+    try ActionGuard(homeDirectory: fixture.home).validate(plan.items[0], plan: plan)
+    let explicit = await related.makeAvailableRemainingDataPlan(selected: [candidate])
+    #expect(explicit.plan != nil && explicit.rejections.isEmpty)
   }
 
   @Test("Electron productName and native Chromium shape establish the exact derived folder", arguments: [false, true])

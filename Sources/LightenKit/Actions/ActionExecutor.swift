@@ -78,6 +78,7 @@ public actor ActionExecutor {
   private let spaceActivity: any SpaceActivitySource
   private let mountedImages: any MountedImageSource
   private let applicationActivity: any ApplicationActivitySource
+  private let applicationClosing: any UserSelectionApplicationClosing
   private let duplicates: DuplicateFileComparator
   private var busy = false
 
@@ -92,7 +93,8 @@ public actor ActionExecutor {
     duplicates: DuplicateFileComparator = DuplicateFileComparator(),
     spaceActivity: any SpaceActivitySource = NativeSpaceActivitySource(),
     mountedImages: any MountedImageSource = NativeMountedImageSource(),
-    applicationActivity: any ApplicationActivitySource = NativeApplicationActivitySource()
+    applicationActivity: any ApplicationActivitySource = NativeApplicationActivitySource(),
+    applicationClosing: any UserSelectionApplicationClosing = NativeUserSelectionApplicationClosing()
   ) {
     self.journal = journal
     self.trash = trash
@@ -106,14 +108,23 @@ public actor ActionExecutor {
     self.spaceActivity = spaceActivity
     self.mountedImages = mountedImages
     self.applicationActivity = applicationActivity
+    self.applicationClosing = applicationClosing
   }
 
   public func execute(
-    _ plan: ActionPlan, confirmation: IrreversibleConfirmation? = nil
+    _ plan: ActionPlan, confirmation: IrreversibleConfirmation? = nil, closeRunningApplications: Bool = false
   ) async throws -> ActionResult {
     guard !busy else { throw ExecutionFailure.alreadyRunning }
     busy = true
     defer { busy = false }
+    if plan.items.contains(where: { $0.userSelection == true }) {
+      try UserSelectionBindings.validate(plan, homeDirectory: guardService.homeDirectory)
+      return try await journal.withMutationLease {
+        try await self.executeUserSelections(
+          plan, confirmation: confirmation, closeRunningApplications: closeRunningApplications)
+      }
+    }
+    guard !closeRunningApplications else { throw ExecutionFailure.invalidPlan }
     // Signature and entitlement reads happen before the journal is leased.
     // Inside the lease only these exact selected-owner identities can be used.
     let related = self.related
@@ -455,6 +466,173 @@ public actor ActionExecutor {
           detail: "stopped after an uncertain result", mutationStage: .notStarted))
     }
     return ActionResult(planID: plan.id, items: results)
+  }
+
+  private func executeUserSelections(
+    _ plan: ActionPlan, confirmation: IrreversibleConfirmation?, closeRunningApplications: Bool
+  ) async throws -> ActionResult {
+    try UserSelectionBindings.validate(plan, homeDirectory: guardService.homeDirectory)
+    guard plan.schema == 1, Set(plan.items.map(\.id)).count == plan.items.count else {
+      throw ExecutionFailure.invalidPlan
+    }
+    if plan.kind == .catalogDelete {
+      guard confirmation == IrreversibleConfirmation(planID: plan.id, method: .catalogDelete) else {
+        throw ExecutionFailure.catalogDeleteDenied
+      }
+    }
+    let history = try await journal.readSummary()
+    guard history.issues.isEmpty else { throw ExecutionFailure.corruptHistory }
+    guard !history.records.contains(where: { $0.kind == .intent && $0.planID == plan.id }) else {
+      throw ExecutionFailure.planAlreadyUsed
+    }
+    for item in plan.items { try guardService.validate(item, plan: plan) }
+    try await journal.append(JournalRecord(kind: .intent, planID: plan.id, plan: plan))
+    var results: [ItemActionResult] = []
+    for item in plan.items {
+      do {
+        try guardService.validate(item, plan: plan)
+        if closeRunningApplications {
+          try await applicationClosing.closeApplications(rootPath: item.sourcePath, forceAfterGraceful: true)
+        }
+        try await validateUserSelectionActivity(item)
+        try await beforeMutation?(item)
+        try guardService.validate(item, plan: plan)
+        try await validateUserSelectionActivity(item)
+      } catch {
+        do {
+          let detail = String(describing: error)
+          try await journal.append(JournalRecord(kind: .skipped, planID: plan.id, itemID: item.id, detail: detail))
+          results.append(
+            ItemActionResult(itemID: item.id, outcome: .skipped, detail: detail, mutationStage: .notStarted))
+          continue
+        } catch {
+          results.append(
+            ItemActionResult(
+              itemID: item.id, outcome: .uncertain, detail: "journal failure", mutationStage: .notStarted))
+          break
+        }
+      }
+      if plan.kind == .catalogDelete {
+        let outcome = await deleteUserSelection(item, planID: plan.id)
+        results.append(outcome)
+        if outcome.outcome == .uncertain { break }
+        continue
+      }
+      let returned: String
+      do { returned = try await trash.moveToTrash(path: item.sourcePath) } catch {
+        guard let original = item.inventory.first?.identity,
+          let current = try? UserSelectionFileSystem.identity(at: item.sourcePath),
+          UserSelectionSafety.sameRoot(current, original)
+        else {
+          results.append(
+            ItemActionResult(
+              itemID: item.id, outcome: .uncertain, detail: "Trash call failed and source identity is unverified",
+              mutationStage: .trashCallUnverified))
+          break
+        }
+        do {
+          let detail = String(describing: error)
+          try await journal.append(JournalRecord(kind: .failed, planID: plan.id, itemID: item.id, detail: detail))
+          results.append(
+            ItemActionResult(itemID: item.id, outcome: .failed, detail: detail, mutationStage: .sourceRetained))
+          continue
+        } catch {
+          results.append(
+            ItemActionResult(
+              itemID: item.id, outcome: .uncertain, detail: "journal failure", mutationStage: .sourceRetained))
+          break
+        }
+      }
+      do {
+        let moved = try UserSelectionFileSystem.identity(at: returned)
+        guard let original = item.inventory.first?.identity, UserSelectionSafety.sameRoot(moved, original),
+          MovedApplicationOwner.isAbsent(item.sourcePath),
+          item.volumeID == nil || (try? DescriptorFileSystem.volumeID(at: returned)) == item.volumeID
+        else {
+          results.append(
+            ItemActionResult(
+              itemID: item.id, outcome: .uncertain, detail: "moved identity mismatch",
+              mutationStage: .trashCallUnverified))
+          break
+        }
+        do {
+          try await journal.append(
+            JournalRecord(
+              kind: .applied, planID: plan.id, itemID: item.id, returnedTrashPath: returned, movedIdentity: moved))
+        } catch {
+          results.append(
+            ItemActionResult(
+              itemID: item.id, outcome: .uncertain, detail: "applied journal failure", mutationStage: .trashMoveObserved
+            ))
+          break
+        }
+        results.append(ItemActionResult(itemID: item.id, outcome: .applied, mutationStage: .trashMoveObserved))
+      } catch {
+        results.append(
+          ItemActionResult(
+            itemID: item.id, outcome: .uncertain, detail: "moved result could not be verified",
+            mutationStage: .trashCallUnverified))
+        break
+      }
+    }
+    let attempted = Set(results.map(\.itemID))
+    for item in plan.items where !attempted.contains(item.id) {
+      results.append(
+        ItemActionResult(
+          itemID: item.id, outcome: .notAttempted, detail: "stopped after an uncertain result",
+          mutationStage: .notStarted))
+    }
+    return ActionResult(planID: plan.id, items: results)
+  }
+
+  private func validateUserSelectionActivity(_ item: PlanItem) async throws {
+    // Executable paths cover an application root and nested helpers without
+    // enumerating selected descendants or consulting bundle identifiers.
+    if item.inventory.first?.identity?.kind == .symbolicLink { return }
+    let observation = await applicationActivity.activity(applicationPath: item.sourcePath)
+    switch observation.state {
+    case .clearObservedProcesses: return
+    case .active: throw ProcessActivityFailure.active(processNames: observation.processNames)
+    case .unknown: throw ProcessActivityFailure.unavailable
+    }
+  }
+
+  private func deleteUserSelection(_ item: PlanItem, planID: UUID) async -> ItemActionResult {
+    let journal = self.journal
+    let remover = UserSelectionPermanentRemoval(item: item, homeDirectory: guardService.homeDirectory) { count, bytes in
+      try await journal.append(
+        JournalRecord(
+          kind: .deleteProgress, planID: planID, itemID: item.id, deletedCount: count, deletedLogicalBytes: bytes))
+    }
+    do {
+      try await remover.remove()
+      let count = await remover.count
+      let bytes = await remover.bytes
+      try await journal.append(
+        JournalRecord(
+          kind: .applied, planID: planID, itemID: item.id, detail: "irreversible; undo unavailable",
+          deletedCount: count, deletedLogicalBytes: bytes))
+      return ItemActionResult(
+        itemID: item.id, outcome: .applied, detail: "irreversible; undo unavailable",
+        deletedCount: count, deletedLogicalBytes: bytes, mutationStage: .permanentMutation)
+    } catch {
+      let count = await remover.count
+      let bytes = await remover.bytes
+      do {
+        let detail = String(describing: error)
+        try await journal.append(
+          JournalRecord(
+            kind: .failed, planID: planID, itemID: item.id, detail: detail,
+            deletedCount: count, deletedLogicalBytes: bytes))
+        return ItemActionResult(
+          itemID: item.id, outcome: .failed, detail: detail, deletedCount: count,
+          deletedLogicalBytes: bytes, mutationStage: count == 0 ? .notStarted : .permanentMutation)
+      } catch {
+        return ItemActionResult(
+          itemID: item.id, outcome: .uncertain, detail: "journal failure after irreversible deletion",
+          deletedCount: count, deletedLogicalBytes: bytes, mutationStage: count == 0 ? .notStarted : .permanentMutation)
+      }
+    }
   }
 
   /// A whole application leaves only while it is not running and still carries

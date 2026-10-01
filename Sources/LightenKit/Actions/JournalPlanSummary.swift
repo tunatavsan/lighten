@@ -12,6 +12,7 @@ public struct JournalItemSummary: Codable, Sendable, Equatable, Identifiable {
   /// Display-only metadata; absent in older records.
   public let observedSize: ObservedPlanSize?
   public let containsOpaquePackages: Bool?
+  public let userSelection: Bool?
 
   public var displaySize: ObservedPlanSize {
     if let observedSize { return observedSize.validated }
@@ -38,6 +39,7 @@ public struct JournalItemSummary: Codable, Sendable, Equatable, Identifiable {
     // Rebuilding an old reference must retain exactly its original optional-field shape.
     observedSize = item.sizeMetadataVersion == nil ? nil : item.displaySize
     containsOpaquePackages = item.sizeMetadataVersion == nil ? nil : item.containsOpaquePackages
+    userSelection = item.userSelection
   }
 }
 

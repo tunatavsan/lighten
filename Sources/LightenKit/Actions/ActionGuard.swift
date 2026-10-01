@@ -29,11 +29,18 @@ public struct ActionGuard: Sendable {
   }
 
   public func validate(_ item: PlanItem) throws {
+    guard item.userSelection != true else { throw GuardFailure.unsupportedItem }
     try ApplicationExplicitSelections.refuseWithoutPlan(item)
     try validate(item, installedScopePrepared: false)
   }
 
-  func validate(_ item: PlanItem, plan: ActionPlan) throws {
+  public func validate(_ item: PlanItem, plan: ActionPlan) throws {
+    if item.userSelection == true {
+      try UserSelectionBindings.validate(plan, homeDirectory: homeDirectory)
+      guard plan.items.contains(item) else { throw GuardFailure.unsupportedItem }
+      try UserSelectionSafety.validateRoot(item, homeDirectory: homeDirectory)
+      return
+    }
     try ApplicationExplicitSelections.validate(item, plan: plan)
     try validate(item, installedScopePrepared: false)
   }

@@ -258,6 +258,11 @@ public struct RelatedDataService: Sendable {
 
   public func inventory() -> BundleInventory { makeContext().inventory }
 
+  /// Configured discovery roots only; no ownership or action authority.
+  var lightweightListingRoots: [String] {
+    applicationRoots + ownershipRoots.filter { $0 == "/System/Applications" || $0 == "/System/Library/CoreServices" }
+  }
+
   /// Initial installed metadata has no code-owner or signature walk.
   func installedListing() -> BundleInventory {
     var apps: [InstalledApplication] = []
@@ -1934,94 +1939,17 @@ public struct RelatedDataService: Sendable {
     }
   }
 
-  /// Retained review rows are explicit choices after their application was
-  /// removed. Their old observations do not establish current owner absence.
+  /// The user may choose retained data even after its former owner moved.
+  /// Original discovery observations supply display size and an optional root binding.
   @concurrent
   public func makeAvailableRemainingDataPlan(selected: [RelatedDataCandidate]) async -> AvailableUninstallPlan {
-    let context = makeContext()
-    _ = ownedDataClaims(context)
-    let live = liveData()
-    var items: [PlanItem] = []
-    var accepted: [String: RelatedDataCandidate] = [:]
-    var rejections: [PlanRejection] = []
-    for candidate in selected {
-      do {
-        try Task.checkCancellation()
-        guard candidate.canSelect || candidate.explicitManualChoiceAvailable,
-          candidate.refusalEvidence.isEmpty, let snapshot = candidate.snapshot,
-          snapshot.rootPath == candidate.path, let expected = snapshot.entries.first?.identity,
-          try DescriptorFileSystem.identity(at: candidate.path) == expected
-        else { throw RelatedFailure.changedItem }
-        try validateRemainingDataSelection(candidate, context: context, live: live)
-        let current = try ExactInventory(homeDirectory: homeDirectory).collect(
-          rootPath: candidate.path, expected: (expected.device, expected.inode), policy: .spaceTrash)
-        guard current.entries.first?.identity == expected else { throw RelatedFailure.changedItem }
-        let item = PlanItem(
-          id: current.entries[0].id, sourcePath: candidate.path, volumeID: current.volumeID,
-          inventory: current.entries, ancestors: current.ancestors, policy: .spaceTrash,
-          nestedApplicationIDs: current.nestedApplicationIDs, snapshotRunID: snapshot.runID)
-        if accepted[candidate.path] == nil {
-          items.append(item)
-          accepted[candidate.path] = candidate
-        }
-      } catch { rejections += Self.uninstallRejections(error, path: candidate.path) }
+    let selections = selected.map { candidate in
+      UserSelection(
+        path: candidate.path, expectedIdentity: candidate.snapshot?.entries.first?.identity,
+        observedSize: candidate.observation.map { ObservedPlanSize(logical: $0.logical, allocated: $0.allocated) })
     }
-    guard !items.isEmpty else { return AvailableUninstallPlan(plan: nil, rejections: rejections) }
-    let plan = ActionPlan(snapshotRunID: items[0].snapshotRunID!, kind: .trash, items: items)
-    do {
-      let originals = accepted
-      try ApplicationExplicitSelections.bind(plan, items: items) { item in
-        guard let candidate = originals[item.sourcePath] else { throw RelatedFailure.changedItem }
-        let fresh = self.makeContext()
-        _ = self.ownedDataClaims(fresh)
-        try self.validateRemainingDataSelection(candidate, context: fresh, live: self.liveData())
-      }
-      return AvailableUninstallPlan(plan: plan, rejections: rejections)
-    } catch {
-      return AvailableUninstallPlan(
-        plan: nil, rejections: rejections + items.flatMap { Self.uninstallRejections(error, path: $0.sourcePath) })
-    }
-  }
-
-  private func validateRemainingDataSelection(
-    _ candidate: RelatedDataCandidate, context: AuthenticApplicationContext, live: ApplicationLiveDataObservation
-  ) throws {
-    guard standardInventoryIsComplete(context.inventory), Self.currentUserOwns(candidate.path),
-      ProtectionPolicy.rule(for: candidate.path, homeDirectory: homeDirectory) == nil,
-      !ExactInventory(homeDirectory: homeDirectory).isBulkRoot(candidate.path),
-      !ScanService.isInsidePackage(candidate.path)
-    else { throw RelatedFailure.incompleteInventory }
-    let domain =
-      RelatedLocation.matching(path: candidate.path, homeDirectory: homeDirectory)?.1
-      ?? (candidate.path as NSString).lastPathComponent
-    if let id = candidate.bundleID {
-      try validateMetadataScope(context, bundleID: id, candidatePath: candidate.path)
-      let registered = registeredByID(id)
-      guard registered.complete else { throw RelatedFailure.incompleteInventory }
-      for path in registered.paths {
-        guard !Self.isCachedApplication(path, homeDirectory: homeDirectory) else { continue }
-        if let owner = try decisionApplication(at: path, registered: true, metadata: context.metadata),
-          foldedAppID(owner.bundleID) == foldedAppID(id)
-        {
-          throw RelatedFailure.ownerPresent
-        }
-      }
-      guard installedOwners(bundleID: id, applications: context.inventory.applications).isEmpty else {
-        throw RelatedFailure.ownerPresent
-      }
-    }
-    try validateMetadataScope(context, bundleID: domain, candidatePath: candidate.path)
-    guard (ownedDataClaims(context)[candidate.path] ?? []).isEmpty else { throw RelatedFailure.ownerPresent }
-    try context.validateDataSources()
-    guard live.complete else {
-      throw PlanRejection(.activityUnavailable, path: candidate.path, ruleID: "live-process-census-incomplete")
-    }
-    guard
-      try ApplicationAuxiliaryEvidenceProducer.liveSharedOwnerPaths(
-        dataPath: candidate.path, excludingPackage: "", applications: context.inventory.applications,
-        home: homeDirectory, observation: live
-      ).isEmpty
-    else { throw RelatedFailure.ownerPresent }
+    let outcome = await PlanService(homeDirectory: homeDirectory).makeAvailableUserSelectionPlan(selections: selections)
+    return AvailableUninstallPlan(plan: outcome.plan, rejections: outcome.rejections)
   }
 
   /// Preflights the application first, then keeps independently valid data in

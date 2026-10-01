@@ -8,6 +8,9 @@
 #include <sys/proc_info.h>
 #include <sys/proc.h>
 #include <sys/sysctl.h>
+#include <sys/stat.h>
+#include <mach/vm_prot.h>
+#include <time.h>
 #include <unistd.h>
 
 int lighten_path_is_under_root(const char *path, const char *root) {
@@ -70,7 +73,18 @@ static int pid_executes_root(pid_t pid, const char *root) {
   memset(path, 0, sizeof(path));
   errno = 0;
   if (proc_pidpath(pid, path, sizeof(path)) > 0) {
-    return lighten_path_is_under_root(path, root);
+    if (lighten_path_is_under_root(path, root)) return 1;
+    size_t length = strlen(root);
+    if (length < sizeof(path) && strncasecmp(path, root, length) == 0 &&
+        (path[length] == '\0' || path[length] == '/')) {
+      char prefix[PROC_PIDPATHINFO_MAXSIZE];
+      memcpy(prefix, path, length);
+      prefix[length] = '\0';
+      struct stat selected, observed;
+      if (lstat(root, &selected) == 0 && lstat(prefix, &observed) == 0 &&
+          selected.st_dev == observed.st_dev && selected.st_ino == observed.st_ino) return 1;
+    }
+    return 0;
   }
   int path_error = errno;
   struct kinfo_proc details;
@@ -199,5 +213,133 @@ int lighten_process_activity(const char *root, char *process_name, size_t name_c
 }
 
 int lighten_application_activity(const char *root, char *process_name, size_t name_capacity) {
-  return observe_process_activity(root, process_name, name_capacity, pid_executes_root, 0);
+  if (!root) return -1;
+  char *physical = realpath(root, NULL);
+  int result = observe_process_activity(physical ? physical : root, process_name, name_capacity, pid_executes_root, 0);
+  free(physical);
+  return result;
+}
+
+static uint64_t activity_milliseconds(void) {
+  struct timespec value;
+  if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) return 0;
+  return (uint64_t)value.tv_sec * 1000 + (uint64_t)value.tv_nsec / 1000000;
+}
+
+static int executable_vnode(pid_t pid, const char *path, uint64_t deadline,
+                            uint64_t *device, uint64_t *inode) {
+  struct stat file;
+  if (lstat(path, &file) != 0 || !S_ISREG(file.st_mode)) return -1;
+  uint64_t address = 0;
+  for (unsigned int region = 0; region < 4096 && activity_milliseconds() < deadline; region++) {
+    struct proc_regionwithpathinfo info;
+    memset(&info, 0, sizeof(info));
+    if (proc_pidinfo(pid, PROC_PIDREGIONPATHINFO, address, &info, sizeof(info)) != sizeof(info)) return -1;
+    if (strnlen(info.prp_vip.vip_path, sizeof(info.prp_vip.vip_path)) >= sizeof(info.prp_vip.vip_path)) return -1;
+    if ((info.prp_prinfo.pri_protection & VM_PROT_EXECUTE) && strcmp(info.prp_vip.vip_path, path) == 0) {
+      if (info.prp_vip.vip_vi.vi_stat.vst_dev != (uint32_t)file.st_dev ||
+          info.prp_vip.vip_vi.vi_stat.vst_ino != file.st_ino) return -1;
+      *device = (uint32_t)file.st_dev;
+      *inode = file.st_ino;
+      return 0;
+    }
+    uint64_t next = info.prp_prinfo.pri_address + info.prp_prinfo.pri_size;
+    if (next <= address || next < info.prp_prinfo.pri_address) return -1;
+    address = next;
+  }
+  return -1;
+}
+
+static int capture_application_process(pid_t pid, LightenApplicationProcess *record, uint64_t deadline) {
+  struct proc_bsdinfo before, after;
+  memset(&before, 0, sizeof(before));
+  memset(&after, 0, sizeof(after));
+  if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &before, sizeof(before)) != sizeof(before) ||
+      before.pbi_uid != geteuid()) return -1;
+  memset(record, 0, sizeof(*record));
+  if (proc_pidpath(pid, record->executable_path, sizeof(record->executable_path)) <= 0 ||
+      strnlen(record->executable_path, sizeof(record->executable_path)) >= sizeof(record->executable_path) ||
+      executable_vnode(pid, record->executable_path, deadline,
+                       &record->executable_device, &record->executable_inode) != 0) return -1;
+  char current[4096] = {0};
+  if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &after, sizeof(after)) != sizeof(after) ||
+      before.pbi_uid != after.pbi_uid || before.pbi_start_tvsec != after.pbi_start_tvsec ||
+      before.pbi_start_tvusec != after.pbi_start_tvusec ||
+      proc_pidpath(pid, current, sizeof(current)) <= 0 || strnlen(current, sizeof(current)) >= sizeof(current) ||
+      strcmp(current, record->executable_path) != 0) return -1;
+  record->pid = pid;
+  record->uid = before.pbi_uid;
+  record->start_seconds = before.pbi_start_tvsec;
+  record->start_microseconds = before.pbi_start_tvusec;
+  return 0;
+}
+
+int lighten_copy_application_processes(const char *root, LightenApplicationProcess **records, uint32_t *count) {
+  if (!root || root[0] != '/' || !records || !count) return -1;
+  *records = NULL;
+  *count = 0;
+  uint64_t started = activity_milliseconds();
+  if (!started) return -1;
+  uint64_t deadline = started + 3000;
+  int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};
+  struct kinfo_proc *list = NULL;
+  size_t actual = 0;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    size_t bytes = 0;
+    if (sysctl(mib, 3, NULL, &bytes, NULL, 0) != 0 || bytes > 16 * 1024 * 1024) return -1;
+    bytes += 64 * sizeof(struct kinfo_proc);
+    list = malloc(bytes);
+    if (!list) return -1;
+    actual = bytes;
+    if (sysctl(mib, 3, list, &actual, NULL, 0) == 0) break;
+    int error = errno;
+    free(list);
+    list = NULL;
+    if (error != ENOMEM) return -1;
+  }
+  if (!list || actual % sizeof(*list) != 0) { free(list); return -1; }
+  size_t capacity = 0;
+  int result = 0;
+  for (size_t index = 0; index < actual / sizeof(*list); index++) {
+    if (activity_milliseconds() >= deadline) { result = -1; break; }
+    pid_t pid = list[index].kp_proc.p_pid;
+    if (pid <= 0 || list[index].kp_proc.p_stat == SZOMB) continue;
+    int under = pid_executes_root(pid, root);
+    if (under < 0) { result = -1; continue; }
+    if (!under) continue;
+    LightenApplicationProcess captured;
+    if (capture_application_process(pid, &captured, deadline) != 0) { result = -1; continue; }
+    if (*count == capacity) {
+      size_t next = capacity ? capacity * 2 : 16;
+      if (next * sizeof(captured) > 16 * 1024 * 1024) { result = -1; break; }
+      LightenApplicationProcess *grown = realloc(*records, next * sizeof(captured));
+      if (!grown) { result = -1; break; }
+      *records = grown;
+      capacity = next;
+    }
+    (*records)[(*count)++] = captured;
+  }
+  free(list);
+  return result;
+}
+
+void lighten_free_application_processes(LightenApplicationProcess *records) { free(records); }
+
+int lighten_validate_application_process(const LightenApplicationProcess *record) {
+  if (!record || record->uid != geteuid() || record->pid <= 0 || record->executable_path[0] != '/' ||
+      strnlen(record->executable_path, sizeof(record->executable_path)) >= sizeof(record->executable_path)) return -1;
+  LightenApplicationProcess current;
+  if (capture_application_process(record->pid, &current, activity_milliseconds() + 1000) != 0 ||
+      current.uid != record->uid || current.start_seconds != record->start_seconds ||
+      current.start_microseconds != record->start_microseconds ||
+      current.executable_device != record->executable_device || current.executable_inode != record->executable_inode ||
+      strcmp(current.executable_path, record->executable_path) != 0) return -1;
+  return 0;
+}
+
+int lighten_signal_application_process(const LightenApplicationProcess *record, int signal_number) {
+  if (!record || (signal_number != SIGTERM && signal_number != SIGKILL)) return -1;
+  if (kill(record->pid, 0) != 0 && errno == ESRCH) return 0;
+  if (lighten_validate_application_process(record) != 0) return -1;
+  return kill(record->pid, signal_number) == 0 || errno == ESRCH ? 0 : -1;
 }

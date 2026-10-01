@@ -33,6 +33,26 @@ int lighten_process_activity(const char *root, char *process_name, size_t name_c
 int lighten_application_activity(const char *root, char *process_name, size_t name_capacity);
 int lighten_path_is_under_root(const char *path, const char *root);
 
+typedef struct {
+  int32_t pid;
+  uint32_t uid;
+  uint64_t start_seconds;
+  uint64_t start_microseconds;
+  uint64_t executable_device;
+  uint64_t executable_inode;
+  char executable_path[4096];
+} LightenApplicationProcess;
+
+// Bounded executable-location census including helpers. Every record binds a
+// current-UID PID/start time to the executable's native mapped vnode. A missing
+// executable observation is unavailable, never permission to signal a PID.
+int lighten_copy_application_processes(const char *root, LightenApplicationProcess **records, uint32_t *count);
+void lighten_free_application_processes(LightenApplicationProcess *records);
+// Revalidates the full native record before sending only SIGTERM or SIGKILL.
+// 0: signaled/already exited; -1: identity unavailable or changed.
+int lighten_signal_application_process(const LightenApplicationProcess *record, int signal_number);
+int lighten_validate_application_process(const LightenApplicationProcess *record);
+
 enum {
   LIGHTEN_OBJ_REGULAR = 1,
   LIGHTEN_OBJ_DIRECTORY = 2,

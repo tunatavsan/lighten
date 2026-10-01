@@ -284,6 +284,10 @@ public actor ActionHistory {
   }
 
   private nonisolated func preflightRestore(plan: ActionPlan, item: PlanItem, records: [JournalRecord]) throws {
+    if item.userSelection == true {
+      try preflightUserSelectionRestore(item: item, records: records)
+      return
+    }
     if let path = records.last(where: { $0.kind == .applied })?.returnedTrashPath, Self.trashItemMissing(path) {
       throw UndoFailure.trashItemMissing
     }
@@ -346,6 +350,10 @@ public actor ActionHistory {
   }
 
   private func restoreLeased(plan: ActionPlan, item: PlanItem, records: [JournalRecord]) async throws {
+    if item.userSelection == true {
+      try await restoreUserSelection(plan: plan, item: item, records: records)
+      return
+    }
     let planID = plan.id
     let itemID = item.id
     guard let applied = records.last(where: { $0.kind == .applied }),
@@ -458,6 +466,13 @@ public actor ActionHistory {
   }
 
   private static func verifiedTrashItem(at path: String, item: JournalItemSummary, moved: FileIdentity) -> Bool {
+    if item.userSelection == true {
+      guard let original = item.rootIdentity, UserSelectionSafety.sameRoot(moved, original),
+        let current = try? UserSelectionFileSystem.identity(at: path),
+        item.volumeID == nil || (try? DescriptorFileSystem.volumeID(at: path)) == item.volumeID
+      else { return false }
+      return UserSelectionSafety.sameReturnedItem(current, moved)
+    }
     guard let original = item.rootIdentity, let volumeID = item.volumeID,
       original.matchesStableTrashIdentity(moved),
       (try? DescriptorFileSystem.volumeID(at: path)) == volumeID,
@@ -467,6 +482,12 @@ public actor ActionHistory {
   }
 
   private static func verifiedRestoredItem(item: JournalItemSummary, moved: FileIdentity) -> Bool {
+    if item.userSelection == true {
+      guard let current = try? UserSelectionFileSystem.identity(at: item.sourcePath),
+        item.volumeID == nil || (try? DescriptorFileSystem.volumeID(at: item.sourcePath)) == item.volumeID
+      else { return false }
+      return UserSelectionSafety.sameReturnedItem(current, moved)
+    }
     guard let original = item.rootIdentity, let volumeID = item.volumeID,
       original.matchesStableTrashIdentity(moved),
       (try? DescriptorFileSystem.volumeID(at: item.sourcePath)) == volumeID,
@@ -476,6 +497,13 @@ public actor ActionHistory {
   }
 
   private static func verifiedTrashItem(at path: String, item: PlanItem, moved: FileIdentity) -> Bool {
+    if item.userSelection == true {
+      guard let original = item.inventory.first?.identity, UserSelectionSafety.sameRoot(moved, original),
+        let current = try? UserSelectionFileSystem.identity(at: path),
+        item.volumeID == nil || (try? DescriptorFileSystem.volumeID(at: path)) == item.volumeID
+      else { return false }
+      return UserSelectionSafety.sameReturnedItem(current, moved)
+    }
     guard let original = item.inventory.first?.identity,
       let volumeID = item.volumeID,
       original.matchesStableTrashIdentity(moved),
@@ -486,6 +514,12 @@ public actor ActionHistory {
   }
 
   private static func verifiedRestoredItem(item: PlanItem, moved: FileIdentity) -> Bool {
+    if item.userSelection == true {
+      guard let current = try? UserSelectionFileSystem.identity(at: item.sourcePath),
+        item.volumeID == nil || (try? DescriptorFileSystem.volumeID(at: item.sourcePath)) == item.volumeID
+      else { return false }
+      return UserSelectionSafety.sameReturnedItem(current, moved)
+    }
     guard let original = item.inventory.first?.identity,
       let volumeID = item.volumeID,
       original.matchesStableTrashIdentity(moved),
@@ -493,5 +527,56 @@ public actor ActionHistory {
       let observed = try? DescriptorFileSystem.identity(at: item.sourcePath)
     else { return false }
     return moved.matchesStableTrashIdentity(observed)
+  }
+
+  private nonisolated func preflightUserSelectionRestore(item: PlanItem, records: [JournalRecord]) throws {
+    do { try UserSelectionSafety.validateBase(item.sourcePath, homeDirectory: homeDirectory) } catch {
+      throw UndoFailure.unsafeParent
+    }
+    guard let applied = records.last(where: { $0.kind == .applied }),
+      let trashPath = applied.returnedTrashPath, let moved = applied.movedIdentity
+    else { throw UndoFailure.noAppliedRecord }
+    if Self.trashItemMissing(trashPath) { throw UndoFailure.trashItemMissing }
+    guard Self.verifiedTrashItem(at: trashPath, item: item, moved: moved) else { throw UndoFailure.changedTrashItem }
+    let parent: (Int32, String)
+    do { parent = try UserSelectionFileSystem.openParent(of: item.sourcePath) } catch { throw UndoFailure.unsafeParent }
+    defer { close(parent.0) }
+    do {
+      _ = try DescriptorFileSystem.identity(name: parent.1, relativeTo: parent.0)
+      throw UndoFailure.nameOccupied
+    } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT { return } catch let failure as UndoFailure {
+      throw failure
+    } catch { throw UndoFailure.unsafeParent }
+  }
+
+  private func restoreUserSelection(plan: ActionPlan, item: PlanItem, records: [JournalRecord]) async throws {
+    try preflightUserSelectionRestore(item: item, records: records)
+    guard records.last?.kind != .reversed,
+      let applied = records.last(where: { $0.kind == .applied }),
+      let path = applied.returnedTrashPath, let moved = applied.movedIdentity
+    else { throw UndoFailure.noAppliedRecord }
+    let parent: (Int32, String)
+    do { parent = try UserSelectionFileSystem.openParent(of: item.sourcePath) } catch { throw UndoFailure.unsafeParent }
+    defer { close(parent.0) }
+    var before = stat()
+    guard fstat(parent.0, &before) == 0 else { throw UndoFailure.unsafeParent }
+    try await journal.append(
+      JournalRecord(
+        kind: .undoIntent, planID: plan.id, itemID: item.id, returnedTrashPath: path, movedIdentity: moved))
+    guard Self.verifiedTrashItem(at: path, item: item, moved: moved) else { throw UndoFailure.changedTrashItem }
+    let fresh: (Int32, String)
+    do { fresh = try UserSelectionFileSystem.openParent(of: item.sourcePath) } catch { throw UndoFailure.unsafeParent }
+    defer { close(fresh.0) }
+    var now = stat()
+    guard fresh.1 == parent.1, fstat(fresh.0, &now) == 0,
+      now.st_dev == before.st_dev, now.st_ino == before.st_ino
+    else { throw UndoFailure.unsafeParent }
+    let result = renameatx_np(AT_FDCWD, path, parent.0, parent.1, UInt32(RENAME_EXCL | RENAME_NOFOLLOW_ANY))
+    guard result == 0 else {
+      if errno == EEXIST { throw UndoFailure.nameOccupied }
+      throw UndoFailure.renameFailed(errno)
+    }
+    guard Self.verifiedRestoredItem(item: item, moved: moved) else { throw UndoFailure.changedTrashItem }
+    try await journal.append(JournalRecord(kind: .reversed, planID: plan.id, itemID: item.id))
   }
 }

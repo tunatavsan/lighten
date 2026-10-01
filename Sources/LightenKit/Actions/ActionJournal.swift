@@ -568,6 +568,7 @@ public actor JSONLActionJournal: ActionJournal {
     let key = ItemKey(planID: record.planID, itemID: itemID)
     let previous = states[key]
     let latest = progress[key] ?? (0, 0)
+    let item = plan.items.first(where: { $0.id == itemID })
     switch record.kind {
     case .applied:
       guard previous == nil || (plan.kind == .catalogDelete && previous == .deleteProgress),
@@ -575,7 +576,7 @@ public actor JSONLActionJournal: ActionJournal {
           ? (record.returnedTrashPath == nil && record.movedIdentity == nil
             && record.deletedCount == latest.0
             && record.deletedLogicalBytes == latest.1
-            && latest.0 == plan.items.first(where: { $0.id == itemID })?.inventoryCount)
+            && (item?.userSelection == true ? latest.0 > 0 : latest.0 == item?.inventoryCount))
           : (record.returnedTrashPath != nil && record.movedIdentity != nil)
       else { return "invalid applied event" }
     case .failed, .skipped:
@@ -592,7 +593,7 @@ public actor JSONLActionJournal: ActionJournal {
     case .deleteProgress:
       guard plan.kind == .catalogDelete, previous == nil || previous == .deleteProgress,
         let count = record.deletedCount, count == latest.0 + 1,
-        count <= plan.items.first(where: { $0.id == itemID })?.inventoryCount ?? 0,
+        item?.userSelection == true || count <= item?.inventoryCount ?? 0,
         let bytes = record.deletedLogicalBytes, bytes >= latest.1
       else { return "invalid delete progress" }
       progress[key] = (count, bytes)
