@@ -3,14 +3,16 @@ import Synchronization
 
 public struct DuplicateService: Sendable {
   private let scan: ScanService
+  private let configuration: ScanConfiguration
   private let comparator: DuplicateFileComparator
   private let planner: PlanService
 
   public init(
     scan: ScanService = ScanService(), comparator: DuplicateFileComparator = DuplicateFileComparator(),
-    planner: PlanService = PlanService()
+    planner: PlanService = PlanService(), configuration: ScanConfiguration? = nil
   ) {
     self.scan = scan
+    self.configuration = configuration ?? ScanConfiguration(homeDirectory: scan.homeDirectory)
     self.comparator = comparator
     self.planner = planner
   }
@@ -19,19 +21,28 @@ public struct DuplicateService: Sendable {
     AsyncThrowingStream { continuation in
       let task = Task.detached {
         do {
-          var snapshot: ScanSnapshot?
+          let facts = Mutex<[FileFact]>([])
+          var configuration = self.configuration
+          configuration.fileSink = FileSink { fact in facts.withLock { $0.append(fact) } }
+          let run = try ScanEngine(configuration: configuration).start(root: rootPath)
           var scanned = 0
-          for try await event in scan.events(rootPath: rootPath) {
-            try Task.checkCancellation()
-            switch event {
-            case .progress(let count, _):
-              scanned = count
-              continuation.yield(.progress(scanned: count, compared: 0))
-            case .completed(let value): snapshot = value
+          await withTaskCancellationHandler {
+            for await update in run.progress {
+              scanned = update.itemsSeen
+              continuation.yield(.progress(scanned: scanned, compared: 0))
             }
+            await run.waitUntilFinished()
+          } onCancel: {
+            run.cancel()
           }
-          guard let snapshot else { throw DuplicateFailure.unavailable }
-          let report = try group(snapshot: snapshot) { compared in
+          try Task.checkCancellation()
+          guard !run.tree.wasCancelled else { throw CancellationError() }
+          let snapshot = try observation(run: run, facts: facts.withLock { $0 })
+          let unavailableMetadata = run.counters.snapshot["sinkMetadataUnavailable"] ?? 0
+          let omittedFiles = run.counters.snapshot["sinkOmittedFiles"] ?? 0
+          let report = try group(
+            snapshot: snapshot, unavailableMetadata: unavailableMetadata, omittedFiles: omittedFiles
+          ) { compared in
             continuation.yield(.progress(scanned: scanned, compared: compared))
           }
           try Task.checkCancellation()
@@ -63,10 +74,13 @@ public struct DuplicateService: Sendable {
       guard !selections.isEmpty, selections.allSatisfy({ !$0.targetIDs.isEmpty }),
         Set(selections.map(\.groupID)).count == selections.count
       else { throw DuplicateFailure.invalidSelection }
-      let fragments = try selections.map {
-        try makePlanImmediate(
-          report: report, groupID: $0.groupID, keeperID: $0.keeperID,
-          targetIDs: $0.targetIDs)
+      var fragments: [ActionPlan] = []
+      for selection in selections {
+        try Task.checkCancellation()
+        fragments.append(
+          try await makePlanSelection(
+            report: report, groupID: selection.groupID, keeperID: selection.keeperID,
+            targetIDs: selection.targetIDs))
       }
       let items = fragments.flatMap(\.items)
       guard Set(items.map(\.sourcePath)).count == items.count else {
@@ -81,9 +95,9 @@ public struct DuplicateService: Sendable {
     }
   }
 
-  private func makePlanImmediate(
+  private func makePlanSelection(
     report: DuplicateReport, groupID: UUID, keeperID: UUID, targetIDs: Set<UUID>
-  ) throws -> ActionPlan {
+  ) async throws -> ActionPlan {
     guard let group = report.groups.first(where: { $0.id == groupID }),
       let keeper = group.members.first(where: { $0.id == keeperID && $0.eligibility == .eligible }),
       !targetIDs.isEmpty, !targetIDs.contains(keeperID),
@@ -91,12 +105,17 @@ public struct DuplicateService: Sendable {
       let volumeID = report.snapshot.volumeID,
       let keeperIdentity = keeper.entry.identity
     else { throw DuplicateFailure.invalidSelection }
-    let keeperDigest = try comparator.digest(keeper.entry, volumeID: volumeID)
-    let keeperAncestors = try DescriptorFileSystem.ancestorIdentities(of: keeper.entry.path)
-    let generic = try planner.makePlan(snapshot: report.snapshot, selectedIDs: targetIDs)
+    let (_, freshKeeper) = try await freshFile(
+      keeper.entry, volumeID: volumeID, runID: report.snapshot.runID)
+    let keeperDigest = try comparator.digest(freshKeeper, volumeID: volumeID)
+    let keeperAncestors = try DescriptorFileSystem.ancestorIdentities(of: freshKeeper.path)
     var items: [PlanItem] = []
-    for item in generic.items {
-      guard let target = item.inventory.first,
+    for member in group.members.filter({ targetIDs.contains($0.id) }).sorted(by: { $0.entry.path < $1.entry.path }) {
+      try Task.checkCancellation()
+      let (snapshot, _) = try await freshFile(member.entry, volumeID: volumeID, runID: report.snapshot.runID)
+      let generic = try planner.makePlan(snapshot: snapshot, selectedIDs: [member.id])
+      guard let item = generic.items.first, generic.items.count == 1,
+        let target = item.inventory.first,
         let targetIdentity = target.identity,
         targetIdentity.kind == .regular,
         targetIdentity.device != keeperIdentity.device || targetIdentity.inode != keeperIdentity.inode
@@ -104,18 +123,83 @@ public struct DuplicateService: Sendable {
       let digest = try comparator.digest(target, volumeID: volumeID)
       guard digest == keeperDigest else { throw DuplicateFailure.changed }
       let comparison = try comparator.compare(
-        keeper.entry, target, volumeID: volumeID,
+        freshKeeper, target, volumeID: volumeID,
         expectedFirstDigest: keeperDigest, expectedSecondDigest: digest)
       guard comparison == .equal else { throw DuplicateFailure.invalidSelection }
       let proof = DuplicateProof(
-        groupID: groupID, keeper: keeper.entry, keeperAncestors: keeperAncestors,
+        groupID: groupID, keeper: freshKeeper, keeperAncestors: keeperAncestors,
         keeperVolumeID: volumeID, targetDigest: digest, keeperDigest: keeperDigest)
       items.append(
         PlanItem(
           id: item.id, sourcePath: item.sourcePath, volumeID: item.volumeID,
           inventory: item.inventory, ancestors: item.ancestors, duplicateProof: proof))
     }
-    return ActionPlan(snapshotRunID: generic.snapshotRunID, kind: .trash, items: items)
+    return ActionPlan(snapshotRunID: report.snapshot.runID, kind: .trash, items: items)
+  }
+
+  /// Only selected files receive a fresh descriptor-relative inventory. Every
+  /// identity field must still match the discovery observation.
+  private func freshFile(
+    _ reported: ScanEntry, volumeID: UUID, runID: UUID
+  ) async throws -> (ScanSnapshot, ScanEntry) {
+    let path = reported.path as NSString
+    let fresh = try await scan.scanImmediateChild(
+      parentPath: path.deletingLastPathComponent, name: path.lastPathComponent)
+    guard fresh.volumeID == volumeID,
+      let entry = fresh.entries.first(where: { $0.path == reported.path }),
+      entry.identity == reported.identity, entry.identity?.kind == .regular,
+      entry.issues.isEmpty, entry.readable,
+      let node = fresh.nodes.first(where: { $0.id == entry.id }), !node.partial
+    else { throw DuplicateFailure.changed }
+    func id(_ value: UUID) -> UUID { value == entry.id ? reported.id : value }
+    let entries = fresh.entries.map {
+      ScanEntry(
+        id: id($0.id), parentID: $0.parentID.map(id), path: $0.path, identity: $0.identity,
+        observedAt: $0.observedAt, issues: $0.issues, readable: $0.readable)
+    }
+    let nodes = fresh.nodes.map {
+      ScanNode(
+        id: id($0.id), parentID: $0.parentID.map(id), logical: $0.logical, allocated: $0.allocated,
+        knownItemCount: $0.knownItemCount, completeItemCount: $0.completeItemCount,
+        partial: $0.partial, protected: $0.protected, skipped: $0.skipped)
+    }
+    let snapshot = ScanSnapshot(
+      runID: runID, rootPath: fresh.rootPath, volumeDevice: fresh.volumeDevice, volumeID: fresh.volumeID,
+      observedAt: fresh.observedAt, entries: entries, nodes: nodes)
+    guard let selected = entries.first(where: { $0.id == reported.id }) else { throw DuplicateFailure.changed }
+    return (snapshot, selected)
+  }
+
+  /// The root retains the engine's complete aggregate or lower bound; regular
+  /// file facts describe candidates, never a directory inventory for actions.
+  private func observation(run: ScanRun, facts: [FileFact]) throws -> ScanSnapshot {
+    guard let root = run.tree.item(run.tree.rootID) else { throw DuplicateFailure.unavailable }
+    let rootID = UUID()
+    let observedAt = Date()
+    let entries = facts.sorted(by: { $0.path < $1.path }).map {
+      ScanEntry(
+        parentID: rootID, path: $0.path, identity: $0.identity, observedAt: observedAt, issues: [], readable: true)
+    }
+    let rootNode = ScanNode(
+      id: rootID, parentID: nil, logical: root.logical, allocated: root.allocated,
+      knownItemCount: Int(clamping: root.itemCount) + 1,
+      completeItemCount: root.partial ? nil : Int(clamping: root.itemCount) + 1,
+      partial: root.partial, protected: root.isProtected, skipped: false)
+    let nodes = entries.map { entry in
+      let identity = entry.identity!
+      return ScanNode(
+        id: entry.id, parentID: rootID,
+        logical: ByteAggregate(knownLowerBound: identity.logicalBytes, completeTotal: identity.logicalBytes),
+        allocated: ByteAggregate(knownLowerBound: identity.allocatedBytes, completeTotal: identity.allocatedBytes),
+        knownItemCount: 1, completeItemCount: 1, partial: false, protected: false, skipped: false)
+    }
+    return ScanSnapshot(
+      runID: run.runID, rootPath: run.tree.rootPath, volumeDevice: root.device,
+      volumeID: try? DescriptorFileSystem.volumeID(at: root.path), observedAt: observedAt,
+      entries: [
+        ScanEntry(id: rootID, parentID: nil, path: root.path, identity: nil, issues: [.notTraversed], readable: true)
+      ] + entries,
+      nodes: [rootNode] + nodes)
   }
 
   /// Reads several files at once; results keep input order and a failed read is nil.
@@ -138,15 +222,15 @@ public struct DuplicateService: Sendable {
   }
 
   private func group(
-    snapshot: ScanSnapshot, progress: (Int) -> Void
+    snapshot: ScanSnapshot, unavailableMetadata: Int = 0, omittedFiles: Int = 0, progress: (Int) -> Void
   ) throws -> DuplicateReport {
     guard let volumeID = snapshot.volumeID else {
       return DuplicateReport(
-        snapshot: snapshot, groups: [], skippedCount: snapshot.entries.count,
+        snapshot: snapshot, groups: [], skippedCount: snapshot.entries.count + omittedFiles,
         partial: true, comparisonCount: 0)
     }
     var unique: [String: ScanEntry] = [:]
-    var skipped = 0
+    var skipped = omittedFiles
     for entry in snapshot.entries {
       guard let identity = entry.identity, identity.kind == .regular,
         identity.logicalBytes >= 0, entry.readable, entry.issues.isEmpty,
@@ -249,7 +333,7 @@ public struct DuplicateService: Sendable {
     try Task.checkCancellation()
     return DuplicateReport(
       snapshot: snapshot, groups: groups, skippedCount: skipped,
-      partial: skipped > 0 || snapshot.nodes.first?.partial == true,
+      partial: unavailableMetadata > 0 || skipped > 0 || snapshot.nodes.first?.partial == true,
       comparisonCount: comparisonCount)
   }
 }

@@ -60,6 +60,13 @@ private struct ObservedBytes {
     self.source = source
   }
 
+  init(node: ScanNode) {
+    logical = node.logical.knownLowerBound
+    allocated = node.allocated.knownLowerBound
+    complete = !node.partial && node.logical.completeTotal != nil && node.allocated.completeTotal != nil
+    source = "scanEngineDiscovery"
+  }
+
   var json: [String: Any] {
     var result: [String: Any] = [
       "logicalKnownBytes": logical, "allocatedKnownBytes": allocated,
@@ -90,6 +97,8 @@ extension Bench {
     var rejectedAllocated: Int64 = 0
     var unknownByteItems = 0
     var unavailableRoots = 0
+    var discoverySeconds = 0.0
+    var proofSeconds = 0.0
     let scanner = ScanService(homeDirectory: home)
     let guardService = ActionGuard(homeDirectory: home)
     let activity = BenchProcessActivity()
@@ -110,16 +119,30 @@ extension Bench {
       var rowAllocated: Int64 = 0
       var rowRejectedLogical: Int64 = 0
       var rowRejectedAllocated: Int64 = 0
-      let names: [String]
+      let discovery: CatalogDiscovery
+      let discoveryStart = ProcessSample.now()
       do {
-        let identity = try DescriptorFileSystem.identity(at: root)
-        names = try DescriptorFileSystem.children(at: root, expected: identity).sorted()
-      } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT {
+        let consumer = Task { try await catalog.discover(rowID: row.id) }
+        let timer = cancellationTimer(timeout: timeout) { consumer.cancel() }
+        do { discovery = try await consumer.value } catch {
+          timer.cancel()
+          throw error
+        }
+        timer.cancel()
+      } catch ScanStartFailure.unavailable(let code) where code == ENOENT {
+        let elapsed = seconds(from: discoveryStart.wall, to: ProcessSample.now().wall)
+        discoverySeconds += elapsed
+        category["tDiscoverySeconds"] = elapsed
+        category["tProofSeconds"] = 0.0
         category["status"] = "absent"
         category["candidateCount"] = 0
         categories.append(category)
         continue
       } catch {
+        let elapsed = seconds(from: discoveryStart.wall, to: ProcessSample.now().wall)
+        discoverySeconds += elapsed
+        category["tDiscoverySeconds"] = elapsed
+        category["tProofSeconds"] = 0.0
         category["status"] = "unavailable"
         category["candidateCount"] = NSNull()
         category["error"] = String(describing: error)
@@ -128,20 +151,23 @@ extension Bench {
         categories.append(category)
         continue
       }
-      for name in names {
-        let path = root + "/" + name
-        // These subtrees belong to their specific row and must not count twice.
-        if row.relativeRoot == "Library/Caches",
-          catalog.rows.contains(where: {
-            $0.id != row.id && (catalog.root(for: $0) == path || catalog.root(for: $0).hasPrefix(path + "/"))
-          })
-        {
+      let elapsedDiscovery = seconds(from: discoveryStart.wall, to: ProcessSample.now().wall)
+      discoverySeconds += elapsedDiscovery
+      category["tDiscoverySeconds"] = elapsedDiscovery
+      let proofStart = ProcessSample.now()
+      for candidate in discovery.candidates {
+        let path = candidate.entry.path
+        // Dedicated catalog subtrees are reported by their own row once.
+        if candidate.rejection?.ruleID == "catalog-overlap" {
           rowExcluded += 1
           continue
         }
-        var bytes = ObservedBytes()
-        var stage = "scan"
+        var bytes = ObservedBytes(node: candidate.node)
+        var stage = "catalog"
         do {
+          if let rejection = candidate.rejection { throw rejection }
+          stage = "selectedProof"
+          let name = (path as NSString).lastPathComponent
           let consumer = Task { try await scanner.scanImmediateChild(parentPath: root, name: name) }
           let timer = cancellationTimer(timeout: timeout) { consumer.cancel() }
           let snapshot: ScanSnapshot
@@ -153,12 +179,17 @@ extension Bench {
           guard let entry = snapshot.entries.first(where: { $0.path == path }),
             let node = snapshot.nodes.first(where: { $0.id == entry.id })
           else { throw FileSystemFailureDescription("candidate disappeared during observation") }
-          bytes = ObservedBytes(
+          let freshBytes = ObservedBytes(
             entries: snapshot.entries.filter { $0.path == path || $0.path.hasPrefix(path + "/") },
             complete: !node.partial, source: "scanSnapshot")
-          stage = "catalog"
-          guard catalog.allowsCandidate(path: path, row: row, kind: .trash) else {
-            throw FileSystemFailureDescription(catalogRefusal(catalog: catalog, row: row, path: path))
+          if freshBytes.complete {
+            bytes = freshBytes
+          } else {
+            // A partial proof read cannot erase the discovery's known bytes.
+            bytes.logical = max(bytes.logical, freshBytes.logical)
+            bytes.allocated = max(bytes.allocated, freshBytes.allocated)
+            bytes.complete = false
+            bytes.source = "scanEngineDiscovery+partialSelectedSnapshot"
           }
           stage = "plan"
           let plan = try await Task.detached(priority: .utility) {
@@ -189,9 +220,6 @@ extension Bench {
           rowAllocated += bytes.allocated
           acceptedPaths.append(path)
         } catch {
-          if !bytes.complete {
-            bytes = await measureRejected(path: path, home: home, fallback: bytes, timeout: timeout)
-          }
           var refusal = bytes.json
           refusal["path"] = path
           refusal["rowID"] = row.id
@@ -204,6 +232,9 @@ extension Bench {
           if !bytes.complete { rowUnknown += 1 }
         }
       }
+      let elapsedProof = seconds(from: proofStart.wall, to: ProcessSample.now().wall)
+      proofSeconds += elapsedProof
+      category["tProofSeconds"] = elapsedProof
       actionableLogical += rowLogical
       actionableAllocated += rowAllocated
       rejectedLogical += rowRejectedLogical
@@ -225,6 +256,10 @@ extension Bench {
     var result = common(engine: "clean", root: home, before: before, after: ProcessSample.now())
     result["completed"] = unavailableRoots == 0
     result["dryRun"] = true
+    result["tDiscoverySeconds"] = discoverySeconds
+    result["tProofSeconds"] = proofSeconds
+    result["discoveryEngine"] = "ScanEngine"
+    result["discoveryIncludesAgeMetadata"] = true
     result["executedItems"] = 0
     result["actionableLogicalBytes"] = actionableLogical
     result["actionableAllocatedBytes"] = actionableAllocated
@@ -242,20 +277,6 @@ extension Bench {
     return result
   }
 
-  private static func catalogRefusal(catalog: CleanCatalog, row: CatalogRow, path: String) -> String {
-    if !row.methods.contains(.trash) { return "catalog row is report-only" }
-    if let rule = ProtectionPolicy.rule(for: path, homeDirectory: catalog.homeDirectory) {
-      return "protected by " + rule.id
-    }
-    if row.relativeRoot == "Library/Caches", (path as NSString).lastPathComponent.lowercased().hasPrefix("com.apple.") {
-      return "Apple cache is outside the generic application-cache authority"
-    }
-    if row.minAgeDays > 0 {
-      return "minimum age of \(row.minAgeDays) days is not satisfied or modification time is unavailable"
-    }
-    return "candidate is outside the catalog row's immediate-child Trash authority"
-  }
-
   private static func rejectionDetails(_ error: Error, path: String) -> [[String: Any]] {
     func detail(_ rejection: PlanRejection) -> [String: Any] {
       var result: [String: Any] = ["reason": rejection.reason.rawValue, "path": rejection.path]
@@ -267,32 +288,4 @@ extension Bench {
     return [["reason": String(describing: error), "path": path]]
   }
 
-  private static func measureRejected(
-    path: String, home: String, fallback: ObservedBytes, timeout: Double
-  ) async -> ObservedBytes {
-    var unavailable = fallback
-    let run: ScanRun
-    do {
-      let identity = try DescriptorFileSystem.identity(at: path)
-      guard identity.kind == .directory else { return fallback }
-      run = try ScanEngine(configuration: ScanConfiguration(homeDirectory: home)).start(root: path)
-    } catch {
-      unavailable.measurementError = String(describing: error)
-      return unavailable
-    }
-    let timer = cancellationTimer(timeout: timeout) { run.cancel() }
-    await run.waitUntilFinished()
-    timer.cancel()
-    guard let item = run.tree.item(run.tree.rootID) else {
-      unavailable.measurementError = "scan tree root unavailable"
-      return unavailable
-    }
-    var bytes = ObservedBytes()
-    bytes.logical = item.logical.knownLowerBound
-    bytes.allocated = item.allocated.knownLowerBound
-    bytes.complete = !run.tree.wasCancelled && item.logical.completeTotal != nil && item.allocated.completeTotal != nil
-    bytes.source = "scanTree"
-    if !bytes.complete { bytes.measurementError = String(describing: item.state) }
-    return bytes
-  }
 }

@@ -5,7 +5,7 @@ import LightenKit
 // Read-only observations. Writes are limited to fresh temporary fixtures.
 //
 //   lighten-bench generate --out DIR --files N [--seed S]
-//   lighten-bench scan --engine old|new --root PATH [--timeout SECONDS] [--workers N]
+//   lighten-bench scan --engine old|new --root PATH [--timeout SECONDS] [--workers N] [--sink min=1MB]
 //   lighten-bench apps [--app PATH]
 //   lighten-bench cancel --engine old|new --root PATH [--trials N] [--workers N]
 //   lighten-bench dup --root PATH [--timeout SECONDS]
@@ -34,7 +34,7 @@ func usage() -> Never {
     Data(
       """
       usage: lighten-bench generate [--out TEMP/LightenQA-UUID] --files N [--seed S]
-             lighten-bench scan --engine old|new --root PATH [--timeout SECONDS] [--workers N]
+             lighten-bench scan --engine old|new --root PATH [--timeout SECONDS] [--workers N] [--sink min=1MB]
              lighten-bench apps [--app PATH]
              lighten-bench cancel --engine old|new --root PATH [--trials N] [--workers N]
              lighten-bench dup --root PATH [--timeout SECONDS]
@@ -92,9 +92,19 @@ case "generate":
   }
 case "scan":
   guard let root = options.string("root"), let engine = options.string("engine") else { usage() }
+  let sinkMinimumBytes: Int64?
+  if let sink = options.string("sink") {
+    guard sink == "min=1MB" else {
+      output(["error": "unsupported sink filter; use --sink min=1MB"])
+      exit(64)
+    }
+    sinkMinimumBytes = 1_000_000
+  } else {
+    sinkMinimumBytes = nil
+  }
   let result = await Bench.scan(
     engine: engine, root: root, timeout: options.double("timeout", 600),
-    workers: options.int("workers", 0))
+    workers: options.int("workers", 0), sinkMinimumBytes: sinkMinimumBytes)
   output(result)
 case "apps":
   output(await Bench.apps(focus: options.string("app") ?? "/Applications/Xcode.app"))

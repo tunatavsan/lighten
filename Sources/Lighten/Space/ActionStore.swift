@@ -71,14 +71,15 @@ final class ActionStore {
   init(
     journal: JSONLActionJournal = JSONLActionJournal(),
     trash: any TrashMoving = MacOSTrashService(),
-    historyService: ActionHistory? = nil, planService: PlanService = PlanService()
+    historyService: ActionHistory? = nil, planService: PlanService = PlanService(),
+    runningApplications: any RunningApplicationSource = NativeRunningApplicationSource()
   ) {
     self.journal = journal
     self.planService = planService
     self.executor = ActionExecutor(
       journal: journal, trash: trash,
       activity: MacOSProcessActivitySource(), related: .system,
-      runningApplications: MacOSRunningApplicationSource())
+      runningApplications: runningApplications)
     self.historyService = historyService ?? ActionHistory(journal: journal)
   }
 

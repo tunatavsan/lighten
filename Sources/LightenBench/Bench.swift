@@ -4,10 +4,14 @@ import LightenKit
 import Synchronization
 
 enum Bench {
-  static func scan(engine: String, root: String, timeout: Double, workers: Int) async -> [String: Any] {
+  static func scan(
+    engine: String, root: String, timeout: Double, workers: Int, sinkMinimumBytes: Int64? = nil
+  ) async -> [String: Any] {
     switch engine {
-    case "old": return await scanOld(root: root, timeout: timeout)
-    case "new": return await scanNew(root: root, timeout: timeout, workers: workers)
+    case "old":
+      guard sinkMinimumBytes == nil else { return ["error": "file sink requires the new engine"] }
+      return await scanOld(root: root, timeout: timeout)
+    case "new": return await scanNew(root: root, timeout: timeout, workers: workers, sinkMinimumBytes: sinkMinimumBytes)
     default: return ["error": "unknown engine \(engine)"]
     }
   }
@@ -52,8 +56,25 @@ enum Bench {
     return result
   }
 
-  static func scanNew(root: String, timeout: Double, workers: Int) async -> [String: Any] {
-    let configuration = ScanConfiguration(workers: workers > 0 ? workers : ScanConfiguration.defaultWorkers)
+  static func scanNew(
+    root: String, timeout: Double, workers: Int, sinkMinimumBytes: Int64? = nil
+  ) async -> [String: Any] {
+    let facts = Mutex(
+      (count: 0, modTimeCount: 0, addedTimeCount: 0, earliestModTime: Date?.none, latestModTime: Date?.none))
+    var configuration = ScanConfiguration(workers: workers > 0 ? workers : ScanConfiguration.defaultWorkers)
+    if let sinkMinimumBytes {
+      configuration.fileSink = FileSink(minLogicalBytes: sinkMinimumBytes) { fact in
+        facts.withLock {
+          $0.count += 1
+          if let modified = fact.modTime {
+            $0.modTimeCount += 1
+            $0.earliestModTime = min($0.earliestModTime ?? modified, modified)
+            $0.latestModTime = max($0.latestModTime ?? modified, modified)
+          }
+          if fact.addedTime != nil { $0.addedTimeCount += 1 }
+        }
+      }
+    }
     let before = ProcessSample.now()
     let run: ScanRun
     do { run = try ScanEngine(configuration: configuration).start(root: root) } catch {
@@ -75,6 +96,16 @@ enum Bench {
     var result = common(engine: "new", root: root, before: before, after: after)
     let rootItem = run.tree.item(run.tree.rootID)
     result["workers"] = configuration.workers
+    result["sinkEnabled"] = sinkMinimumBytes != nil
+    if let sinkMinimumBytes {
+      let observed = facts.withLock { $0 }
+      result["sinkMinLogicalBytes"] = sinkMinimumBytes
+      result["emittedFactCount"] = observed.count
+      result["factsWithModTime"] = observed.modTimeCount
+      result["factsWithAddedTime"] = observed.addedTimeCount
+      result["earliestModTimeEpoch"] = observed.earliestModTime.map { $0.timeIntervalSince1970 } as Any? ?? NSNull()
+      result["latestModTimeEpoch"] = observed.latestModTime.map { $0.timeIntervalSince1970 } as Any? ?? NSNull()
+    }
     result["completed"] = !run.tree.wasCancelled
     result["tFirstSeconds"] = firstScreen.map { seconds(from: before.wall, to: $0) } ?? -1
     result["publications"] = publications

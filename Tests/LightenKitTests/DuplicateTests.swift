@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 
 @testable import LightenKit
@@ -49,7 +50,7 @@ private func duplicateFixture() throws -> String {
     throw DuplicateFailure.unavailable
   }
   defer { free(resolved) }
-  let path = String(cString: resolved) + "/lighten-duplicates-" + UUID().uuidString
+  let path = String(cString: resolved) + "/LightenQA-" + UUID().uuidString
   try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
   return path
 }
@@ -434,9 +435,10 @@ private func writeForkLargerThanCap(_ path: String) throws {
   let target = try #require(group.members.first { $0.entry.path == targetPath })
   let duplicate = try await DuplicateService().makePlan(
     report: report, groupID: group.id, keeperID: keeper.id, targetIDs: [target.id])
-  let directoryID = try #require(report.snapshot.entries.first { $0.path == directory }).id
+  let directorySnapshot = try await ScanService().scanImmediateChild(parentPath: root, name: "keeper-folder")
+  let directoryID = try #require(directorySnapshot.entries.first { $0.path == directory }).id
   let generic = try PlanService().makePlan(
-    snapshot: report.snapshot, selectedIDs: [directoryID])
+    snapshot: directorySnapshot, selectedIDs: [directoryID])
   for items in [duplicate.items + generic.items, generic.items + duplicate.items] {
     let forged = ActionPlan(snapshotRunID: report.snapshot.runID, kind: .trash, items: items)
     let journal = JSONLActionJournal(path: root + "/" + UUID().uuidString + ".jsonl")
@@ -482,4 +484,99 @@ private func writeForkLargerThanCap(_ path: String) throws {
   #expect(!saved.contains(payload))
   #expect(!saved.contains(metadataPayload))
   #expect(!saved.contains(forkPayload))
+}
+
+private final class DuplicateProofReads: FileAttributeSource, Sendable {
+  let inspected = Mutex<[String]>([])
+  private let native = DescriptorAttributeSource()
+
+  func volumeID(at path: String) async throws -> UUID? { try await native.volumeID(at: path) }
+  func inspect(at path: String) async throws -> FileAttributes {
+    inspected.withLock { $0.append(path) }
+    return try await native.inspect(at: path)
+  }
+  func children(at path: String, expected: FileIdentity) async throws -> [String] {
+    try await native.children(at: path, expected: expected)
+  }
+}
+
+@Test func duplicateEngineFactsKeepPreciseIdentityAndPlanningReadsOnlySelections() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try writeDuplicate(root + "/a")
+  try writeDuplicate(root + "/b")
+  let unrelated = root + "/unrelated"
+  try FileManager.default.createDirectory(atPath: unrelated, withIntermediateDirectories: true)
+  try writeDuplicate(unrelated + "/noise", bytes: Array("different observation".utf8))
+  let reads = DuplicateProofReads()
+  let service = DuplicateService(scan: ScanService(homeDirectory: root, attributes: reads))
+  var observed: DuplicateReport?
+  for try await event in service.events(rootPath: root) {
+    if case .completed(let report) = event { observed = report }
+  }
+  let report = try #require(observed)
+  #expect(reads.inspected.withLock { $0.isEmpty })
+  let group = try #require(report.groups.first)
+  let keeper = try #require(group.members.first { $0.entry.path == root + "/a" })
+  let target = try #require(group.members.first { $0.entry.path == root + "/b" })
+  #expect(try keeper.entry.identity == DescriptorFileSystem.identity(at: keeper.entry.path))
+  #expect(keeper.entry.identity?.hasStableTrashProof == true)
+  #expect(report.snapshot.nodes.first?.logical.completeTotal != nil)
+  // A change outside the selection cannot turn a complete-root observation
+  // into a requirement to read the entire root again.
+  try writeDuplicate(unrelated + "/noise", bytes: Array("updated unrelated data".utf8))
+  let plan = try await service.makePlan(report: report, groupID: group.id, keeperID: keeper.id, targetIDs: [target.id])
+  #expect(Set(reads.inspected.withLock { $0 }) == Set([root, keeper.entry.path, target.entry.path]))
+  #expect(plan.items.map(\.id) == [target.id])
+  #expect(plan.items.first?.inventory.count == 1)
+  #expect(plan.items.first?.duplicateProof?.keeper.identity == keeper.entry.identity)
+  let decoded = try JSONDecoder().decode(ActionPlan.self, from: JSONEncoder().encode(plan))
+  for item in decoded.items { try ActionGuard(homeDirectory: root).validate(item) }
+}
+
+@Test(arguments: ["a", "b"])
+func duplicateFreshPlanRefusesChangedKeeperOrTarget(_ changed: String) async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try writeDuplicate(root + "/a")
+  try writeDuplicate(root + "/b")
+  let report = try await duplicateReport(root)
+  let group = try #require(report.groups.first)
+  let keeper = try #require(group.members.first { $0.entry.path == root + "/a" })
+  let target = try #require(group.members.first { $0.entry.path == root + "/b" })
+  try writeDuplicate(root + "/" + changed, bytes: Array("changed selected observation".utf8))
+  await #expect(throws: DuplicateFailure.self) {
+    try await DuplicateService().makePlan(
+      report: report, groupID: group.id, keeperID: keeper.id, targetIDs: [target.id])
+  }
+}
+
+@Test func duplicateEngineOmitsBoundariesAndKeepsPartialRootLowerBound() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try writeDuplicate(root + "/a")
+  try writeDuplicate(root + "/b")
+  let mail = root + "/Library/Mail"
+  let package = root + "/LightenQA-" + UUID().uuidString + ".app"
+  let unreadable = root + "/unreadable"
+  try FileManager.default.createDirectory(atPath: unreadable, withIntermediateDirectories: true)
+  guard chmod(unreadable, 0) == 0 else { throw DuplicateFailure.unavailable }
+  defer { _ = chmod(unreadable, 0o700) }
+  for directory in [mail, package + "/Contents"] {
+    try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    try writeDuplicate(directory + "/copy")
+  }
+  try FileManager.default.createSymbolicLink(atPath: root + "/alias", withDestinationPath: root + "/a")
+  var result: DuplicateReport?
+  let service = DuplicateService(configuration: ScanConfiguration(homeDirectory: root))
+  for try await event in service.events(rootPath: root) {
+    if case .completed(let report) = event { result = report }
+  }
+  let report = try #require(result)
+  #expect(Set(report.groups.flatMap { $0.members.map { $0.entry.path } }) == Set([root + "/a", root + "/b"]))
+  #expect(report.snapshot.entries.filter { $0.identity?.kind == .regular }.count == 2)
+  #expect(report.partial)
+  #expect(report.snapshot.nodes.first?.partial == true)
+  #expect(report.snapshot.nodes.first?.logical.completeTotal == nil)
+  #expect((report.snapshot.nodes.first?.logical.knownLowerBound ?? 0) >= 24)
 }
