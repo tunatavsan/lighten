@@ -268,6 +268,121 @@ struct ScopedApplicationOwnershipTests {
     #expect(service.ownershipRefusalEvidence(for: original).isEmpty)
   }
 
+  @Test("A large shared native lineage retains original orphan authority and all fresh absence vetoes")
+  func largeLineageKeepsOriginalAbsenceBinding() async throws {
+    let fixture = try ScopedOwnerFixture()
+    defer { fixture.cleanup() }
+    let empty = fixture.apps + "/LightenQA-empty.app"
+    try FileManager.default.createDirectory(atPath: empty, withIntermediateDirectories: true)
+    let path = try fixture.data(fixture.bundleID)
+    let service = fixture.service()
+    let original = service.makeContext()
+    // A sparse observation models the large native code universe without
+    // making this fixture create or walk one hundred thousand directories.
+    let lineage =
+      original.lineage
+      + (0...100_000).map {
+        ApplicationPathObservation(path: fixture.home + "/native-observation-" + String($0), identity: nil)
+      }
+    let context = AuthenticApplicationContext(
+      scope: original.scope, inventory: original.inventory, lineage: lineage,
+      registeredPaths: original.registeredPaths, installedListing: original.installedListing,
+      metadata: original.metadata)
+    let candidate = try #require((await service.discover(context: context)).first { $0.path == path })
+    #expect(candidate.classification == .orphanVerified && context.lineage.count > 100_000)
+    let first = await service.availableOrphanPlan(candidate: candidate, context: context)
+    let firstPlan = try #require(first.plan)
+    let second = await service.availableOrphanPlan(candidate: candidate, context: context)
+    let secondPlan = try #require(second.plan)
+    #expect(first.rejections.isEmpty && second.rejections.isEmpty)
+    try service.validateOrphan(firstPlan.items[0], plan: firstPlan)
+    try service.validateOrphan(secondPlan.items[0], plan: secondPlan)
+    let sibling = fixture.apps + "/LightenQA-new-unregistered.app"
+    try fixture.application(sibling, id: fixture.bundleID)
+    #expect(throws: RelatedFailure.self) { try service.validateOrphan(firstPlan.items[0], plan: firstPlan) }
+    #expect(throws: RelatedFailure.self) { try service.validateOrphan(secondPlan.items[0], plan: secondPlan) }
+    #expect(service.ownershipRefusalEvidence(for: firstPlan).contains { $0.ownerPaths == [sibling] })
+    try FileManager.default.removeItem(atPath: sibling)
+    try fixture.info(empty + "/Resources/Info.plist", id: "qa.lighten.new-unrelated")
+    #expect(throws: RelatedFailure.changedItem) { try service.validateOrphan(firstPlan.items[0], plan: firstPlan) }
+    #expect(service.ownershipRefusalEvidence(for: firstPlan).contains { $0.reason == .infoAbsenceChanged })
+  }
+
+  @Test("A previously absent configured install root cannot acquire an unregistered owner after review")
+  func absentInstalledRootRemainsBound() async throws {
+    let fixture = try ScopedOwnerFixture()
+    defer { fixture.cleanup() }
+    let absentRoot = fixture.home + "/NewApplications"
+    let path = try fixture.data(fixture.bundleID)
+    let service = RelatedDataService(
+      homeDirectory: fixture.home, applicationRoots: [fixture.apps, absentRoot], writeVerifiedReceipts: false,
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
+    let context = service.makeContext()
+    #expect(context.inventory.installedRootsComplete == true)
+    #expect(context.inventory.observedDirectories.contains { $0.path == absentRoot && $0.identity == nil })
+    let candidate = try #require((await service.discover(context: context)).first { $0.path == path })
+    let available = await service.availableOrphanPlan(candidate: candidate, context: context)
+    let plan = try #require(available.plan)
+    try service.validateOrphan(plan.items[0], plan: plan)
+    try fixture.application(absentRoot + "/LightenQA-unregistered.app", id: fixture.bundleID)
+    #expect(throws: RelatedFailure.changedItem) { try service.validateOrphan(plan.items[0], plan: plan) }
+  }
+
+  @Test("An actually unreadable installed root remains incomplete with its native errno and exact path")
+  func unreadableInstalledRootNamesActualFailure() async throws {
+    let fixture = try ScopedOwnerFixture()
+    defer { fixture.cleanup() }
+    let unreadable = fixture.apps + "/Unreadable"
+    try FileManager.default.createDirectory(atPath: unreadable, withIntermediateDirectories: true)
+    defer { _ = chmod(unreadable, 0o700) }
+    let path = try fixture.data(fixture.bundleID)
+    #expect(chmod(unreadable, 0) == 0)
+    let service = fixture.service()
+    let context = service.makeContext()
+    #expect(context.inventory.installedRootsComplete == false)
+    #expect(context.installedListing.ownershipIssues.contains { $0.path == unreadable && $0.code == EACCES })
+    let candidate = try #require((await service.discover(context: context)).first { $0.path == path })
+    #expect(!candidate.canSelect && candidate.reason == .incompleteInventory)
+    let available = await service.availableOrphanPlan(candidate: candidate, context: context)
+    #expect(available.plan == nil)
+    #expect(
+      available.rejections.contains {
+        $0.ruleID?.contains("installed application listing incomplete") == true
+          && $0.ruleID?.contains(unreadable + " (errno " + String(EACCES) + ")") == true
+      })
+  }
+
+  @Test("Insufficient private context capacity refuses binding instead of returning stale authority")
+  func contextCapacityRefusesExplicitly() async throws {
+    let fixture = try ScopedOwnerFixture()
+    defer { fixture.cleanup() }
+    let one = try fixture.data(fixture.bundleID)
+    let two = try fixture.data(fixture.bundleID + ".other")
+    let service = fixture.service()
+    let context = service.makeContext()
+    let candidates = await service.discover(context: context)
+    let a = await service.availableOrphanPlan(
+      candidate: try #require(candidates.first { $0.path == one }), context: context)
+    let b = await service.availableOrphanPlan(
+      candidate: try #require(candidates.first { $0.path == two }), context: context)
+    let first = try #require(a.plan)
+    let second = try #require(b.plan)
+    let other = AuthenticApplicationContext(
+      scope: context.scope, inventory: context.inventory, lineage: context.lineage,
+      registeredPaths: context.registeredPaths)
+    let combined = ActionPlan(snapshotRunID: first.snapshotRunID, kind: .trash, items: first.items + second.items)
+    let bindings = ApplicationPlanContexts(maximumAdditionalPaths: 0)
+    do {
+      try bindings.bind(combined, contexts: [first.items[0].id: context, second.items[0].id: other])
+      Issue.record("An over-capacity private context was silently accepted")
+    } catch let refusal as PlanRejection {
+      #expect(refusal.reason == .unavailable && refusal.ruleID?.hasPrefix("application-context-capacity:") == true)
+    }
+    #expect(bindings.context(for: combined, scope: context.scope, itemID: first.items[0].id) == nil)
+    try bindings.bind(first, context: context)
+    #expect(bindings.context(for: first, scope: context.scope, itemID: first.items[0].id) === context)
+  }
+
   @Test("Shared installed data reports every current physical installation and a concrete next step")
   func sharedOwnersAreFreshPhysicalEvidence() async throws {
     let fixture = try ScopedOwnerFixture()
@@ -391,6 +506,31 @@ struct ScopedApplicationOwnershipTests {
     #expect(available.rejections.isEmpty && service.prepareInstalledOwners(plan: plan).failures.isEmpty)
     let cachedApp = try #require(service.application(at: copy))
     #expect(throws: RelatedFailure.self) { try service.planInstalled(app: cachedApp, candidate: candidate) }
+    let session = ApplicationDiscovery(related: service).scanSession()
+    var reports: [ApplicationReport] = []
+    var streamed: [RelatedDataCandidate] = []
+    for await event in await session.events() {
+      if case .related(let observedPath, let candidates, _) = event, observedPath == copy {
+        #expect(!candidates.contains { $0.path == path })
+      }
+      if case .completed(_, let final) = event { reports = final }
+    }
+    streamed = await session.observedRelatedCandidates()
+    #expect(reports.first { $0.path == selected }?.related.contains { $0.path == path } == true)
+    #expect(reports.first { $0.path == copy }?.related.isEmpty == true)
+    #expect(
+      reports.first { $0.path == selected }?.displayRootIdentity == (try DescriptorFileSystem.identity(at: selected)))
+    #expect(reports.first { $0.path == copy }?.displayRootIdentity == (try DescriptorFileSystem.identity(at: copy)))
+    #expect(streamed.contains { $0.path == path && $0.snapshot != nil })
+    let refusedCopy = await session.makeAvailableUninstallPlan(
+      app: cachedApp, selectedRelated: [candidate], includePackage: false)
+    #expect(refusedCopy.plan == nil)
+    #expect(
+      refusedCopy.rejections.contains {
+        $0.path == path && $0.ruleID?.contains("cache-copy-is-not-installed-owner: " + copy) == true
+          && $0.ruleID?.contains(selected) == true
+      })
+    await session.cancel()
     try FileManager.default.removeItem(atPath: selected)
     let fresh = service.makeContext()
     let orphan = try #require((await service.discover(context: fresh)).first { $0.path == path })
@@ -398,6 +538,31 @@ struct ScopedApplicationOwnershipTests {
     let absent = await service.availableOrphanPlan(candidate: orphan, context: fresh)
     let absentPlan = try #require(absent.plan)
     try service.validateOrphan(absentPlan.items[0], plan: absentPlan)
+  }
+
+  @Test("Fresh shared-owner evidence notices an unrelated sibling acquiring the ID without registry changes")
+  func sharedEvidenceRechecksSiblingInfoInPlace() async throws {
+    let fixture = try ScopedOwnerFixture()
+    defer { fixture.cleanup() }
+    let selected = fixture.apps + "/LightenQA-selected.app"
+    let sibling = fixture.apps + "/LightenQA-sibling.app"
+    try fixture.application(selected, id: fixture.bundleID)
+    try fixture.application(sibling, id: "qa.lighten.unrelated")
+    let path = try fixture.data(fixture.bundleID)
+    let service = fixture.service()
+    let context = service.makeContext()
+    let app = try #require(service.application(at: selected))
+    let candidate = try #require((await service.discover(context: context)).first { $0.path == path })
+    let available = await service.makeAvailableUninstallPlan(
+      app: app, selectedRelated: [candidate], includePackage: false, context: context)
+    let plan = try #require(available.plan)
+    #expect(service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+    try fixture.info(sibling + "/Contents/Info.plist", id: fixture.bundleID)
+    #expect(service.prepareInstalledOwners(plan: plan).failures.values.contains("ambiguousOwner"))
+    #expect(
+      service.ownershipRefusalEvidence(for: plan).contains {
+        $0.reason == .sharedInstalledOwners && $0.ownerPaths == [selected, sibling].sorted()
+      })
   }
 
   @Test("A cached code owner still vetoes shared group data")

@@ -434,9 +434,37 @@ struct ApplicationSignatureCacheTests {
     let candidate = try #require((await service.discover(context: context)).first { $0.path == fixture.cache })
     let plan = try service.planInstalled(app: app, candidate: candidate)
     let bindings = ApplicationPlanContexts()
-    bindings.bind(plan, context: context)
+    try bindings.bind(plan, context: context)
     #expect(bindings.context(for: plan, scope: context.scope, itemID: plan.items[0].id) === context)
     #expect(bindings.context(for: plan, scope: context.scope, itemID: UUID()) == nil)
+  }
+
+  @Test("Strict group lineage changes name the actual native observation while independent exact data remains valid")
+  func changedGroupLineageNamesNativePath() async throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    let mutable = fixture.home + "/OwnerLocations"
+    try FileManager.default.createDirectory(atPath: mutable, withIntermediateDirectories: true)
+    let service = RelatedDataService(
+      homeDirectory: fixture.home, applicationRoots: [fixture.home + "/Applications"],
+      ownershipApplicationRoots: [fixture.home + "/Applications", mutable], writeVerifiedReceipts: false,
+      signingMetadata: { _ in ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [fixture.groupID]) },
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
+    let context = service.makeContext()
+    let app = try #require(service.application(at: fixture.app))
+    let candidates = await service.discover(context: context)
+    let group = try #require(candidates.first { $0.path == fixture.group })
+    let cache = try #require(candidates.first { $0.path == fixture.cache })
+    try Data("changed potential code location".utf8).write(to: URL(fileURLWithPath: mutable + "/new-file"))
+    let available = await service.makeAvailableUninstallPlan(
+      app: app, selectedRelated: [group, cache], includePackage: false, context: context)
+    let plan = try #require(available.plan)
+    #expect(plan.items.map(\.sourcePath) == [fixture.cache])
+    #expect(
+      available.rejections.contains {
+        $0.path == fixture.group && $0.ruleID == "changedItem: ownership observation changed: " + mutable
+      })
+    #expect(service.prepareInstalledOwners(plan: plan).failures.isEmpty)
   }
 
   @Test("Linked aliases of one native root retain unique group ownership; a simulator claimant remains a second owner")

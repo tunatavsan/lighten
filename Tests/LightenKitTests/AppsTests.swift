@@ -452,6 +452,38 @@ func standardContextIgnoresUnrelatedOwnerChurn(_ change: String) async throws {
   #expect(walks.withLock { $0 } == 1)
 }
 
+@Test("Cached owner metadata rechecks alternate native layouts and wrapper child membership")
+func cachedMetadataRechecksLayoutStructure() throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let metadata = ApplicationContextMetadata()
+  let service = fixture.service
+  let reads = Mutex(0)
+  func read() -> InstalledApplication? {
+    reads.withLock { $0 += 1 }
+    return service.application(at: fixture.app)
+  }
+  #expect(try metadata.application(at: fixture.app, registered: false, read: read)?.bundleID == fixture.bundleID)
+  #expect(try metadata.application(at: fixture.app, registered: false, read: read)?.bundleID == fixture.bundleID)
+  #expect(reads.withLock { $0 } == 1)
+  try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": fixture.bundleID], format: .xml, options: 0
+  ).write(to: URL(fileURLWithPath: fixture.app + "/Info.plist"))
+  #expect(throws: (any Error).self) { try metadata.application(at: fixture.app, registered: false, read: read) }
+  try FileManager.default.removeItem(atPath: fixture.app + "/Info.plist")
+  let original = try Data(contentsOf: URL(fileURLWithPath: fixture.app + "/Contents/Info.plist"))
+  try FileManager.default.removeItem(atPath: fixture.app + "/Contents")
+  let inner = fixture.app + "/Wrapper/Inner.app"
+  try FileManager.default.createDirectory(atPath: inner, withIntermediateDirectories: true)
+  try original.write(to: URL(fileURLWithPath: inner + "/Info.plist"))
+  #expect(try metadata.application(at: fixture.app, registered: false, read: read)?.bundleID == fixture.bundleID)
+  #expect(try metadata.application(at: fixture.app, registered: false, read: read)?.bundleID == fixture.bundleID)
+  #expect(reads.withLock { $0 } == 2)
+  try FileManager.default.createDirectory(
+    atPath: fixture.app + "/Wrapper/Another.app", withIntermediateDirectories: true)
+  #expect(throws: (any Error).self) { try metadata.application(at: fixture.app, registered: false, read: read) }
+}
+
 @Test("Cached unrelated Info is reparsed when an in-place edit claims the selected ID")
 func cachedSiblingMetadataCannotHideSecondOwner() async throws {
   let fixture = try AppsFixture()

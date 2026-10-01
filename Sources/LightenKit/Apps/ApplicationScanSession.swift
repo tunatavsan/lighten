@@ -36,6 +36,40 @@ struct ApplicationPathObservation: Sendable {
     { current = nil } catch { throw RelatedFailure.changedItem }
     guard current == identity else { throw RelatedFailure.changedItem }
   }
+
+  /// Checks the original namespace through one fresh no-follow directory
+  /// descriptor, then checks the named root again to detect replacements.
+  static func validate(_ observations: [Self], root: String, expected: FileIdentity) throws {
+    let (parentFD, name) = try DescriptorFileSystem.openParent(of: root)
+    defer { close(parentFD) }
+    guard try DescriptorFileSystem.identity(name: name, relativeTo: parentFD) == expected else {
+      throw RelatedFailure.changedItem
+    }
+    let fd = openat(parentFD, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY)
+    guard fd >= 0 else { throw FileSystemFailure.systemCall("openat", errno) }
+    defer { close(fd) }
+    var details = stat()
+    guard fstat(fd, &details) == 0 else { throw FileSystemFailure.systemCall("fstat", errno) }
+    guard DescriptorFileSystem.identity(from: details) == expected else { throw RelatedFailure.changedItem }
+    for observation in observations where observation.path != root {
+      if observation.path.hasPrefix(root + "/") {
+        let relative = String(observation.path.dropFirst(root.count + 1))
+        let current: FileIdentity?
+        do {
+          current = try DescriptorFileSystem.identity(name: relative, relativeTo: fd)
+        } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT || code == ENOTDIR {
+          current = nil
+        }
+        guard current == observation.identity else { throw RelatedFailure.changedItem }
+      } else {
+        try observation.validate()
+      }
+    }
+    guard fstat(fd, &details) == 0 else { throw FileSystemFailure.systemCall("fstat", errno) }
+    guard DescriptorFileSystem.identity(from: details) == expected,
+      try DescriptorFileSystem.identity(at: root) == expected
+    else { throw RelatedFailure.changedItem }
+  }
 }
 
 /// Parsed IDs are reusable only while every full root and Info identity is
@@ -64,28 +98,41 @@ final class ApplicationContextMetadata: Sendable {
     } else {
       physical = path
     }
-    let info = physical + "/" + (try ApplicationPackagePlanning.infoRelativePath(at: physical))
-    do {
-      observations.append(ApplicationPathObservation(path: info, identity: try DescriptorFileSystem.identity(at: info)))
-    } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT {
-      throw ApplicationMetadataFailure.missingInfoPlist
+    let relative = try ApplicationPackagePlanning.infoRelativePath(at: physical)
+    var paths = [physical + "/Contents", physical + "/Info.plist", physical + "/Wrapper", physical + "/" + relative]
+    if relative.hasPrefix("Wrapper/") {
+      paths.append(((physical + "/" + relative) as NSString).deletingLastPathComponent)
+    }
+    for candidate in Set(paths).sorted() {
+      let identity: FileIdentity?
+      do { identity = try DescriptorFileSystem.identity(at: candidate) } catch FileSystemFailure.systemCall(_, let code)
+        where code == ENOENT || code == ENOTDIR
+      { identity = nil }
+      observations.append(ApplicationPathObservation(path: candidate, identity: identity))
     }
     return observations
+  }
+
+  private func unchanged(_ observations: [ApplicationPathObservation]) -> Bool {
+    guard let root = observations.first(where: { $0.identity?.kind == .directory }),
+      let expected = root.identity
+    else { return false }
+    do {
+      try ApplicationPathObservation.validate(observations, root: root.path, expected: expected)
+      return true
+    } catch { return false }
   }
 
   func application(at path: String, registered: Bool, read: () throws -> InstalledApplication?) throws
     -> InstalledApplication?
   {
     let key = Key(path: path, registered: registered)
-    let current = try identities(at: path)
     if let cached = entries.withLock({ $0[key] }),
-      cached.identities.count == current.count,
-      zip(cached.identities, current).allSatisfy({ pair in
-        pair.0.path == pair.1.path && pair.0.identity == pair.1.identity
-      })
+      unchanged(cached.identities)
     {
       return cached.application
     }
+    let current = try identities(at: path)
     let application = try read()
     let finished = try identities(at: path)
     guard current.count == finished.count,
@@ -169,31 +216,42 @@ final class ApplicationPlanContexts: Sendable {
     let contexts: [UUID: AuthenticApplicationContext]
   }
   private let bindings = Mutex<[Binding]>([])
+  private let maximumAdditionalPaths: Int
 
-  func bind(_ plan: ActionPlan, context: AuthenticApplicationContext) {
-    bind(plan, contexts: Dictionary(plan.items.map { ($0.id, context) }, uniquingKeysWith: { first, _ in first }))
+  init(maximumAdditionalPaths: Int = 250_000) {
+    self.maximumAdditionalPaths = maximumAdditionalPaths
   }
 
-  func bind(_ plan: ActionPlan, contexts: [UUID: AuthenticApplicationContext]) {
-    bindings.withLock { entries in
+  func bind(_ plan: ActionPlan, context: AuthenticApplicationContext) throws {
+    try bind(plan, contexts: Dictionary(plan.items.map { ($0.id, context) }, uniquingKeysWith: { first, _ in first }))
+  }
+
+  func bind(_ plan: ActionPlan, contexts: [UUID: AuthenticApplicationContext]) throws {
+    try bindings.withLock { entries in
       entries.removeAll { $0.plan.id == plan.id }
       let selected = contexts.filter { entry in plan.items.contains { $0.id == entry.key } }
       entries.append(Binding(plan: plan, contexts: selected))
-      // A very large observation remains usable by its session, but a later
-      // execution must freshly validate it instead of retaining unbounded state.
-      if selected.values.contains(where: { $0.lineage.count > 100_000 }) {
-        entries.removeAll { $0.plan.id == plan.id }
-      }
-      func retainedPaths() -> Int {
-        var seen: Set<ObjectIdentifier> = []
-        return entries.reduce(0) { total, entry in
-          total
-            + entry.contexts.values.reduce(0) { count, context in
-              count + (seen.insert(ObjectIdentifier(context)).inserted ? context.lineage.count : 0)
-            }
+      // Plans from one scan share its full native observation. Charging that
+      // same object once keeps a large scan usable without discarding its
+      // original negative proof. Other retained contexts have a bounded budget.
+      func additionalRetainedPaths() -> Int {
+        var sizes: [ObjectIdentifier: Int] = [:]
+        for entry in entries {
+          for context in entry.contexts.values {
+            sizes[ObjectIdentifier(context)] = context.lineage.count
+          }
         }
+        return sizes.values.reduce(0, +) - (sizes.values.max() ?? 0)
       }
-      while entries.count > 64 || retainedPaths() > 250_000 { entries.removeFirst() }
+      while entries.count > 64 || additionalRetainedPaths() > maximumAdditionalPaths {
+        guard entries.count > 1 else {
+          entries.removeAll { $0.plan.id == plan.id }
+          throw PlanRejection(
+            .unavailable, path: plan.items.first?.sourcePath ?? "",
+            ruleID: "application-context-capacity: create a smaller plan")
+        }
+        entries.removeFirst()
+      }
     }
   }
 

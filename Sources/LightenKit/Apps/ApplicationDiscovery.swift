@@ -16,11 +16,15 @@ public struct ApplicationReport: Identifiable, Sendable {
   public var linkTarget: String?
   /// Cached observation of a physical iOS Wrapper layout.
   public var isIOSWrapper = false
+  /// Native physical root observation for reconciling displayed action results.
+  /// This value never grants permission to act on a package.
+  public let displayRootIdentity: FileIdentity?
 
   public init(
     path: String, bundleID: String?, version: String?, signerTeamID: String?, logical: ByteAggregate,
     allocated: ByteAggregate, knownItemCount: Int, partial: Bool, related: [RelatedDataCandidate],
-    manualUninstallerSuggested: Bool, linkTarget: String? = nil, isIOSWrapper: Bool = false
+    manualUninstallerSuggested: Bool, linkTarget: String? = nil, isIOSWrapper: Bool = false,
+    displayRootIdentity: FileIdentity? = nil
   ) {
     self.path = path
     self.bundleID = bundleID
@@ -34,6 +38,7 @@ public struct ApplicationReport: Identifiable, Sendable {
     self.manualUninstallerSuggested = manualUninstallerSuggested
     self.linkTarget = linkTarget
     self.isIOSWrapper = isIOSWrapper
+    self.displayRootIdentity = displayRootIdentity
   }
 
   public var id: String { path }
@@ -131,7 +136,10 @@ public struct ApplicationDiscovery: Sendable {
         for app in context.inventory.applications {
           emit(
             .related(
-              path: app.path, candidates: candidates.filter { $0.bundleID == app.bundleID },
+              path: app.path,
+              candidates: associatedCandidates(
+                candidates, bundleID: app.bundleID, path: app.path, physicalPath: app.linkTarget ?? app.path,
+                homeDirectory: related.homeDirectory),
               ownershipPending: !context.inventory.ownershipComplete))
         }
         emit(
@@ -159,7 +167,9 @@ public struct ApplicationDiscovery: Sendable {
     guard !Task.isCancelled else { return }
     reports = reports.map { report in
       var enriched = report
-      enriched.related = report.bundleID.map { id in candidates.filter { $0.bundleID == id } } ?? []
+      enriched.related = associatedCandidates(
+        candidates, bundleID: report.bundleID, path: report.path, physicalPath: report.linkTarget ?? report.path,
+        homeDirectory: related.homeDirectory)
       return enriched
     }
     reports.sort {
@@ -171,25 +181,42 @@ public struct ApplicationDiscovery: Sendable {
     emit(.completed(inventory, reports))
   }
 
+  private static func associatedCandidates(
+    _ candidates: [RelatedDataCandidate], bundleID: String?, path: String, physicalPath: String,
+    homeDirectory: String
+  ) -> [RelatedDataCandidate] {
+    guard let bundleID else { return [] }
+    let cached =
+      RelatedDataService.isCachedApplication(path, homeDirectory: homeDirectory)
+      || RelatedDataService.isCachedApplication(physicalPath, homeDirectory: homeDirectory)
+    return candidates.filter { candidate in
+      guard candidate.bundleID == bundleID else { return false }
+      return !cached
+        || RelatedLocation.matching(path: candidate.path, homeDirectory: homeDirectory)?.0 == .groupContainers
+    }
+  }
+
   private static func metadataReports(_ inventory: BundleInventory) -> [ApplicationReport] {
     let known = inventory.applications.map { app in
       var report = ApplicationReport(
         path: app.path, bundleID: app.bundleID, version: app.version, signerTeamID: nil,
         logical: ByteAggregate(knownLowerBound: 0, completeTotal: nil),
         allocated: ByteAggregate(knownLowerBound: 0, completeTotal: nil), knownItemCount: 0, partial: true,
-        related: [], manualUninstallerSuggested: false)
+        related: [], manualUninstallerSuggested: false,
+        displayRootIdentity: try? DescriptorFileSystem.identity(at: app.linkTarget ?? app.path))
       report.linkTarget = app.linkTarget
       report.isIOSWrapper = isIOSWrapper(at: app.linkTarget ?? app.path)
       return report
     }
     return known
       + inventory.unidentifiedPaths.map { path in
+        let physical = inventory.applicationMetadata.first { $0.path == path }?.physicalPath ?? path
         var report = ApplicationReport(
           path: path, bundleID: nil, version: nil, signerTeamID: nil,
           logical: ByteAggregate(knownLowerBound: 0, completeTotal: nil),
           allocated: ByteAggregate(knownLowerBound: 0, completeTotal: nil), knownItemCount: 0, partial: true,
-          related: [], manualUninstallerSuggested: false)
-        let physical = inventory.applicationMetadata.first { $0.path == path }?.physicalPath ?? path
+          related: [], manualUninstallerSuggested: false,
+          displayRootIdentity: try? DescriptorFileSystem.identity(at: physical))
         if physical != path { report.linkTarget = physical }
         report.isIOSWrapper = isIOSWrapper(at: physical)
         return report
@@ -215,7 +242,8 @@ public struct ApplicationDiscovery: Sendable {
             related: [],
             manualUninstallerSuggested: (try? DescriptorFileSystem.identity(
               at: app.path + "/Contents/Library/SystemExtensions")) != nil
-              || (try? DescriptorFileSystem.identity(at: app.path + "/Contents/Library/LaunchServices")) != nil)
+              || (try? DescriptorFileSystem.identity(at: app.path + "/Contents/Library/LaunchServices")) != nil,
+            displayRootIdentity: app.displayRootIdentity)
           report.linkTarget = app.linkTarget
           report.isIOSWrapper = app.isIOSWrapper
           return report
@@ -254,13 +282,14 @@ public struct ApplicationDiscovery: Sendable {
         path: path, bundleID: nil, version: metadata.version, signerTeamID: nil,
         logical: size.logical, allocated: size.allocated, knownItemCount: size.count,
         partial: size.partial,
-        related: [], manualUninstallerSuggested: false)
+        related: [], manualUninstallerSuggested: false, displayRootIdentity: metadata.rootIdentity)
       if observation.physicalPath != path { report.linkTarget = observation.physicalPath }
       report.isIOSWrapper = Self.isIOSWrapper(at: observation.physicalPath)
       return report
     }
     let physical = app.linkTarget ?? path
     guard related.scopeExclusion(at: physical) == nil else { return nil }
+    let displayRootIdentity = try? DescriptorFileSystem.identity(at: physical)
     async let observation = related.focusedObservation(for: app)
     let size = await Self.measure(path: physical, homeDirectory: related.homeDirectory)
     let data = await observation
@@ -268,7 +297,7 @@ public struct ApplicationDiscovery: Sendable {
       path: path, bundleID: app.bundleID, version: app.version,
       signerTeamID: data.signerTeamID,
       logical: size.logical, allocated: size.allocated, knownItemCount: size.count, partial: size.partial,
-      related: data.candidates, manualUninstallerSuggested: false)
+      related: data.candidates, manualUninstallerSuggested: false, displayRootIdentity: displayRootIdentity)
     report.linkTarget = app.linkTarget
     report.isIOSWrapper = Self.isIOSWrapper(at: physical)
     return report

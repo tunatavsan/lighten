@@ -153,11 +153,15 @@ struct ApplicationMetadataObservation: Sendable {
 
   func validateAbsence() throws {
     guard case .absentInfo = state, let root, let volumeID,
-      try DescriptorFileSystem.identity(at: physicalPath) == root,
       try DescriptorFileSystem.volumeID(at: physicalPath) == volumeID
     else { throw RelatedFailure.changedItem }
-    for observation in paths { try observation.validate() }
-    guard case .absentInfo = Self.read(at: path).state else { throw RelatedFailure.changedItem }
+    // The original snapshot includes every accepted Info path and its parent.
+    // Equal full identities prove that no new layout or Info file appeared;
+    // rereading that same absent namespace would add no ownership evidence.
+    do { try ApplicationPathObservation.validate(paths, root: physicalPath, expected: root) } catch {
+      throw RelatedFailure.changedItem
+    }
+    guard try DescriptorFileSystem.volumeID(at: physicalPath) == volumeID else { throw RelatedFailure.changedItem }
   }
 }
 

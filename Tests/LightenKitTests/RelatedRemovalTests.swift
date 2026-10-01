@@ -239,7 +239,12 @@ func orphanRemovalRequiresCurrentAbsence() async throws {
     #expect(throws: RelatedFailure.incompleteInventory) { try service.validateOrphan(item, plan: combined) }
   }
   let refused = await service.validatePlan(combined)
-  #expect(refused.count == 3 && refused.allSatisfy { $0.ruleID == "incompleteInventory" })
+  #expect(
+    refused.count == 3
+      && refused.allSatisfy {
+        $0.reason == .unavailable
+          && $0.ruleID == "incompleteInventory: original private plan context unavailable; review again"
+      })
   let journal = JSONLActionJournal(path: fixture.storage + "/Journal/actions.jsonl")
   let executor = ActionExecutor(
     journal: journal,
