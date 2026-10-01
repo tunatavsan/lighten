@@ -4,6 +4,70 @@ public enum ActionKind: String, Codable, Sendable, Hashable {
   case trash, catalogDelete
 }
 
+/// Display-only bytes observed separately from the inventory used to authorize an action.
+public struct ObservedPlanSize: Codable, Sendable, Equatable {
+  public let logical: ByteAggregate?
+  public let allocated: ByteAggregate?
+
+  public init(logical: ByteAggregate?, allocated: ByteAggregate?) {
+    self.logical = Self.validated(logical)
+    self.allocated = Self.validated(allocated)
+  }
+
+  public static let unknown = ObservedPlanSize(logical: nil, allocated: nil)
+
+  public var validated: ObservedPlanSize { Self(logical: logical, allocated: allocated) }
+
+  private static func validated(_ value: ByteAggregate?) -> ByteAggregate? {
+    guard let value, value.knownLowerBound >= 0,
+      value.completeTotal.map({ $0 >= value.knownLowerBound }) ?? true
+    else { return nil }
+    return value
+  }
+
+  /// A missing member makes the sum a lower bound; overflow makes that metric unknown.
+  public static func total(_ values: [ObservedPlanSize]) -> ObservedPlanSize {
+    func sum(_ values: [ByteAggregate?]) -> ByteAggregate? {
+      var total: Int64 = 0
+      var complete = true
+      var hasKnown = values.isEmpty
+      for raw in values {
+        guard let value = validated(raw) else {
+          complete = false
+          continue
+        }
+        hasKnown = true
+        let (next, overflow) = total.addingReportingOverflow(value.completeTotal ?? value.knownLowerBound)
+        guard !overflow else { return nil }
+        total = next
+        complete = complete && value.completeTotal != nil
+      }
+      return hasKnown ? ByteAggregate(knownLowerBound: total, completeTotal: complete ? total : nil) : nil
+    }
+    return Self(logical: sum(values.map(\.logical)), allocated: sum(values.map(\.allocated)))
+  }
+
+  /// Counts hard links once and never uses a directory's own inode size as its contents size.
+  public static func inventory(_ entries: [ScanEntry]) -> ObservedPlanSize {
+    guard !entries.isEmpty else { return .unknown }
+    var seen = Set<[UInt64]>()
+    var values: [ObservedPlanSize] = []
+    for entry in entries {
+      guard let identity = entry.identity else {
+        values.append(.unknown)
+        continue
+      }
+      guard identity.kind != .directory else { continue }
+      if identity.linkCount > 1, !seen.insert([identity.device, identity.inode]).inserted { continue }
+      values.append(
+        Self(
+          logical: ByteAggregate(knownLowerBound: identity.logicalBytes, completeTotal: identity.logicalBytes),
+          allocated: ByteAggregate(knownLowerBound: identity.allocatedBytes, completeTotal: identity.allocatedBytes)))
+    }
+    return total(values)
+  }
+}
+
 public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   public let id: UUID
   public let sourcePath: String
@@ -24,9 +88,29 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   /// Application packages included by the inventory; none may be running.
   public let nestedApplicationIDs: [String]?
 
+  /// Optional contents-size observation. Guard, execution and Undo must not consult it.
+  public let observedSize: ObservedPlanSize?
+  /// Absent in legacy plans, preserving the exact shape of their compact journal metadata.
+  public let sizeMetadataVersion: Int?
+
+  public var displaySize: ObservedPlanSize {
+    if let sizeMetadataVersion, sizeMetadataVersion != 1 { return .unknown }
+    return containsOpaquePackages ? (observedSize?.validated ?? .unknown) : ObservedPlanSize.inventory(inventory)
+  }
+
   /// A presentation observation only; neither this value nor inventory size grants action authority.
   public var containsOpaquePackages: Bool {
-    policy != nil && inventory.contains { $0.identity?.kind == .directory && ScanService.isPackage($0.path) }
+    guard policy != nil else { return false }
+    return inventory.contains { entry in
+      guard entry.identity?.kind == .directory else { return false }
+      return (policy == .wholeBundle && entry.path == sourcePath) || Self.isPackageName(entry.path)
+    }
+  }
+
+  /// Presentation must remain stable after the source moves or disappears.
+  static func isPackageName(_ path: String) -> Bool {
+    let name = (path as NSString).lastPathComponent.lowercased()
+    return ScanService.packageSuffixes.contains { name.hasSuffix($0) }
   }
 
   public init(
@@ -35,7 +119,8 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     relatedProof: RelatedProof? = nil, installedRelatedProof: InstalledRelatedProof? = nil,
     duplicateProof: DuplicateProof? = nil, policy: TreePolicy? = nil, applicationBundleID: String? = nil,
     nestedApplicationIDs: [String]? = nil, snapshotRunID: UUID? = nil,
-    orphanRelatedProof: OrphanRelatedProof? = nil
+    orphanRelatedProof: OrphanRelatedProof? = nil, observedSize: ObservedPlanSize? = nil,
+    sizeMetadataVersion: Int? = 1
   ) {
     self.id = id
     self.sourcePath = sourcePath
@@ -51,6 +136,8 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
     self.policy = policy
     self.applicationBundleID = applicationBundleID
     self.nestedApplicationIDs = nestedApplicationIDs
+    self.observedSize = observedSize?.validated
+    self.sizeMetadataVersion = sizeMetadataVersion
   }
 }
 

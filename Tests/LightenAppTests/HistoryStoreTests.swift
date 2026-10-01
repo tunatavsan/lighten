@@ -197,3 +197,51 @@ private actor HistoryStoreJournalSpy: ActionJournal {
   #expect((await spy.calls()).loadedPlans == [plans[1].id, plans[1].id])
   #expect((await spy.calls()).fullReads == 0)
 }
+
+@Test("History display preserves unknown opaque sizes and counts only applied observations")
+@MainActor func historyObservedSizesStayHonest() {
+  let root = "/private/tmp/LightenQA-" + UUID().uuidString
+  func metadata(_ suffix: String, bytes: Int64?) -> JournalItemSummary {
+    let entry = ScanEntry(
+      parentID: nil, path: root + "/" + suffix + ".app",
+      identity: FileIdentity(
+        device: 1, inode: 2, changeSeconds: 0, changeNanoseconds: 0,
+        logicalBytes: 4096, allocatedBytes: 4096, linkCount: 1, flags: 0, kind: .directory),
+      issues: [], readable: true)
+    return JournalItemSummary(
+      PlanItem(
+        id: entry.id, sourcePath: entry.path, inventory: [entry], ancestors: [], policy: .wholeBundle,
+        observedSize: bytes.map {
+          ObservedPlanSize(logical: ByteAggregate(knownLowerBound: $0, completeTotal: $0), allocated: nil)
+        }))
+  }
+  let known = metadata("known", bytes: 12_000_000_000)
+  let unknown = metadata("unknown", bytes: nil)
+  let failed = metadata("failed", bytes: 20_000_000_000)
+  let planID = UUID()
+  let summaries = [known, unknown, failed]
+  let items = summaries.map {
+    HistoryItem(
+      planID: planID, itemID: $0.id, state: $0.id == failed.id ? .failed : .inTrash,
+      returnedTrashPath: nil, detail: nil, deletedCount: 0, deletedLogicalBytes: 0,
+      applied: $0.id != failed.id)
+  }
+  let plan = HistoryPlan(id: planID, kind: .trash, createdAt: Date(), items: items, metadata: summaries)
+  let store = ActionStore(journal: JSONLActionJournal(path: root + "/journal/actions.jsonl"))
+  store.history = HistoryReadout(items: items, issues: [], plans: [plan])
+  store.historyMetadata = Dictionary(
+    uniqueKeysWithValues: summaries.map {
+      (
+        $0.id,
+        HistoryMetadata(
+          path: $0.sourcePath, logicalBytes: $0.logicalBytes, allocatedBytes: $0.allocatedBytes,
+          observedSize: $0.displaySize)
+      )
+    })
+  #expect(store.historySize(plan).logical == ByteAggregate(knownLowerBound: 12_000_000_000, completeTotal: nil))
+  #expect(store.pendingTrashSize == store.historySize(plan))
+  #expect(store.pendingTrashCount == 2)
+  store.historyMetadata.removeValue(forKey: known.id)
+  #expect(store.pendingTrashSize == .unknown)
+  #expect(PlanItemSize.text(store.pendingTrashSize.logical) == String(localized: "Size unknown"))
+}

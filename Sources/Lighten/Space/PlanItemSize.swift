@@ -1,17 +1,19 @@
+import Foundation
 import LightenKit
 
-/// Size of a planned item from its exact inventory; hard links count once.
+/// Display sizing stays separate from the exact inventory that authorizes the action.
 enum PlanItemSize {
+  nonisolated static func observation(_ item: PlanItem) -> ObservedPlanSize { item.displaySize }
+
+  /// Compatibility for callers using inventory totals. Use observation for presentation.
   nonisolated static func measure(_ item: PlanItem) -> (logical: Int64, allocated: Int64) {
-    var seen = Set<[UInt64]>()
-    var logical: Int64 = 0
-    var allocated: Int64 = 0
-    for entry in item.inventory {
-      guard let identity = entry.identity, identity.kind != .directory else { continue }
-      if identity.linkCount > 1, !seen.insert([identity.device, identity.inode]).inserted { continue }
-      logical &+= identity.logicalBytes
-      allocated &+= identity.allocatedBytes
-    }
-    return (logical, allocated)
+    let size = ObservedPlanSize.inventory(item.inventory)
+    return (size.logical?.completeTotal ?? -1, size.allocated?.completeTotal ?? -1)
+  }
+
+  static func text(_ value: ByteAggregate?) -> String {
+    guard let value, value.knownLowerBound >= 0 else { return String(localized: "Size unknown") }
+    if let exact = value.completeTotal { return format(exact) }
+    return "\(String(localized: "At least")) \(format(value.knownLowerBound))"
   }
 }

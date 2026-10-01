@@ -164,3 +164,55 @@ extension SpaceUITests {
     )
   }
 }
+
+extension SpaceUITests {
+  @MainActor @Test("Confirmation replaces legacy opaque zero totals with observation or unknown")
+  func opaqueConfirmationObservation() throws {
+    let path = "/private/tmp/LightenQA-" + UUID().uuidString + ".app"
+    let entry = ScanEntry(
+      parentID: nil, path: path,
+      identity: FileIdentity(
+        device: 1, inode: 2, changeSeconds: 0, changeNanoseconds: 0,
+        logicalBytes: 4096, allocatedBytes: 4096, linkCount: 1, flags: 0, kind: .directory),
+      issues: [], readable: true)
+    let store = ActionStore(journal: JSONLActionJournal(path: path + "/journal/actions.jsonl"))
+    for size in [
+      ObservedPlanSize.unknown,
+      ObservedPlanSize(logical: ByteAggregate(knownLowerBound: 12_000_000_000, completeTotal: nil), allocated: nil),
+      ObservedPlanSize(
+        logical: ByteAggregate(knownLowerBound: 12_000_000_000, completeTotal: 12_000_000_000), allocated: nil),
+    ] {
+      let item = PlanItem(
+        id: entry.id, sourcePath: path, inventory: [entry], ancestors: [],
+        policy: .wholeBundle, observedSize: size == .unknown ? nil : size)
+      store.present(
+        plan: ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [item]),
+        items: [
+          ActionItemSummary(
+            id: entry.id, label: "Fixture app", path: path, reason: "Fixture selection",
+            logicalBytes: 0, allocatedBytes: 0)
+        ])
+      let summary = try #require(store.pending?.items.first)
+      #expect(summary.observedSize == size)
+      #expect(summary.logicalBytes == (size.logical?.completeTotal ?? size.logical?.knownLowerBound))
+      if size == .unknown {
+        #expect(PlanItemSize.text(summary.observedSize.logical) == String(localized: "Size unknown"))
+      } else if size.logical?.completeTotal == nil {
+        #expect(PlanItemSize.text(summary.observedSize.logical).hasPrefix(String(localized: "At least")))
+      } else {
+        #expect(PlanItemSize.text(summary.observedSize.logical) == format(12_000_000_000))
+      }
+    }
+  }
+
+  @MainActor @Test("Display totals preserve exact zero and never wrap on overflow")
+  func confirmationSizeTotals() {
+    let zero = ObservedPlanSize(logical: ByteAggregate(knownLowerBound: 0, completeTotal: 0), allocated: nil)
+    #expect(PlanItemSize.text(zero.logical) == format(0))
+    let huge = ObservedPlanSize(
+      logical: ByteAggregate(knownLowerBound: Int64.max, completeTotal: Int64.max), allocated: nil)
+    let one = ObservedPlanSize(logical: ByteAggregate(knownLowerBound: 1, completeTotal: 1), allocated: nil)
+    #expect(PlanItemSize.text(ObservedPlanSize.total([huge, one]).logical) == String(localized: "Size unknown"))
+    #expect(ObservedPlanSize.total([one, .unknown]).logical?.completeTotal == nil)
+  }
+}

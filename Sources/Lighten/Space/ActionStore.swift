@@ -10,10 +10,11 @@ struct ActionItemSummary: Sendable {
   let logicalBytes: Int64?
   let allocatedBytes: Int64?
   let warning: ProtectiveWarning?
+  let observedSize: ObservedPlanSize
 
   nonisolated init(
     id: UUID, label: String, path: String, reason: String, logicalBytes: Int64?, allocatedBytes: Int64?,
-    warning: ProtectiveWarning? = nil
+    warning: ProtectiveWarning? = nil, observedSize: ObservedPlanSize? = nil
   ) {
     self.id = id
     self.label = label
@@ -22,6 +23,11 @@ struct ActionItemSummary: Sendable {
     self.logicalBytes = logicalBytes
     self.allocatedBytes = allocatedBytes
     self.warning = warning
+    self.observedSize =
+      observedSize?.validated
+      ?? ObservedPlanSize(
+        logical: logicalBytes.map { ByteAggregate(knownLowerBound: $0, completeTotal: $0) },
+        allocated: allocatedBytes.map { ByteAggregate(knownLowerBound: $0, completeTotal: $0) })
   }
 }
 
@@ -57,6 +63,7 @@ struct HistoryMetadata: Sendable {
   let path: String
   let logicalBytes: Int64
   let allocatedBytes: Int64
+  let observedSize: ObservedPlanSize
 }
 
 @MainActor @Observable
@@ -118,10 +125,19 @@ final class ActionStore {
     return ByteAggregate(knownLowerBound: total, completeTotal: complete ? total : nil)
   }
 
-  var pendingTrashLogicalBytes: Int64 {
-    (history?.items ?? []).filter { $0.applied && $0.state == .inTrash }.reduce(0) {
-      $0 + (historyMetadata[$1.itemID]?.logicalBytes ?? 0)
-    }
+  var pendingTrashSize: ObservedPlanSize {
+    ObservedPlanSize.total(
+      (history?.items ?? []).filter { $0.applied && $0.state == .inTrash }.map {
+        historyMetadata[$0.itemID]?.observedSize ?? .unknown
+      })
+  }
+
+  /// Compatibility for consumers requesting only the known amount.
+  var pendingTrashLogicalBytes: Int64 { pendingTrashSize.logical?.knownLowerBound ?? 0 }
+
+  func historySize(_ plan: HistoryPlan) -> ObservedPlanSize {
+    let applied = Set(plan.items.filter(\.applied).map(\.itemID))
+    return ObservedPlanSize.total(plan.metadata.filter { applied.contains($0.id) }.map(\.displaySize))
   }
 
   var pendingTrashCount: Int { history?.items.filter { $0.applied && $0.state == .inTrash }.count ?? 0 }
@@ -168,8 +184,18 @@ final class ActionStore {
     guard !busy, Set(plan.items.map(\.id)) == Set(items.map(\.id)),
       !preparingAlternate || pending?.plan.id == alternatePlanID
     else { return }
+    let plannedItems = Dictionary(plan.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     pending = ActionPresentation(
-      plan: plan, items: items,
+      plan: plan,
+      items: items.map { summary in
+        guard let item = plannedItems[summary.id] else { return summary }
+        let size = PlanItemSize.observation(item)
+        return ActionItemSummary(
+          id: summary.id, label: summary.label, path: summary.path, reason: summary.reason,
+          logicalBytes: size.logical?.completeTotal ?? size.logical?.knownLowerBound,
+          allocatedBytes: size.allocated?.completeTotal ?? size.allocated?.knownLowerBound,
+          warning: summary.warning, observedSize: size)
+      },
       permanentPlanBuilder: plan.kind == .trash ? permanentPlanBuilder : nil, rejectedItems: rejectedItems)
   }
 
@@ -237,7 +263,8 @@ final class ActionStore {
       for plan in readout.plans {
         for item in plan.metadata {
           metadata[item.id] = HistoryMetadata(
-            path: item.sourcePath, logicalBytes: item.logicalBytes, allocatedBytes: item.allocatedBytes)
+            path: item.sourcePath, logicalBytes: item.logicalBytes, allocatedBytes: item.allocatedBytes,
+            observedSize: item.displaySize)
         }
       }
       history = readout

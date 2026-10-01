@@ -8,22 +8,13 @@ struct ConfirmationView: View {
   @Environment(\.dismiss) private var dismiss
 
   private var logicalSummary: String {
-    var known: Int64 = 0
-    var unknownCount = 0
-    for item in presentation.items {
-      guard let bytes = item.logicalBytes, bytes >= 0 else {
-        unknownCount += 1
-        continue
-      }
-      let (sum, overflow) = known.addingReportingOverflow(bytes)
-      if overflow { return String(localized: "Size unknown") }
-      known = sum
+    let logical = ObservedPlanSize.total(presentation.items.map(\.observedSize)).logical
+    let summary = PlanItemSize.text(logical)
+    let unknownCount = presentation.items.filter { $0.observedSize.logical == nil }.count
+    if logical != nil, unknownCount > 0 {
+      return "\(summary) · \(unknownCount) \(String(localized: "sizes unknown"))"
     }
-    if unknownCount == presentation.items.count { return String(localized: "Size unknown") }
-    if unknownCount > 0 {
-      return "\(String(localized: "At least")) \(format(known)) · \(unknownCount) \(String(localized: "sizes unknown"))"
-    }
-    return format(known)
+    return summary
   }
 
   var body: some View {
@@ -63,7 +54,7 @@ struct ConfirmationView: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
-              Text(format(item.logicalBytes)).font(.system(size: 13, weight: .medium))
+              Text(PlanItemSize.text(item.observedSize.logical)).font(.system(size: 13, weight: .medium))
               Text(String(localized: "Logical")).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
             }
             .monospacedDigit()
@@ -134,7 +125,7 @@ struct HistoryView: View {
         Text("\(actions.pendingTrashCount) \(String(localized: "items"))")
           .font(.system(size: 13)).monospacedDigit()
         Spacer()
-        Text(format(actions.pendingTrashLogicalBytes))
+        Text(PlanItemSize.text(actions.pendingTrashSize.logical))
           .font(.system(size: 17, weight: .semibold)).monospacedDigit()
       }
       Text(String(localized: "Trash items have not freed disk space."))
@@ -224,9 +215,12 @@ struct HistoryView: View {
                   }
                 }
                 Spacer(minLength: 5)
-                Text(format(plan.deletedCount > 0 ? plan.deletedLogicalBytes : plan.logicalBytes))
-                  .font(.system(size: 12)).monospacedDigit()
-                  .frame(width: 90, alignment: .trailing)
+                Text(
+                  plan.deletedCount > 0
+                    ? format(plan.deletedLogicalBytes) : PlanItemSize.text(actions.historySize(plan).logical)
+                )
+                .font(.system(size: 12)).monospacedDigit()
+                .frame(width: 90, alignment: .trailing)
                 Text(status(plan.state))
                   .font(.system(size: 12)).foregroundStyle(statusColor(plan.state))
                   .frame(width: 105, alignment: .trailing)
@@ -268,6 +262,7 @@ struct HistoryView: View {
 
   private func historyItem(_ item: HistoryItem, plan: HistoryPlan) -> some View {
     let path = plan.metadata.first { $0.id == item.itemID }?.sourcePath
+    let size = plan.metadata.first { $0.id == item.itemID }?.displaySize ?? .unknown
     let showProblem = item.state == .inTrash ? !item.canUndo : item.state != .reversed
     let detail =
       showProblem
@@ -278,6 +273,7 @@ struct HistoryView: View {
           .font(.system(size: 11)).lineLimit(2).truncationMode(.middle)
           .textSelection(.enabled)
         Spacer(minLength: 4)
+        Text(PlanItemSize.text(size.logical)).font(.system(size: 10)).monospacedDigit()
         Text(status(item.state))
           .font(.system(size: 10)).foregroundStyle(statusColor(item.state))
       }
