@@ -38,7 +38,7 @@ private func duAllocated(_ root: String) -> Int64 {
   while let relative = enumerator?.nextObject() as? String {
     var details = stat()
     guard lstat(root + "/" + relative, &details) == 0 else { continue }
-    guard seen.insert([UInt64(details.st_dev), details.st_ino]).inserted else { continue }
+    guard seen.insert([UInt64(UInt32(bitPattern: details.st_dev)), details.st_ino]).inserted else { continue }
     total += Int64(details.st_blocks) * 512
   }
   return total

@@ -83,7 +83,7 @@ extension ScanEngine {
     guard let item = tree.item(id) else { throw RefreshFailure.unavailable }
     var details = stat()
     guard lstat(item.path, &details) == 0, details.st_mode & S_IFMT == S_IFDIR,
-      UInt64(details.st_dev) == item.device, details.st_ino == item.inode
+      DescriptorFileSystem.deviceID(details.st_dev) == item.device, details.st_ino == item.inode
     else { throw RefreshFailure.changed }
     let oldChildren = tree.storage.withLock { storage in
       storage.nodes[Int(id.node)].childNodes.map { ($0, storage.nodes[Int($0)]) }

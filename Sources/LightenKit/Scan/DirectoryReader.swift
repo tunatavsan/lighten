@@ -105,7 +105,9 @@ public final class DirectoryReader {
     defer { close(fd) }
     var details = stat()
     guard fstat(fd, &details) == 0 else { throw .open(errno) }
-    if let expected, UInt64(details.st_dev) != expected.device || details.st_ino != expected.inode {
+    if let expected,
+      DescriptorFileSystem.deviceID(details.st_dev) != expected.device || details.st_ino != expected.inode
+    {
       throw .changed
     }
     counters.directories.add(1, ordering: .relaxed)

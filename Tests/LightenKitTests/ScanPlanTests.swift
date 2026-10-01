@@ -63,6 +63,40 @@ private func fakeIdentity(
     linkCount: 1, flags: flags, kind: kind)
 }
 
+@Test func descriptorIdentityPreservesSignedDeviceBits() throws {
+  let devices: [UInt32] = [0, 1, 0x7fff_ffff, 0x8000_0000, 0x8000_0001, 0xffff_fffe, 0xffff_ffff]
+  var identities: [FileIdentity] = []
+  for bits in devices {
+    var details = stat()
+    details.st_dev = dev_t(bitPattern: bits)
+    details.st_ino = 17
+    details.st_mode = mode_t(S_IFREG)
+    details.st_nlink = 1
+    details.st_size = 5
+    details.st_blocks = 1
+    details.st_ctimespec = timespec(tv_sec: 1, tv_nsec: 2)
+    details.st_mtimespec = timespec(tv_sec: 3, tv_nsec: 4)
+    let identity = DescriptorFileSystem.identity(from: details)
+    // Bulk and live vnode readers expose the same device bits as uint32_t.
+    let bulk = RawEntry(
+      name: "fixture", kind: .regular, device: UInt64(bits), inode: 17,
+      flags: 0, linkCount: 1, logical: 5, allocated: 512, error: 0,
+      modificationTime: FileTimestamp(seconds: 3, nanoseconds: 4),
+      changeTime: FileTimestamp(seconds: 1, nanoseconds: 2), identityLogicalBytes: 5)
+    #expect(identity.device == UInt64(bits))
+    #expect(identity == DescriptorFileSystem.identity(from: details))
+    #expect(identity == bulk.identity)
+    #expect(try JSONDecoder().decode(FileIdentity.self, from: JSONEncoder().encode(identity)) == identity)
+    identities.append(identity)
+  }
+  // The inode and all other metadata are identical; each distinct device stays distinct.
+  for first in identities.indices {
+    for second in identities.indices where first != second {
+      #expect(identities[first] != identities[second])
+    }
+  }
+}
+
 @Test func snapshotRoundTripAndCompleteTotals() async throws {
   let root = try fixtureRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }

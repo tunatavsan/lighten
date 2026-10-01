@@ -308,7 +308,7 @@ public actor ActionHistory {
       (try? DescriptorFileSystem.volumeID(at: parentPath)) == volumeID
     else { throw UndoFailure.unsafeParent }
     var observed = stat()
-    guard fstat(parentFD, &observed) == 0, UInt64(observed.st_dev) == expected.device,
+    guard fstat(parentFD, &observed) == 0, DescriptorFileSystem.deviceID(observed.st_dev) == expected.device,
       observed.st_ino == expected.inode, DescriptorFileSystem.identity(from: observed).sameStableDirectory(as: expected)
     else { throw UndoFailure.unsafeParent }
     do {
@@ -377,7 +377,7 @@ public actor ActionHistory {
       let volumeID = item.volumeID,
       let parentPath = item.ancestors.last?.path,
       (try? DescriptorFileSystem.volumeID(at: parentPath)) == volumeID,
-      UInt64(openedParent.st_dev) == expectedParent.device,
+      DescriptorFileSystem.deviceID(openedParent.st_dev) == expectedParent.device,
       openedParent.st_ino == expectedParent.inode
     else { throw UndoFailure.unsafeParent }
     // A durable intent makes a crash after rename distinguishable on restart.
@@ -389,7 +389,7 @@ public actor ActionHistory {
     // An await can permit a source/parent change; pinning and rechecking precedes rename.
     guard Self.verifiedTrashItem(at: trashPath, item: item, moved: moved),
       fstat(parentFD, &openedParent) == 0,
-      UInt64(openedParent.st_dev) == expectedParent.device,
+      DescriptorFileSystem.deviceID(openedParent.st_dev) == expectedParent.device,
       openedParent.st_ino == expectedParent.inode,
       (try? DescriptorFileSystem.volumeID(at: parentPath)) == volumeID
     else { throw UndoFailure.unsafeParent }

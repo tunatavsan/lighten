@@ -74,7 +74,9 @@ public struct NativeMountedImageSource: MountedImageSource {
         if path.caseInsensitiveCompare(imagePath) == .orderedSame { return .attached }
         var details = stat()
         if stat(path, &details) == 0 {
-          if UInt64(details.st_dev) == selected.device && details.st_ino == selected.inode { return .attached }
+          if DescriptorFileSystem.deviceID(details.st_dev) == selected.device && details.st_ino == selected.inode {
+            return .attached
+          }
         } else {
           unknown = true
         }

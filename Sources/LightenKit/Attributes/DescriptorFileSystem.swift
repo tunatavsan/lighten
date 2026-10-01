@@ -142,7 +142,7 @@ public enum DescriptorFileSystem {
     default: kind = .other
     }
     return FileIdentity(
-      device: UInt64(details.st_dev), inode: details.st_ino,
+      device: deviceID(details.st_dev), inode: details.st_ino,
       changeSeconds: Int64(details.st_ctimespec.tv_sec),
       changeNanoseconds: Int64(details.st_ctimespec.tv_nsec),
       logicalBytes: details.st_size,
@@ -156,6 +156,12 @@ public enum DescriptorFileSystem {
       modificationSeconds: Int64(details.st_mtimespec.tv_sec),
       modificationNanoseconds: Int64(details.st_mtimespec.tv_nsec)
     )
+  }
+
+  /// Darwin's signed dev_t carries an opaque 32-bit device identifier.
+  /// Zero extension matches the unsigned device fields returned by native readers.
+  static func deviceID(_ device: dev_t) -> UInt64 {
+    UInt64(UInt32(bitPattern: device))
   }
 
   static func validatedComponents(_ path: String) throws -> [String] {

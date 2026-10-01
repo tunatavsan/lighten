@@ -127,7 +127,7 @@ public struct ScanEngine: Sendable {
     var details = stat()
     guard lstat(physical, &details) == 0 else { throw .unavailable(errno) }
     guard details.st_mode & S_IFMT == S_IFDIR else { throw .notDirectory }
-    let device = UInt64(details.st_dev)
+    let device = DescriptorFileSystem.deviceID(details.st_dev)
     let firmlinks = root == "/" ? Self.firmlinkNames() : nil
     let tree = ScanTree(
       runID: UUID(), rootPath: root,
