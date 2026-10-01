@@ -77,7 +77,7 @@ struct SpaceUITests {
     #expect(!turkishCopy.contains("artık mevcut değil"))
   }
 
-  @MainActor @Test("Wrapper confirmation uses its Finder reason and unknown refusals preserve honest context")
+  @MainActor @Test("Wrapper confirmation has its Finder reason and unknown codes stay internal")
   func confirmationWrapperRefusal() {
     let path = "/private/tmp/LightenQA-" + UUID().uuidString + "/LightenQA-" + UUID().uuidString + ".app"
     let wrapper = PlanRejection(.unavailable, path: path, ruleID: "ios-wrapper")
@@ -92,8 +92,8 @@ struct SpaceUITests {
     let turkish = SpaceText.rejection(unknown, turkish: true)
     #expect(english.contains("could not determine why this action failed. Inspect the item in Finder."))
     #expect(turkish.contains("bu işlemin neden başarısız olduğunu belirleyemedi. Öğeyi Finder’da inceleyin."))
-    #expect(english.contains("future-refusal") && english.hasSuffix(path))
-    #expect(turkish.contains("future-refusal") && turkish.hasSuffix(path))
+    #expect(!english.contains("future-refusal") && english.hasSuffix(path))
+    #expect(!turkish.contains("future-refusal") && turkish.hasSuffix(path))
     #expect(!english.contains("no longer available") && !turkish.contains("artık mevcut değil"))
     let cache = PlanRejection(.protectedItem, path: path, ruleID: "apple-system-cache")
     #expect(SpaceText.rejection(cache, turkish: false) == "Apple system cache. Inspect it in Finder. — " + path)

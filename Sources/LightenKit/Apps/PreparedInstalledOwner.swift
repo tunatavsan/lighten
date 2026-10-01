@@ -40,9 +40,9 @@ struct PreparedInstalledOwner: Sendable {
         dataEvidence.bundleID == originalProof.bundleID, dataEvidence.dataPath == item.sourcePath
       else { throw RelatedFailure.changedItem }
       try dataEvidence.validate(relocatedPackagePath: movedOwner?.movedPackage.sourcePath)
-      guard let validateDataEnvironment else { throw RelatedFailure.incompleteInventory }
-      try validateDataEnvironment(movedOwner)
+      guard validateDataEnvironment != nil else { throw RelatedFailure.incompleteInventory }
     }
+    if let validateDataEnvironment { try validateDataEnvironment(movedOwner) }
   }
 }
 

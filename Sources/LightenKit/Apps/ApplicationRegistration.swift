@@ -1,12 +1,23 @@
 import CoreServices
 import Darwin
 import Foundation
+import Synchronization
 
 /// Registry paths are discovery leads. A current no-follow bundle read is
 /// required before any lead becomes an installed application observation.
 struct ApplicationRegistrationObservation: Sendable {
   let paths: [String]
   let complete: Bool
+  var report: ApplicationRegistrationReport? = nil
+}
+
+public struct ApplicationRegistrationReport: Codable, Sendable {
+  public let source: String
+  public let leadCount: Int
+  public let complete: Bool
+  public let gatheringCompleted: Bool
+  public let bootIndexingStatus: String
+  public let externalVolumesUnchecked: Bool
 }
 
 enum ApplicationRegistration {
@@ -80,26 +91,133 @@ enum ApplicationRegistration {
     return ApplicationRegistrationObservation(paths: paths.sorted(), complete: complete && sawPath)
   }
 
-  /// Read-only enumeration with bounded output and runtime. No shell, launch,
-  /// registration or unregistration command is used.
-  static func observe(timeout: TimeInterval = 10, maximumBytes: Int = 64 * 1024 * 1024)
+  static func indexingStatus() -> String {
+    guard
+      let bytes = query(
+        executable: "/usr/bin/mdutil", arguments: ["-s", "/"], timeout: 3, maximumBytes: 64 * 1024),
+      let text = String(data: bytes, encoding: .utf8)
+    else { return "unavailable" }
+    let lines = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+    guard lines.first == "/:", lines.count == 2 else { return "unavailable" }
+    if lines[1] == "Indexing enabled." { return "enabled" }
+    if lines[1] == "Indexing disabled." { return "disabled" }
+    return "unavailable"
+  }
+
+  /// A bounded background-thread query. Metadata results remain path leads;
+  /// the caller authenticates every package through native no-follow reads.
+  private static func spotlight(timeout: TimeInterval = 5, maximumResults: Int = 50_000)
     -> ApplicationRegistrationObservation
   {
+    guard !Thread.isMainThread else { return ApplicationRegistrationObservation(paths: [], complete: false) }
+    let query = NSMetadataQuery()
+    query.predicate = NSPredicate(format: "kMDItemContentTypeTree == %@", "com.apple.application-bundle")
+    query.searchScopes = [NSMetadataQueryIndexedLocalComputerScope]
+    let gathered = Mutex(false)
+    let token = NotificationCenter.default.addObserver(
+      forName: Notification.Name.NSMetadataQueryDidFinishGathering, object: query, queue: nil
+    ) { _ in gathered.withLock { $0 = true } }
+    defer {
+      query.stop()
+      NotificationCenter.default.removeObserver(token)
+    }
+    guard query.start() else { return ApplicationRegistrationObservation(paths: [], complete: false) }
+    let deadline = ProcessInfo.processInfo.systemUptime + timeout
+    while !gathered.withLock({ $0 }), !Task.isCancelled,
+      ProcessInfo.processInfo.systemUptime < deadline, query.resultCount <= maximumResults
+    {
+      _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.025))
+    }
+    query.disableUpdates()
+    guard gathered.withLock({ $0 }), query.resultCount <= maximumResults else {
+      return ApplicationRegistrationObservation(paths: [], complete: false)
+    }
+    var paths: Set<String> = []
+    var complete = true
+    for index in 0..<query.resultCount {
+      guard let item = query.result(at: index) as? NSMetadataItem,
+        let path = item.value(forAttribute: NSMetadataItemPathKey) as? String,
+        (try? DescriptorFileSystem.validatedComponents(path)) != nil, hasApplicationSuffix(path)
+      else {
+        complete = false
+        continue
+      }
+      if !isTrash(path) { paths.insert(path) }
+    }
+    return ApplicationRegistrationObservation(paths: paths.sorted(), complete: complete)
+  }
+
+  static func observe(
+    readIndexingStatus: () -> String = indexingStatus,
+    readSpotlight: () -> ApplicationRegistrationObservation = { spotlight() },
+    readDump: () -> ApplicationRegistrationObservation = {
+      guard
+        let bytes = query(executable: executable, arguments: ["-dump"], timeout: 15, maximumBytes: 128 * 1024 * 1024),
+        let text = String(data: bytes, encoding: .utf8)
+      else { return ApplicationRegistrationObservation(paths: [], complete: false) }
+      return parseDump(text)
+    },
+    byIdentifier: (String) -> [String]? = registeredPaths
+  ) -> ApplicationRegistrationObservation {
+    let status = readIndexingStatus()
+    let indexed = status == "enabled" ? readSpotlight() : ApplicationRegistrationObservation(paths: [], complete: false)
+    let source: String
+    let observed: ApplicationRegistrationObservation
+    if status == "enabled", indexed.complete {
+      source = "public-spotlight"
+      observed = indexed
+    } else {
+      let fallback = readDump()
+      source = fallback.complete ? "launch-services-dump" : "unavailable"
+      observed = fallback
+    }
+    var paths = Set(observed.paths)
+    var complete = observed.complete
+    var identifiers: Set<String> = []
+    for path in observed.paths {
+      let metadata = ApplicationMetadataObservation.read(at: path)
+      if case .declaredID(let identifier) = metadata.state, RelatedDataService.validBundleID(identifier) {
+        identifiers.insert(identifier)
+      }
+    }
+    for identifier in identifiers {
+      guard let registered = byIdentifier(identifier) else {
+        complete = false
+        continue
+      }
+      for path in registered {
+        guard (try? DescriptorFileSystem.validatedComponents(path)) != nil, hasApplicationSuffix(path) else {
+          complete = false
+          continue
+        }
+        if !isTrash(path) { paths.insert(path) }
+      }
+    }
+    return ApplicationRegistrationObservation(
+      paths: paths.sorted(), complete: complete,
+      report: ApplicationRegistrationReport(
+        source: complete ? source : "unavailable", leadCount: paths.count, complete: complete,
+        gatheringCompleted: status == "enabled" && indexed.complete, bootIndexingStatus: status,
+        externalVolumesUnchecked: true))
+  }
+
+  /// Executes only fixed read-only registry/status queries with bounded output.
+  private static func query(executable: String, arguments: [String], timeout: TimeInterval, maximumBytes: Int) -> Data?
+  {
+    guard !Thread.isMainThread,
+      executable == "/usr/bin/mdutil" && arguments == ["-s", "/"]
+        || executable == Self.executable && arguments == ["-dump"]
+    else { return nil }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
-    process.arguments = ["-dump"]
-    var environment = ProcessInfo.processInfo.environment
-    environment["LC_ALL"] = "C"
-    environment["LANG"] = "C"
-    process.environment = environment
+    process.arguments = arguments
+    process.environment = ["LC_ALL": "C", "LANG": "C", "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
     let pipe = Pipe()
     process.standardOutput = pipe
     process.standardError = FileHandle.nullDevice
     let fd = pipe.fileHandleForReading.fileDescriptor
-    guard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0 else {
-      return ApplicationRegistrationObservation(paths: [], complete: false)
-    }
-    do { try process.run() } catch { return ApplicationRegistrationObservation(paths: [], complete: false) }
+    guard fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0 else { return nil }
+    do { try process.run() } catch { return nil }
     try? pipe.fileHandleForWriting.close()
     defer {
       if process.isRunning {
@@ -115,24 +233,19 @@ enum ApplicationRegistration {
     while !Task.isCancelled, ProcessInfo.processInfo.systemUptime < deadline {
       let count = read(fd, &bytes, bytes.count)
       if count > 0 {
-        guard output.count + count <= maximumBytes else {
-          return ApplicationRegistrationObservation(paths: [], complete: false)
-        }
+        guard output.count + count <= maximumBytes else { return nil }
         output.append(contentsOf: bytes.prefix(count))
       } else if count == 0 {
         guard !process.isRunning else { continue }
         process.waitUntilExit()
-        guard process.terminationStatus == 0, let text = String(data: output, encoding: .utf8) else {
-          return ApplicationRegistrationObservation(paths: [], complete: false)
-        }
-        return parseDump(text)
+        return process.terminationStatus == 0 ? output : nil
       } else if errno != EAGAIN && errno != EINTR {
-        return ApplicationRegistrationObservation(paths: [], complete: false)
+        return nil
       } else {
         var descriptor = pollfd(fd: fd, events: Int16(POLLIN | POLLHUP), revents: 0)
         _ = poll(&descriptor, 1, 25)
       }
     }
-    return ApplicationRegistrationObservation(paths: [], complete: false)
+    return nil
   }
 }

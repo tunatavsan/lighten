@@ -61,6 +61,7 @@ final class AppsStore {
   var measuringPaths: Set<String> = []
   var measuredCount = 0
   var inventoryComplete = false
+  private(set) var externalVolumesUnchecked = false
   var scannedAt: Date?
   var busy = false
   var preparing = false
@@ -84,6 +85,13 @@ final class AppsStore {
   var message: String?
   var presentedPlanID: UUID?
   var orphanCandidates: [RelatedDataCandidate] = []
+  struct RetainedAppData {
+    let appPath: String
+    var rejection: PlanRejection?
+    var result: ItemActionResult?
+    var wasSelected: Bool
+  }
+  private(set) var retainedAppData: [String: RetainedAppData] = [:]
   var selectedOrphanPaths: Set<String> = []
   var dropping = false
   @ObservationIgnored private var dropGeneration = UUID()
@@ -95,6 +103,7 @@ final class AppsStore {
     let isLink: Bool
     let outcome: ActionOutcome
     let detail: String?
+    let mutationStage: ActionMutationStage?
   }
   private(set) var packageItemResults: [PackageItemResult] = []
   private(set) var ownershipRefusalEvidence: [RelatedOwnershipRefusalEvidence] = []
@@ -106,6 +115,9 @@ final class AppsStore {
   @ObservationIgnored private let uninstallPlanBuilder: AvailableUninstallPlanBuilder
   @ObservationIgnored private let explicitUninstallPlanBuilder: ExplicitUninstallPlanBuilder
   @ObservationIgnored private let orphanPlanBuilder: @Sendable ([RelatedDataCandidate]) async throws -> ActionPlan
+  typealias RemainingDataPlanBuilder =
+    @Sendable ([RelatedDataCandidate]) async -> RelatedDataService.AvailableUninstallPlan
+  @ObservationIgnored private let remainingDataPlanBuilder: RemainingDataPlanBuilder
   @ObservationIgnored private let droppedReport: @Sendable (String) async -> ApplicationReport?
 
   init(
@@ -122,6 +134,7 @@ final class AppsStore {
       guard let first = plans.first else { throw PlanFailure.emptySelection }
       return ActionPlan(snapshotRunID: first.snapshotRunID, kind: .trash, items: plans.flatMap(\.items))
     },
+    remainingDataPlanBuilder: RemainingDataPlanBuilder? = nil,
     droppedReport: @escaping @Sendable (String) async -> ApplicationReport? = {
       await ApplicationDiscovery(related: .system).report(path: $0)
     },
@@ -155,6 +168,10 @@ final class AppsStore {
     self.running = running
     self.events = events
     self.orphanPlanBuilder = orphanPlanBuilder
+    self.remainingDataPlanBuilder =
+      remainingDataPlanBuilder ?? { candidates in
+        await relatedService.makeAvailableRemainingDataPlan(selected: candidates)
+      }
     self.droppedReport = droppedReport
     let standardBuilder: AvailableUninstallPlanBuilder =
       availableUninstallPlanBuilder ?? { report, candidates, includePackage in
@@ -245,10 +262,12 @@ final class AppsStore {
     busy = true
     reports = []
     orphanCandidates = []
+    retainedAppData = [:]
     selectedOrphanPaths = []
     measuringPaths = []
     measuredCount = 0
     inventoryComplete = false
+    externalVolumesUnchecked = false
     selectedPath = nil
     packageSelected = false
     selectedDataPaths = []
@@ -269,7 +288,8 @@ final class AppsStore {
           switch event {
           case .session(let session):
             self.session = session
-          case .inventory(_, let metadata):
+          case .inventory(let inventory, let metadata):
+            self.externalVolumesUnchecked = inventory.registrationReport?.externalVolumesUnchecked ?? false
             self.reports = metadata.filter { !self.displayRemoved($0) }
             self.measuringPaths = Set(metadata.map(\.path))
             self.inventoryPublishedAt = .now
@@ -279,6 +299,8 @@ final class AppsStore {
             self.publishRelated(path: path, candidates: candidates, ownershipPending: ownershipPending)
           case .ownershipReady(let inventory):
             self.inventoryComplete = inventory.complete
+            self.externalVolumesUnchecked =
+              inventory.registrationReport?.externalVolumesUnchecked ?? self.externalVolumesUnchecked
           case .measured(let batch):
             for report in batch {
               if let index = self.reports.firstIndex(where: { $0.path == report.path }) {
@@ -288,7 +310,7 @@ final class AppsStore {
               }
             }
           case .orphans(let candidates):
-            self.orphanCandidates = candidates.filter { !self.displayRemoved($0) }
+            self.publishOrphans(candidates)
           case .completed(let inventory, let reports):
             self.reports = reports.filter { !self.displayRemoved($0) }.map { report in
               self.reports.first(where: { $0.path == report.path }).map {
@@ -299,6 +321,8 @@ final class AppsStore {
             self.measuringPaths = []
             self.measuredCount = reports.count
             self.inventoryComplete = inventory.complete
+            self.externalVolumesUnchecked =
+              inventory.registrationReport?.externalVolumesUnchecked ?? self.externalVolumesUnchecked
             self.scannedAt = Date()
             self.pictureRows = []
             self.pictureObservedAt = nil
@@ -475,6 +499,7 @@ final class AppsStore {
       message = String(localized: "The application changed. Refresh Apps before reviewing it.")
       return
     }
+    externalVolumesUnchecked = review.registrationReport?.externalVolumesUnchecked ?? externalVolumesUnchecked
     publishRelated(
       path: path, candidates: review.candidates, ownershipPending: review.ownershipPending)
     if let index = reports.firstIndex(where: { $0.path == path }) {
@@ -546,7 +571,7 @@ final class AppsStore {
       selectedDataPaths.formUnion(
         report.related.filter {
           $0.classification != .unprovenNameOnly && $0.provenance?.kind != .configuredDirectory
-            && $0.defaultSelected && canSelect($0, app: report)
+            && $0.automaticSelectionAllowed && $0.defaultSelected && canSelect($0, app: report)
         }.map(\.path))
     }
   }
@@ -655,14 +680,38 @@ final class AppsStore {
       path: candidate.path, identity: candidate.snapshot?.entries.first { $0.path == candidate.path }?.identity)
   }
 
+  func publishOrphans(_ candidates: [RelatedDataCandidate]) {
+    let retained = orphanCandidates.filter { retainedAppData[$0.path] != nil && !displayRemoved($0) }
+    let retainedPaths = Set(retained.map(\.path))
+    orphanCandidates = candidates.filter { !displayRemoved($0) && !retainedPaths.contains($0.path) } + retained
+  }
+
+  private func retainRelatedData(from reports: [ApplicationReport], moved: Set<String>) {
+    for report in reports {
+      for candidate in report.related where !moved.contains(candidate.path) {
+        if !orphanCandidates.contains(where: { $0.path == candidate.path }) { orphanCandidates.append(candidate) }
+        if retainedAppData[candidate.path] == nil {
+          retainedAppData[candidate.path] = RetainedAppData(
+            appPath: report.path, wasSelected: selectedDataPaths.contains(candidate.path))
+        }
+      }
+    }
+  }
+
   func applyDisplayChange(_ change: ActionDisplayChange) {
+    let moved = Set(change.items.map(\.path))
     for item in change.items {
       switch change.kind {
       case .applied:
         displayChanges[item.itemID] = item
-        let matched = reports.filter { report in
+        let physicalMatches = reports.filter { report in
           item.matches(path: report.linkTarget ?? report.path, identity: report.displayRootIdentity)
         }
+        let matched = physicalMatches.filter { $0.linkTarget == nil || moved.contains($0.path) }
+        for report in physicalMatches where !matched.contains(where: { $0.path == report.path }) {
+          incompletePackagePaths.insert(report.path)
+        }
+        retainRelatedData(from: matched, moved: moved)
         removedReports[item.itemID] = matched
         reports.removeAll { report in matched.contains { $0.path == report.path } }
         var data: [String: [RelatedDataCandidate]] = [:]
@@ -693,6 +742,11 @@ final class AppsStore {
         displayChanges.removeValue(forKey: item.itemID)
         for report in removedReports.removeValue(forKey: item.itemID) ?? [] {
           removedPaths.remove(report.path)
+          incompletePackagePaths.remove(report.path)
+          let retained = Set(report.related.map(\.path).filter { retainedAppData[$0]?.appPath == report.path })
+          orphanCandidates.removeAll { retained.contains($0.path) }
+          for path in retained { retainedAppData.removeValue(forKey: path) }
+          selectedOrphanPaths.subtract(retained)
           if !reports.contains(where: { $0.path == report.path }) { reports.append(report) }
         }
         for (path, candidates) in removedData.removeValue(forKey: item.itemID) ?? [:] {
@@ -725,7 +779,8 @@ final class AppsStore {
       guard let outcome = results[item.id] else { return nil }
       return PackageItemResult(
         id: item.id, sourcePath: item.sourcePath,
-        isLink: item.policy == .applicationLink, outcome: outcome.outcome, detail: outcome.detail)
+        isLink: item.policy == .applicationLink, outcome: outcome.outcome, detail: outcome.detail,
+        mutationStage: outcome.mutationStage)
     }
     var removedApplications: Set<String> = []
     for (path, pair) in presentedPackages {
@@ -740,11 +795,14 @@ final class AppsStore {
     }
     let removedRows = moved.subtracting(presentedPackages.keys).union(removedApplications)
     removedPaths.formUnion(moved.subtracting(incompletePackagePaths).union(removedApplications))
-    let retainedData = reports.filter { removedRows.contains($0.path) }.flatMap { report in
-      report.related.filter { !moved.contains($0.path) }
-    }
-    orphanCandidates += retainedData.filter { candidate in
-      !orphanCandidates.contains { $0.path == candidate.path }
+    retainRelatedData(from: reports.filter { removedRows.contains($0.path) }, moved: moved)
+    for path in retainedAppData.keys {
+      guard var retained = retainedAppData[path] else { continue }
+      if let rejection = actions.resultRejections.first(where: { $0.path == path }) { retained.rejection = rejection }
+      if let result = presentedPaths.first(where: { $0.value == path }).flatMap({ results[$0.key] }) {
+        retained.result = result
+      }
+      retainedAppData[path] = retained
     }
     reports = reports.filter { !removedRows.contains($0.path) }.map { report in
       var refreshed = report
@@ -752,6 +810,7 @@ final class AppsStore {
       return refreshed
     }
     orphanCandidates.removeAll { moved.contains($0.path) }
+    for path in moved { retainedAppData.removeValue(forKey: path) }
     selectedDataPaths.subtract(moved)
     selectedOrphanPaths.subtract(moved)
     if !removedApplications.isEmpty { packageSelected = false }
@@ -783,10 +842,10 @@ final class AppsStore {
     case .teamIdentifier: String(localized: "Evidence: signing team identifier")
     case .electron: String(localized: "Evidence: Electron package settings and data structure")
     case .mozilla: String(localized: "Evidence: Mozilla package settings and profile structure")
-    case .installerReceipt: String(localized: "Evidence: installer receipt")
+    case .installerReceipt: String(localized: "Evidence: app installation record")
     case .launchService: String(localized: "Evidence: launch service points into this app")
     case .configuredDirectory: String(localized: "Evidence: directory named in this app’s settings")
-    case .vendorDirectory: String(localized: "Evidence: this app’s exclusive vendor directory")
+    case .vendorDirectory: String(localized: "Evidence: app vendor data folder")
     case .liveProcess: String(localized: "Evidence: this app’s open files or working directory")
     case .explicitUserChoice: String(localized: "Your explicit choice · ownership remains unproven")
     }
@@ -803,9 +862,51 @@ final class AppsStore {
     return original.path == current.path && oldRoot == newRoot
   }
 
+  func retainedReason(_ candidate: RelatedDataCandidate, turkish: Bool? = nil) -> FailurePresentation? {
+    guard let retained = retainedAppData[candidate.path] else { return nil }
+    let prefix: String
+    let cause: FailurePresentation
+    if let result = retained.result {
+      prefix =
+        FailureText.executionIsUnverified(result)
+        ? FailureText.retainedPrefix("review", turkish: turkish)
+        : FailureText.retainedPrefix("notMoved", turkish: turkish)
+      if FailureText.executionIsUnverified(result) {
+        let copy = FailureText.executionPresentation(result, turkish: turkish)
+        return FailurePresentation(
+          reasons: [prefix] + copy.reasons, nextStep: copy.nextStep, unknownCodes: copy.unknownCodes)
+      }
+      cause =
+        result.detail.map { FailureText.presentation($0, turkish: turkish) }
+        ?? FailureText.presentation(result.outcome == .skipped ? "skipped" : "notAttempted", turkish: turkish)
+    } else if let rejection = retained.rejection {
+      prefix = FailureText.retainedPrefix("refused", turkish: turkish)
+      cause = FailureText.presentation(rejection, turkish: turkish)
+    } else {
+      prefix = FailureText.retainedPrefix("notSelected", turkish: turkish)
+      cause = FailureText.candidate(candidate, turkish: turkish)
+    }
+    return FailurePresentation(
+      reasons: [prefix] + cause.reasons, nextStep: cause.nextStep, unknownCodes: cause.unknownCodes)
+  }
+
+  func canSelectOrphan(_ candidate: RelatedDataCandidate) -> Bool {
+    guard !busy, !needsRescan, !dropping, pictureRows.isEmpty else { return false }
+    guard candidate.refusalEvidence.isEmpty,
+      !ownershipRefusalEvidence.contains(where: { $0.candidatePath == candidate.path })
+    else { return false }
+    if retainedAppData[candidate.path] != nil {
+      let manual =
+        candidate.classification == .unprovenNameOnly && candidate.reason == .nameOnly
+        && candidate.explicitManualChoiceAvailable && candidate.snapshot?.entries.first?.identity != nil
+      return candidate.canSelect || manual
+    }
+    return candidate.canSelect && candidate.classification != .installed
+  }
+
   func toggleOrphan(_ path: String, actions: ActionStore) {
     guard !busy, !needsRescan, !dropping, pictureRows.isEmpty,
-      orphanCandidates.contains(where: { $0.path == path && $0.canSelect && $0.classification != .installed })
+      orphanCandidates.contains(where: { $0.path == path && canSelectOrphan($0) })
     else { return }
     invalidatePreparation(actions: actions)
     if selectedOrphanPaths.contains(path) { selectedOrphanPaths.remove(path) } else { selectedOrphanPaths.insert(path) }
@@ -814,15 +915,18 @@ final class AppsStore {
   func prepareOrphans(actions: ActionStore) async {
     guard !busy, !preparing, !needsRescan, !actions.busy, pictureRows.isEmpty else { return }
     let candidates = orphanCandidates.filter {
-      selectedOrphanPaths.contains($0.path) && $0.canSelect && $0.classification != .installed
+      selectedOrphanPaths.contains($0.path) && canSelectOrphan($0)
     }
     guard !candidates.isEmpty else { return }
     let paths = selectedOrphanPaths
     let builder = orphanPlanBuilder
+    let remainingBuilder = remainingDataPlanBuilder
+    let hasRetained = candidates.contains { retainedAppData[$0.path] != nil }
     await prepare(
       actions: actions, stillSelected: { self.selectedOrphanPaths == paths },
       builder: {
-        RelatedDataService.AvailableUninstallPlan(plan: try await builder(candidates), rejections: [])
+        if hasRetained { return await remainingBuilder(candidates) }
+        return RelatedDataService.AvailableUninstallPlan(plan: try await builder(candidates), rejections: [])
       })
   }
 
@@ -876,7 +980,7 @@ final class AppsStore {
       selectedDataPaths = Set(
         report.related.filter {
           $0.classification != .unprovenNameOnly && $0.provenance?.kind != .configuredDirectory
-            && $0.defaultSelected && canSelect($0, app: report)
+            && $0.automaticSelectionAllowed && $0.defaultSelected && canSelect($0, app: report)
         }.map(\.path))
       await prepareSelectedData(actions: actions)
       return
@@ -1065,17 +1169,9 @@ final class AppsStore {
   }
 
   private static func refusalText(_ rejection: PlanRejection) -> String {
-    guard let code = rejection.ruleID else { return SpaceText.rejection(rejection) }
-    switch code {
-    case "ios-wrapper":
-      return String(localized: "This iPhone or iPad application cannot be removed here. Use Show in Finder.")
-        + " — " + rejection.path
-    case "incompleteInventory", "invalidReceipt", "ownerPresent", "changedItem", "runningOrUnknown",
-      "ambiguousOwner", "unsupportedInstalledData":
-      return FailureText.describe(code) + " — " + rejection.path
-    default: return SpaceText.rejection(rejection)
-    }
+    SpaceText.rejection(rejection)
   }
+
 }
 
 extension Array where Element == RelatedDataCandidate {

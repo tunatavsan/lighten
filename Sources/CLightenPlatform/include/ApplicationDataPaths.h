@@ -1,5 +1,6 @@
 #ifndef LIGHTEN_APPLICATION_DATA_PATHS_H
 #define LIGHTEN_APPLICATION_DATA_PATHS_H
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct {
@@ -14,9 +15,29 @@ typedef struct {
   char data_path[4096];
 } LightenApplicationDataPath;
 
-// One bounded current-UID census. Records are emitted only after the PID,
-// executable, UID and start time remain equal across its fd/cwd reads.
-// 0: complete census; -1: unavailable/truncated (records remain observations).
-int lighten_read_application_data_paths(LightenApplicationDataPath *records,
-                                       int32_t capacity, int32_t *count);
+enum {
+  LIGHTEN_CENSUS_UNAVAILABLE = 1,
+  LIGHTEN_CENSUS_MEMORY_LIMIT = 2,
+  LIGHTEN_CENSUS_TIME_LIMIT = 4,
+  LIGHTEN_CENSUS_PROCESS_CHANGED = 8
+};
+
+typedef struct {
+  uint32_t processes_inspected;
+  uint32_t application_processes;
+  uint64_t descriptors_inspected;
+  uint32_t failure_flags;
+  uint64_t elapsed_milliseconds;
+} LightenApplicationDataCensus;
+
+// One current-UID census with growing record and fd buffers, bounded by the
+// caller's record-memory and runtime limits. PID/fd scratch space is at most
+// 17 MiB. A limit or unreadable process always makes the census incomplete.
+// Records are emitted only after PID, executable, UID and start time remain
+// equal across its fd/cwd reads. Free records with the matching function.
+// 0: complete; -1: incomplete (returned records remain observations).
+int lighten_copy_application_data_paths(size_t maximum_bytes, uint32_t timeout_milliseconds,
+                                       LightenApplicationDataPath **records, uint32_t *count,
+                                       LightenApplicationDataCensus *census);
+void lighten_free_application_data_paths(LightenApplicationDataPath *records);
 #endif

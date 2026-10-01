@@ -16,6 +16,9 @@ final class RealUseSurvey {
     let candidateClassification: String?
     let candidateReason: String?
     let provenanceKind: String?
+    let evidenceKinds: [String]
+    let automaticSelectionAllowed: Bool?
+    let defaultSelected: Bool?
     var outcome = "pending"
   }
 
@@ -41,6 +44,11 @@ final class RealUseSurvey {
   private var listingComplete = false
   private var ownershipComplete = false
   private var metadataIssueCount = 0
+  private var liveDataCensus: ApplicationLiveDataCensusReport?
+  private var registrationReport: ApplicationRegistrationReport?
+  private var knownUniverseApplicationCount: Int?
+  private var registrationReported = false
+  private var unsafeAutomaticSelections: [String: [String: Any]] = [:]
   private var unattributedRejectionCount = 0
   private var unattributedErrorCount = 0
   private var foldersComplete = true
@@ -77,8 +85,7 @@ final class RealUseSurvey {
     }
     defer { watchdog.cancel() }
     await survey.observe()
-    survey.finish(timedOut: false)
-    return 0
+    return survey.finish(timedOut: false)
   }
 
   private init(
@@ -100,6 +107,15 @@ final class RealUseSurvey {
       "configuredScanWorkers": workers,
       "receiptWrites": false, "planExecution": false, "environmentStart": environment.json,
     ])
+    if scope != "space" {
+      stage = "native-live-data-census"
+      let census = await Self.observeLiveDataCensus()
+      liveDataCensus = census
+      var row = Self.censusDetails(census)
+      row["type"] = "liveDataCensusObservation"
+      row["dataSource"] = "standalone native current-user census; not action authority"
+      line(row)
+    }
     if scope != "apps" { await observeFolders() }
     if scope != "space" { await observeApplications() }
   }
@@ -202,6 +218,9 @@ final class RealUseSurvey {
         reports = current
         listingComplete = inventory.complete
         ownershipComplete = inventory.ownershipComplete
+        registrationReport = inventory.registrationReport
+        knownUniverseApplicationCount = inventory.applications.count
+        if case .completed = event { reportRegistration() }
         registerScopeExclusions(inventory.scopeExclusions)
         observedApplications = Set(current.map(\.path)).count
         if case .completed = event { discoveryComplete = true }
@@ -209,6 +228,9 @@ final class RealUseSurvey {
       case .ownershipReady(let inventory):
         listingComplete = inventory.complete
         ownershipComplete = inventory.ownershipComplete
+        registrationReport = inventory.registrationReport
+        knownUniverseApplicationCount = inventory.applications.count
+        reportRegistration()
         registerScopeExclusions(inventory.scopeExclusions)
         for issue in inventory.ownershipIssues {
           line([
@@ -254,10 +276,11 @@ final class RealUseSurvey {
       progress(path: report.path)
       let start = ContinuousClock.now
       activePlanStarted = start
-      // Name-only candidates are observations, never automatic uninstall selections.
-      let automaticRelated = report.related.filter { $0.classification != .unprovenNameOnly }
+      // These explicit dry-plan probes are separate from UI automatic selection.
+      // Name-only observations require a user's choice and are never probed here.
+      let observedRelated = report.related.filter { $0.classification != .unprovenNameOnly }
       let outcome = await session.makeAvailableUninstallPlan(
-        path: report.path, expectedBundleID: report.bundleID, selectedRelated: automaticRelated, includePackage: true)
+        path: report.path, expectedBundleID: report.bundleID, selectedRelated: observedRelated, includePackage: true)
       let planning = elapsed(start)
       planSeconds += planning
       appPlanTimes.append(planning)
@@ -489,13 +512,17 @@ final class RealUseSurvey {
   }
 
   private static func candidateDetails(_ candidate: RelatedDataCandidate) -> [String: Any] {
-    [
+    let kinds = candidate.evidenceKinds.isEmpty ? candidate.provenance.map { [$0.kind] } ?? [] : candidate.evidenceKinds
+    return [
       "classification": candidate.classification.rawValue,
       "candidateReason": candidate.reason.rawValue,
       "candidateName": URL(fileURLWithPath: candidate.path).lastPathComponent,
       "canSelectObservation": candidate.canSelect,
       "explicitManualChoiceAvailableObservation": candidate.explicitManualChoiceAvailable,
       "defaultSelectedObservation": candidate.defaultSelected,
+      "defaultSelected": candidate.defaultSelected,
+      "automaticSelectionAllowed": candidate.automaticSelectionAllowed,
+      "evidenceKinds": kinds.map(\.rawValue),
       "matchStrength": candidate.matchStrength.rawValue,
       "bundleID": candidate.bundleID as Any? ?? NSNull(),
       "provenanceKind": candidate.provenance?.kind.rawValue as Any? ?? NSNull(),
@@ -507,6 +534,59 @@ final class RealUseSurvey {
 
   private static func covers(root: String, path: String) -> Bool {
     path == root || path.hasPrefix(root + "/")
+  }
+
+  @concurrent private static func observeLiveDataCensus() async -> ApplicationLiveDataCensusReport {
+    ApplicationLiveDataCensus.observe()
+  }
+
+  private static func censusDetails(_ report: ApplicationLiveDataCensusReport) -> [String: Any] {
+    [
+      "complete": report.complete, "recordCount": report.recordCount,
+      "processesInspected": report.processesInspected, "applicationProcesses": report.applicationProcesses,
+      "descriptorsInspected": report.descriptorsInspected, "failureFlags": report.failureFlags,
+      "incompleteReasons": report.incompleteReasons, "timedOut": report.timedOut,
+      "elapsedMilliseconds": report.elapsedMilliseconds,
+    ]
+  }
+
+  private func reportRegistration() {
+    guard !registrationReported, let report = registrationReport else { return }
+    registrationReported = true
+    var row = Self.registrationDetails(report)
+    row["type"] = "registeredUniverseObservation"
+    row["inventoryApplicationCount"] = knownUniverseApplicationCount as Any? ?? NSNull()
+    row["dataSource"] = "application discovery inventory; native verification follows discovery leads"
+    line(row)
+  }
+
+  private static func registrationDetails(_ report: ApplicationRegistrationReport) -> [String: Any] {
+    [
+      "source": report.source, "leadCount": report.leadCount, "complete": report.complete,
+      "gatheringCompleted": report.gatheringCompleted, "bootIndexingStatus": report.bootIndexingStatus,
+      "externalVolumesUnchecked": report.externalVolumesUnchecked,
+    ]
+  }
+
+  private func unsafeAutomaticSelection(path: String, extra: [String: Any]) -> Bool {
+    let automatic = extra["automaticSelectionAllowed"] as? Bool == true
+    let selected = extra["defaultSelected"] as? Bool == true
+    let kinds = extra["evidenceKinds"] as? [String] ?? []
+    let transient = [
+      RelatedDataProvenanceKind.liveProcess.rawValue, RelatedDataProvenanceKind.vendorDirectory.rawValue,
+    ]
+    let soleTransient = !kinds.isEmpty && kinds.allSatisfy { transient.contains($0) }
+    let allowedAreas = [
+      "Application Support", "Caches", "Containers", "Group Containers", "Preferences", "Logs",
+      "Saved Application State", "WebKit", "HTTPStorages", "Cookies",
+    ].map { home + "/Library/" + $0 }
+    let comparablePath =
+      path.hasPrefix("/System/Volumes/Data/") && !home.hasPrefix("/System/Volumes/Data/")
+      ? String(path.dropFirst("/System/Volumes/Data".count)) : path
+    let liveOutsideLibrary =
+      kinds.contains(RelatedDataProvenanceKind.liveProcess.rawValue)
+      && !allowedAreas.contains { Self.covers(root: $0, path: comparablePath) }
+    return (selected && !automatic) || ((automatic || selected) && (soleTransient || liveOutsideLibrary))
   }
 
   private static func observation(_ candidate: RelatedDataCandidate) -> (ByteAggregate?, ByteAggregate?) {
@@ -559,12 +639,23 @@ final class RealUseSurvey {
   ) {
     let id = scope + ":" + (owner ?? "") + ":" + path
     let previous = targets[id]
+    if unsafeAutomaticSelection(path: path, extra: extra) {
+      unsafeAutomaticSelections[id] = [
+        "id": id, "path": path, "scope": scope, "ownerApplicationPath": owner as Any? ?? NSNull(),
+        "evidenceKinds": extra["evidenceKinds"] as Any? ?? NSNull(),
+        "automaticSelectionAllowed": extra["automaticSelectionAllowed"] as Any? ?? NSNull(),
+        "defaultSelected": extra["defaultSelected"] as Any? ?? NSNull(),
+      ]
+    }
     targets[id] = Target(
       id: id, path: path, scope: scope, owner: owner,
       logical: logical, allocated: allocated,
       candidateClassification: extra["classification"] as? String,
       candidateReason: extra["candidateReason"] as? String,
       provenanceKind: extra["provenanceKind"] as? String,
+      evidenceKinds: extra["evidenceKinds"] as? [String] ?? [],
+      automaticSelectionAllowed: extra["automaticSelectionAllowed"] as? Bool,
+      defaultSelected: extra["defaultSelected"] as? Bool,
       outcome: previous?.outcome ?? "pending")
     var row = extra
     row["type"] = previous == nil ? "observation" : "observationUpdate"
@@ -595,11 +686,16 @@ final class RealUseSurvey {
       ? "errorRefusal"
       : nameOnlyObservation ? "unprovenNameOnly" : Self.resultOutcome(planned: planned, refusals: refusalRows)
     for veto in relevantEvidence where veto.reason == .unknownMetadata {
+      let unavailableRegistration =
+        extra["candidateReason"] as? String == RelatedReason.registrationUnavailable.rawValue
+        && registrationReport?.complete == false && veto.detail == RelatedReason.registrationUnavailable.rawValue
       line([
         "type": "ownershipVeto", "candidatePath": veto.candidatePath,
         "bundleID": veto.bundleID as Any? ?? NSNull(), "unknownOwnerPaths": veto.ownerPaths,
         "reason": veto.reason.rawValue, "detail": veto.detail as Any? ?? NSNull(),
-        "nextStep": veto.nextStep, "freshPlanEvidence": true, "classification": "ERROR",
+        "nextStep": veto.nextStep, "freshPlanEvidence": true,
+        "classification": unavailableRegistration ? "legitimate" : "ERROR",
+        "legitimateCategory": unavailableRegistration ? "registrationUniverseUnavailable" as Any : NSNull(),
       ])
     }
     targets[id]?.outcome = outcome
@@ -689,6 +785,11 @@ final class RealUseSurvey {
     let sharedOwners = matchingEvidence.first {
       $0.reason == .sharedInstalledOwners && Set($0.ownerPaths).count >= 2
     }
+    let registrationUnavailable =
+      named == RelatedReason.registrationUnavailable.rawValue && registrationReport?.complete == false
+      && targets.values.contains {
+        $0.path == rejection.path && $0.candidateReason == RelatedReason.registrationUnavailable.rawValue
+      }
     switch rejection.reason {
     case .protectedItem, .containsProtectedItem: legit = neverRule != nil
     case .lightenItself: legit = true
@@ -698,8 +799,9 @@ final class RealUseSurvey {
       legit = code.map { $0 > 0 } ?? false
     case .unavailable:
       legit =
-        named == "ambiguousOwner" && sharedOwners != nil
-        && !matchingEvidence.contains { $0.reason == .unknownMetadata || $0.reason == .infoAbsenceChanged }
+        registrationUnavailable
+        || (named == "ambiguousOwner" && sharedOwners != nil
+          && !matchingEvidence.contains { $0.reason == .unknownMetadata || $0.reason == .infoAbsenceChanged })
     default: legit = false
     }
     return [
@@ -715,13 +817,14 @@ final class RealUseSurvey {
       "classification": legit ? "legitimate" : "ERROR",
       "ownershipRefusalEvidence": matchingEvidence.map { Self.ownershipEvidence($0, fresh: true) },
       "legitimateCategory": legit && rejection.reason == .unavailable && sharedOwners != nil
-        ? "sharedInstalledOwners" as Any : NSNull(),
+        ? "sharedInstalledOwners" as Any
+        : registrationUnavailable ? "registrationUniverseUnavailable" as Any : NSNull(),
       "appleSystemPath": rejection.path.hasPrefix("/System/"),
     ]
   }
 
-  private func finish(timedOut: Bool) {
-    guard !finished else { return }
+  @discardableResult private func finish(timedOut: Bool) -> Int32 {
+    guard !finished else { return 2 }
     finished = true
     let observed = Array(targets.values)
     let requested = observed.filter { $0.scope != "simulatorOutOfScope" }
@@ -732,13 +835,28 @@ final class RealUseSurvey {
       scope == "space"
       || (discoveryComplete && discoveryStarted == nil && listingComplete && ownershipComplete)
     let coverage = folderCoverage && applicationCoverage
-    let completed = !timedOut && pending == 0 && coverage
+    let censusComplete = scope == "space" || liveDataCensus?.complete == true
+    let completed = !timedOut && pending == 0 && coverage && censusComplete
+    let errorRefusals = requested.filter { $0.outcome == "errorRefusal" }
+    let accepted =
+      completed && errorRefusals.isEmpty && unattributedErrorCount == 0 && unsafeAutomaticSelections.isEmpty
+    var acceptanceFailures: [String] = []
+    if timedOut { acceptanceFailures.append("survey-timed-out") }
+    if pending > 0 { acceptanceFailures.append("requested-items-unfinished") }
+    if !folderCoverage { acceptanceFailures.append("folder-coverage-incomplete") }
+    if !applicationCoverage { acceptanceFailures.append("application-coverage-incomplete") }
+    if !censusComplete { acceptanceFailures.append("native-live-data-census-incomplete-or-unmeasured") }
+    if !errorRefusals.isEmpty { acceptanceFailures.append("observed-error-refusals") }
+    if unattributedErrorCount > 0 { acceptanceFailures.append("unattributed-plan-errors") }
+    if !unsafeAutomaticSelections.isEmpty { acceptanceFailures.append("unsafe-automatic-selection") }
     for target in requested.filter({ $0.outcome == "pending" }).sorted(by: { $0.id < $1.id }) {
       line([
         "type": "unfinished", "id": target.id, "path": target.path, "scope": target.scope,
         "ownerApplicationPath": target.owner as Any? ?? NSNull(), "outcome": "pending",
         "planBuilderSeconds": NSNull(), "extraValidationSeconds": NSNull(),
         "bytes": bytes(target.logical, target.allocated), "timedOut": timedOut,
+        "automaticSelectionAllowed": target.automaticSelectionAllowed as Any? ?? NSNull(),
+        "defaultSelected": target.defaultSelected as Any? ?? NSNull(), "evidenceKinds": target.evidenceKinds,
       ])
     }
     let after = BenchEnvironment.now()
@@ -773,12 +891,27 @@ final class RealUseSurvey {
         "ownerApplicationPath": target.owner as Any? ?? NSNull(), "outcome": target.outcome,
         "candidateReason": target.candidateReason as Any? ?? NSNull(),
         "provenanceKind": target.provenanceKind as Any? ?? NSNull(),
+        "automaticSelectionAllowed": target.automaticSelectionAllowed as Any? ?? NSNull(),
+        "defaultSelected": target.defaultSelected as Any? ?? NSNull(), "evidenceKinds": target.evidenceKinds,
         "bytes": bytes(target.logical, target.allocated),
         "includedInRequestedDenominator": true, "ownershipClaim": false,
       ]
     }
     line([
       "type": "summary", "schema": 1, "completed": completed,
+      "accepted": accepted, "exitCode": accepted ? 0 : 2,
+      "acceptanceFailures": acceptanceFailures,
+      "errorRefusalCount": errorRefusals.count,
+      "liveDataCensusMeasured": liveDataCensus != nil,
+      "liveDataCensusIncludedInAcceptance": scope != "space",
+      "liveDataCensus": liveDataCensus.map(Self.censusDetails) as Any? ?? NSNull(),
+      "registeredUniverseMeasured": registrationReport != nil,
+      "registeredUniverse": registrationReport.map(Self.registrationDetails) as Any? ?? NSNull(),
+      "knownUniverseInventoryApplicationCount": knownUniverseApplicationCount as Any? ?? NSNull(),
+      "unsafeAutomaticSelectionCount": unsafeAutomaticSelections.count,
+      "unsafeAutomaticSelections": unsafeAutomaticSelections.keys.sorted().compactMap { unsafeAutomaticSelections[$0] },
+      "automaticSelectionAccounting":
+        "candidate request rows; retains any unsafe observation, including updates; checks sole live/vendor evidence, live evidence outside standard user Library areas, and default selection without automatic permission",
       "metadataIssueCount": metadataIssueCount,
       "timedOut": timedOut, "truncated": !completed, "coverageComplete": coverage, "stage": stage,
       "elapsedSeconds": elapsed(started),
@@ -827,6 +960,7 @@ final class RealUseSurvey {
       "performanceMeasured": environment.quiet && after.quiet,
       "timings": "raw wall observations; no performance acceptance claim when load is busy",
     ])
+    return accepted ? 0 : 2
   }
 
   private func scopeSummary(_ rows: [Target], coverageComplete: Bool) -> [String: Any] {
@@ -853,6 +987,8 @@ final class RealUseSurvey {
     }
     return [
       "count": rows.count, "finishedCount": rows.filter { $0.outcome != "pending" }.count,
+      "automaticSelectionAllowedCount": rows.filter { $0.automaticSelectionAllowed == true }.count,
+      "defaultSelectedCount": rows.filter { $0.defaultSelected == true }.count,
       "pendingCount": rows.filter { $0.outcome == "pending" }.count,
       "requestedLogicalSumKnownLowerBound": sum(rows.compactMap { $0.logical?.knownLowerBound }),
       "requestedLogicalSumExact": exact as Any? ?? NSNull(),

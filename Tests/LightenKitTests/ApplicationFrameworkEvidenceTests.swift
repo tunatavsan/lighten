@@ -114,11 +114,12 @@ enum FrameworkArtifactMutation: String, CaseIterable, Sendable {
 @Suite("Package-derived framework data ownership")
 struct ApplicationFrameworkEvidenceTests {
   private func service(
-    _ fixture: FrameworkFixture, ownershipCollected: @escaping @Sendable () -> Void = {}
+    _ fixture: FrameworkFixture, ownershipCollected: @escaping @Sendable () -> Void = {},
+    signingMetadata: @escaping @Sendable (String) -> ApplicationSigningMetadata? = { _ in nil }
   ) -> RelatedDataService {
     RelatedDataService(
       homeDirectory: fixture.home, applicationRoots: [fixture.home + "/Applications"],
-      writeVerifiedReceipts: false, signingMetadata: { _ in nil },
+      writeVerifiedReceipts: false, signingMetadata: signingMetadata,
       packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
       ownershipCollected: ownershipCollected)
   }
@@ -309,6 +310,230 @@ struct ApplicationFrameworkEvidenceTests {
         dataPath: fixture.dataPath, excludingPackage: fixture.home + "/Other.app", applications: [app],
         home: fixture.home, observation: observation)
     }
+  }
+
+  @Test("A bounded census failure is unknown sharing, never an empty owner proof")
+  func incompleteLiveCensusRefusesSharing() throws {
+    let observed = ApplicationLiveDataObservation.observe(maximumBytes: 1)
+    #expect(!observed.complete && observed.records.isEmpty)
+    let report = try #require(observed.report)
+    #expect(report.incompleteReasons.contains("memory-limit"))
+    #expect(!report.complete && report.recordCount == 0)
+    #expect(throws: (any Error).self) {
+      try ApplicationAuxiliaryEvidenceProducer.liveSharedOwnerPaths(
+        dataPath: "/unobserved", excludingPackage: "/unobserved.app", applications: [], home: "/unobserved",
+        observation: observed)
+    }
+  }
+
+  @Test(
+    "A live vnode cannot claim personal folders or unrelated Library areas",
+    arguments: ["Documents", "Desktop", "Downloads", "Zotero", "Library/Mobile Documents", "Library/Developer"])
+  func livePersonalFolderExcluded(area: String) throws {
+    let fixture = try FrameworkFixture()
+    defer { fixture.cleanup() }
+    let executable = fixture.app + "/Contents/MacOS/helper"
+    let held = fixture.home + "/" + area + "/LightenQA-user/state"
+    try fixture.write(executable, "fixture executable")
+    try fixture.write(held, "fixture state")
+    let identity = try DescriptorFileSystem.identity(at: held)
+    let observed = ApplicationLiveDataObservation(
+      records: [
+        .init(
+          pid: 1, executable: executable, path: held, isCWD: false,
+          device: identity.device, inode: identity.inode)
+      ], complete: true)
+    let app = InstalledApplication(bundleID: fixture.bundleID, path: fixture.app, version: nil)
+    let discovery = ApplicationAuxiliaryEvidenceProducer.discover(
+      app: app, homeDirectory: fixture.home, live: observed)
+    #expect(!discovery.evidence.contains { $0.provenance.kind == .liveProcess })
+  }
+
+  @Test("Transient live and vendor proof alone never preselect data")
+  func transientEvidenceNeedsIndependentProof() {
+    let identity = FileIdentity(
+      device: 1, inode: 1, changeSeconds: 1, changeNanoseconds: 0, logicalBytes: 1,
+      allocatedBytes: 512, linkCount: 1, flags: 0, kind: .directory)
+    let entry = ScanEntry(parentID: nil, path: "/fixture", identity: identity, issues: [], readable: true)
+    let snapshot = ScanSnapshot(rootPath: "/fixture", volumeDevice: 1, entries: [entry], nodes: [])
+    var candidate = RelatedDataCandidate(
+      id: "/fixture", path: "/fixture", classification: .installed, reason: .installed, snapshot: snapshot, receipt: nil
+    )
+    let inputs: [[RelatedDataProvenanceKind]] = [[.liveProcess], [.vendorDirectory], [.vendorDirectory, .liveProcess]]
+    for kinds in inputs {
+      candidate.evidenceKinds = kinds
+      #expect(candidate.canSelect && !candidate.automaticSelectionAllowed && !candidate.defaultSelected)
+    }
+    candidate.evidenceKinds = [.vendorDirectory, .configuredDirectory]
+    candidate.provenance = RelatedDataProvenance(kind: .configuredDirectory)
+    #expect(candidate.automaticSelectionAllowed && !candidate.defaultSelected)
+    candidate.evidenceKinds = [.liveProcess, .electron]
+    candidate.provenance = RelatedDataProvenance(kind: .liveProcess)
+    #expect(candidate.automaticSelectionAllowed && candidate.defaultSelected)
+  }
+
+  @Test("General framework and tool names never become a vendor folder claim")
+  func genericVendorFolderExcluded() throws {
+    let fixture = try FrameworkFixture()
+    defer { fixture.cleanup() }
+    let id = "com.electron.fixture"
+    try PropertyListSerialization.data(
+      fromPropertyList: ["CFBundleIdentifier": id], format: .xml, options: 0
+    ).write(to: URL(fileURLWithPath: fixture.app + "/Contents/Info.plist"))
+    let path = fixture.home + "/Library/Caches/electron"
+    try fixture.directory(path)
+    let app = InstalledApplication(bundleID: id, path: fixture.app, version: nil)
+    let discovery = ApplicationAuxiliaryEvidenceProducer.discover(
+      app: app, homeDirectory: fixture.home, vendorExclusive: true)
+    #expect(!discovery.evidence.contains { $0.dataPath == path && $0.provenance.kind == .vendorDirectory })
+  }
+
+  @Test(
+    "Vendor proof checks both the installed identifier prefix and signed team",
+    arguments: ["only", "prefix", "team", "unrelated", "unsigned"])
+  func vendorExclusivity(state: String) async throws {
+    let fixture = try FrameworkFixture()
+    defer { fixture.cleanup() }
+    let selectedID = "com.lightenqa.primary"
+    try PropertyListSerialization.data(
+      fromPropertyList: ["CFBundleIdentifier": selectedID], format: .xml, options: 0
+    ).write(to: URL(fileURLWithPath: fixture.app + "/Contents/Info.plist"))
+    let vendorPath = fixture.home + "/Library/Caches/lightenqa"
+    try fixture.directory(vendorPath)
+    let second = fixture.home + "/Applications/LightenQA-second.app"
+    if state != "only" {
+      try fixture.directory(second + "/Contents")
+      try PropertyListSerialization.data(
+        fromPropertyList: ["CFBundleIdentifier": state == "prefix" ? "com.lightenqa.other" : "org.other.fixture"],
+        format: .xml, options: 0
+      ).write(to: URL(fileURLWithPath: second + "/Contents/Info.plist"))
+    }
+    let related = service(
+      fixture,
+      signingMetadata: { path in
+        if path == second && state == "unsigned" { return nil }
+        return ApplicationSigningMetadata(
+          teamID: path == fixture.app || state == "team" ? "PRIMARY" : "OTHER", groupIdentifiers: [])
+      })
+    let candidates = await related.discover(context: related.makeContext())
+    let candidate = candidates.first { $0.path == vendorPath && $0.provenance?.kind == .vendorDirectory }
+    #expect((candidate != nil) == (state == "only" || state == "unrelated"))
+    #expect(candidate?.automaticSelectionAllowed != true && candidate?.defaultSelected != true)
+  }
+
+  @Test("A discovery validates its broad evidence sources twice for many shared candidates")
+  func discoveryValidatesSourcesOncePerSnapshot() async throws {
+    let fixture = try FrameworkFixture()
+    defer { fixture.cleanup() }
+    let second = fixture.home + "/Applications/LightenQA-second.app"
+    let otherID = "qa.lighten.other"
+    try fixture.directory(second + "/Contents")
+    try PropertyListSerialization.data(
+      fromPropertyList: ["CFBundleIdentifier": otherID], format: .xml, options: 0
+    ).write(to: URL(fileURLWithPath: second + "/Contents/Info.plist"))
+    var settings: [String: String] = [:]
+    for index in 0..<20 {
+      let path = fixture.home + "/Library/Application Support/LightenQA-shared-\(index)"
+      try fixture.directory(path)
+      settings["data\(index)DirectoryPath"] = path
+    }
+    try fixture.directory(fixture.home + "/Library/Preferences")
+    let bytes = try PropertyListSerialization.data(fromPropertyList: settings, format: .xml, options: 0)
+    for id in [fixture.bundleID, otherID] {
+      try bytes.write(to: URL(fileURLWithPath: fixture.home + "/Library/Preferences/" + id + ".plist"))
+    }
+    let related = service(fixture)
+    let context = related.makeContext()
+    let candidates = await related.discover(context: context)
+    #expect(candidates.filter { $0.reason == .sharedInstalledData }.count == 20)
+    #expect(context.dataSourceValidationCount == 2)
+    #expect(candidates.filter { $0.reason == .sharedInstalledData }.allSatisfy { !$0.canSelect })
+  }
+
+  @Test("Registration has separate Spotlight, dump fallback and unavailable states", arguments: [0, 1, 2])
+  func registrationSourceStates(state: Int) throws {
+    let fixture = try FrameworkFixture()
+    defer { fixture.cleanup() }
+    let observed = ApplicationRegistration.observe(
+      readIndexingStatus: { state == 0 ? "enabled" : state == 1 ? "disabled" : "unavailable" },
+      readSpotlight: { ApplicationRegistrationObservation(paths: [fixture.app], complete: true) },
+      readDump: { ApplicationRegistrationObservation(paths: state == 1 ? [fixture.app] : [], complete: state == 1) },
+      byIdentifier: { _ in [fixture.app] })
+    let report = try #require(observed.report)
+    #expect(report.source == (state == 0 ? "public-spotlight" : state == 1 ? "launch-services-dump" : "unavailable"))
+    #expect(observed.complete == (state != 2))
+    #expect(report.gatheringCompleted == (state == 0))
+    #expect(report.leadCount == (state == 2 ? 0 : 1))
+    #expect(!ApplicationRegistration.parseDump("path: relative/LightenQA.app\n").complete)
+  }
+
+  @Test("Unknown global registration blocks group ownership while exact standard data remains available")
+  func unknownRegistrationIsScoped() async throws {
+    let fixture = try FrameworkFixture()
+    defer { fixture.cleanup() }
+    let group = "group.qa.lighten.fixture"
+    let exactPath = fixture.home + "/Library/Caches/" + fixture.bundleID
+    let groupPath = fixture.home + "/Library/Group Containers/" + group
+    try fixture.directory(exactPath)
+    try fixture.directory(groupPath)
+    let related = RelatedDataService(
+      homeDirectory: fixture.home, applicationRoots: [fixture.home + "/Applications"],
+      writeVerifiedReceipts: false,
+      signingMetadata: { _ in ApplicationSigningMetadata(teamID: "QA", groupIdentifiers: [group]) },
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+      registration: {
+        ApplicationRegistrationObservation(
+          paths: [], complete: false,
+          report: ApplicationRegistrationReport(
+            source: "unavailable", leadCount: 0, complete: false, gatheringCompleted: false,
+            bootIndexingStatus: "disabled", externalVolumesUnchecked: true))
+      },
+      registeredByID: { id in
+        ApplicationRegistrationObservation(paths: id == fixture.bundleID ? [fixture.app] : [], complete: true)
+      })
+    let context = related.makeContext()
+    let candidates = await related.discover(context: context)
+    let exact = try #require(candidates.first { $0.path == exactPath })
+    let shared = try #require(candidates.first { $0.path == groupPath })
+    #expect(exact.canSelect && exact.reason == .installed)
+    #expect(!shared.canSelect && shared.reason == .registrationUnavailable)
+    let app = try #require(related.application(at: fixture.app))
+    let exactPlan = await related.makeAvailableUninstallPlan(
+      app: app, selectedRelated: [exact], includePackage: false)
+    #expect(exactPlan.plan != nil && exactPlan.rejections.isEmpty)
+    let groupPlan = await related.makeAvailableUninstallPlan(
+      app: app, selectedRelated: [shared], includePackage: false)
+    #expect(groupPlan.plan == nil)
+    #expect(groupPlan.rejections.contains { $0.ruleID == "registrationUnavailable" })
+  }
+
+  @Test("Retained framework data requires a fresh owner check after its package was removed")
+  func retainedFrameworkDataUsesFreshOwnership() async throws {
+    let fixture = try FrameworkFixture()
+    defer { fixture.cleanup() }
+    try fixture.electron()
+    let related = service(fixture)
+    let context = related.makeContext()
+    let candidate = try #require((await related.discover(context: context)).first { $0.path == fixture.dataPath })
+    try fixture.directory(fixture.home + "/.Trash")
+    try FileManager.default.moveItem(atPath: fixture.app, toPath: fixture.home + "/.Trash/" + fixture.name + ".app")
+    let available = await related.makeAvailableRemainingDataPlan(selected: [candidate])
+    let plan = try #require(available.plan)
+    #expect(available.rejections.isEmpty && plan.items[0].policy == .spaceTrash)
+    #expect(plan.items[0].installedRelatedProof == nil && plan.items[0].orphanRelatedProof == nil)
+    try related.validateExplicitSelection(plan.items[0], plan: plan)
+    let second = fixture.home + "/Applications/LightenQA-second.app"
+    try fixture.directory(second + "/Contents")
+    try PropertyListSerialization.data(
+      fromPropertyList: ["CFBundleIdentifier": "qa.lighten.other"], format: .xml, options: 0
+    ).write(to: URL(fileURLWithPath: second + "/Contents/Info.plist"))
+    try fixture.directory(fixture.home + "/Library/Preferences")
+    try PropertyListSerialization.data(
+      fromPropertyList: ["dataDirectoryPath": fixture.dataPath], format: .xml, options: 0
+    ).write(to: URL(fileURLWithPath: fixture.home + "/Library/Preferences/qa.lighten.other.plist"))
+    #expect(throws: (any Error).self) { try related.validateExplicitSelection(plan.items[0], plan: plan) }
+    let refused = await related.makeAvailableRemainingDataPlan(selected: [candidate])
+    #expect(refused.plan == nil && !refused.rejections.isEmpty)
   }
 
   @Test("Electron productName and native Chromium shape establish the exact derived folder", arguments: [false, true])

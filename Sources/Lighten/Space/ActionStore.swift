@@ -308,7 +308,7 @@ final class ActionStore {
         guard let outcome = outcomes[item.id], outcome.outcome != .applied else { return nil }
         return ActionDisplayFailure(
           itemID: item.id, path: item.sourcePath, outcome: outcome.outcome,
-          detail: FailureText.execution(outcome))
+          detail: FailureText.execution(outcome), presentation: FailureText.executionPresentation(outcome))
       }
       for item in applied {
         appliedDisplayItems[item.itemID] = item

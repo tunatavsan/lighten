@@ -35,4 +35,5 @@ struct ActionDisplayFailure: Sendable {
   let path: String
   let outcome: ActionOutcome
   let detail: String
+  var presentation: FailurePresentation? = nil
 }

@@ -70,10 +70,7 @@ struct ConfirmationView: View {
         if !presentation.rejectedItems.isEmpty {
           Section(String(localized: "Skipped items — will stay in place")) {
             ForEach(Array(presentation.rejectedItems.enumerated()), id: \.offset) { _, rejection in
-              Text(SpaceText.rejection(rejection))
-                .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
+              FailureReasonView(presentation: FailureText.presentation(rejection), path: rejection.path)
             }
           }
         }
@@ -141,15 +138,15 @@ struct ActionFeedbackView: View {
               ? String(localized: "Items needing review") : String(localized: "Items that stayed in place")
           ) {
             ForEach(actions.resultRejections, id: \.path) { rejection in
-              Text(SpaceText.rejection(rejection))
-                .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+              FailureReasonView(presentation: FailureText.presentation(rejection), path: rejection.path)
             }
             ForEach(actions.resultFailures, id: \.itemID) { item in
-              Text("\(URL(fileURLWithPath: item.path).lastPathComponent): \(item.detail)")
-                .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                .help(item.path)
+              if let presentation = item.presentation {
+                FailureReasonView(presentation: presentation, path: item.path)
+              } else {
+                Text(item.detail).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+                  .fixedSize(horizontal: false, vertical: true).help(item.path)
+              }
             }
           }
           .font(.system(size: 11))
@@ -332,9 +329,7 @@ struct HistoryView: View {
           .font(.system(size: 10)).foregroundStyle(statusColor(item.state))
       }
       if let detail {
-        Text(FailureText.describe(detail))
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-          .fixedSize(horizontal: false, vertical: true)
+        FailureReasonView(presentation: FailureText.presentation(detail))
       }
       if item.detail == String(describing: UndoFailure.trashItemMissing) {
         HStack {

@@ -5,7 +5,7 @@ import Foundation
 import Synchronization
 
 /// Display provenance is deliberately separate from native execution authority.
-public enum RelatedDataProvenanceKind: String, Sendable {
+public enum RelatedDataProvenanceKind: String, Sendable, Hashable {
   case bundleIdentifier, teamIdentifier, electron, mozilla, installerReceipt, launchService
   case configuredDirectory, vendorDirectory, liveProcess, explicitUserChoice
 }
@@ -150,6 +150,7 @@ final class ApplicationDataEvidenceCache: Sendable {
   private struct Entry: Sendable {
     let observations: [ApplicationPathObservation]
     let discovery: Discovery
+    let vendorExclusive: Bool
   }
   private let entries = Mutex<[String: Entry]>([:])
   private let receipts = Mutex<ApplicationInstallerReceipts?>(nil)
@@ -177,9 +178,24 @@ final class ApplicationDataEvidenceCache: Sendable {
     }
   }
 
-  func discover(app: InstalledApplication, home: String) -> Discovery {
+  func liveObservation(
+    using read: @Sendable () -> ApplicationLiveDataObservation = { .observe() }
+  ) -> ApplicationLiveDataObservation {
+    live.withLock { cached in
+      if let cached { return cached }
+      let observed = read()
+      cached = observed
+      return observed
+    }
+  }
+
+  func discover(
+    app: InstalledApplication, home: String, vendorExclusive: Bool = false,
+    liveData: @Sendable () -> ApplicationLiveDataObservation = { .observe() }
+  ) -> Discovery {
     let path = app.linkTarget ?? app.path
     if let cached = entries.withLock({ $0[path] }),
+      cached.vendorExclusive == vendorExclusive,
       cached.observations.allSatisfy({ (try? $0.validate()) != nil })
     {
       return cached.discovery
@@ -193,14 +209,10 @@ final class ApplicationDataEvidenceCache: Sendable {
         cached = observed
         return observed
       }
-      let processes = live.withLock { cached in
-        if let cached { return cached }
-        let observed = ApplicationLiveDataObservation.observe()
-        cached = observed
-        return observed
-      }
+      let processes = liveObservation(using: liveData)
       let auxiliary = ApplicationAuxiliaryEvidenceProducer.discover(
-        app: app, homeDirectory: home, receipts: installer, live: processes)
+        app: app, homeDirectory: home, receipts: installer, live: processes,
+        vendorExclusive: vendorExclusive, frameworkDirectories: framework.evidence.map(\.dataPath))
       let sourceObservations =
         framework.evidence.flatMap(\.sourceObservations)
         + auxiliary.evidence.flatMap { evidence in
@@ -220,7 +232,9 @@ final class ApplicationDataEvidenceCache: Sendable {
       guard before.count == after.count,
         zip(before, after).allSatisfy({ $0.path == $1.path && $0.identity == $1.identity })
       else { throw RelatedFailure.changedItem }
-      entries.withLock { $0[path] = Entry(observations: before + sourceObservations, discovery: result) }
+      entries.withLock {
+        $0[path] = Entry(observations: before + sourceObservations, discovery: result, vendorExclusive: vendorExclusive)
+      }
       return result
     } catch {
       return Discovery(
@@ -230,26 +244,65 @@ final class ApplicationDataEvidenceCache: Sendable {
 }
 
 enum ApplicationAuxiliaryEvidenceProducer {
+  static func hasVendorDirectory(vendor: String, home: String) -> Bool {
+    guard vendor.count > 1, !isGeneralToolDirectory(vendor) else { return false }
+    for directory in ["Application Support", "Caches", "Logs"] {
+      let parent = home + "/Library/" + directory
+      guard let root = try? DescriptorFileSystem.identity(at: parent),
+        let names = try? DescriptorFileSystem.children(at: parent, expected: root)
+      else { continue }
+      for name in names where name.caseInsensitiveCompare(vendor) == .orderedSame {
+        let path = parent + "/" + name
+        if (try? DescriptorFileSystem.identity(at: path))?.kind == .directory,
+          RelatedDataService.currentUserOwns(path), ProtectionPolicy.rule(for: path, homeDirectory: home) == nil
+        {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
   static func liveSharedOwnerPaths(
     dataPath: String, excludingPackage: String, applications: [InstalledApplication], home: String,
     observation: ApplicationLiveDataObservation = .observe()
   ) throws -> [String] {
+    guard observation.complete else { throw RelatedFailure.incompleteInventory }
     var owners: Set<String> = []
     for record in observation.records
     where record.path == dataPath || record.path.hasPrefix(dataPath + "/") {
       guard let held = try? DescriptorFileSystem.identity(at: record.path),
         held.device == record.device, held.inode == record.inode
       else { throw RelatedFailure.changedItem }
+      var matched = false
       for app in applications {
         let package = app.linkTarget ?? app.path
         guard package != excludingPackage, record.executable.hasPrefix(package + "/"),
           !RelatedDataService.isCachedApplication(package, homeDirectory: home)
         else { continue }
+        matched = true
         let metadata = try ApplicationPackagePlanning.metadata(at: package)
         guard metadata.observation.bundleIdentifier == app.bundleID,
           (try DescriptorFileSystem.identity(at: record.executable)).kind == .regular
         else { throw RelatedFailure.changedItem }
         owners.insert(package)
+      }
+      if !matched {
+        let components = record.executable.split(separator: "/")
+        guard let outer = components.firstIndex(where: { $0.lowercased().hasSuffix(".app") }) else {
+          throw RelatedFailure.incompleteInventory
+        }
+        let package = "/" + components[...outer].joined(separator: "/")
+        guard package != excludingPackage, !RelatedDataService.isCachedApplication(package, homeDirectory: home)
+        else { continue }
+        let metadata = ApplicationMetadataObservation.read(at: package)
+        guard let root = metadata.root, root.kind == .directory,
+          (try DescriptorFileSystem.identity(at: record.executable)).kind == .regular
+        else { throw RelatedFailure.incompleteInventory }
+        switch metadata.state {
+        case .declaredID, .identifierless: owners.insert(package)
+        case .absentInfo, .unknown: throw RelatedFailure.incompleteInventory
+        }
       }
     }
     return owners.sorted()
@@ -257,7 +310,8 @@ enum ApplicationAuxiliaryEvidenceProducer {
 
   static func discover(
     app: InstalledApplication, homeDirectory: String,
-    receipts: ApplicationInstallerReceipts? = nil, live: ApplicationLiveDataObservation? = nil
+    receipts: ApplicationInstallerReceipts? = nil, live: ApplicationLiveDataObservation? = nil,
+    vendorExclusive: Bool = false, frameworkDirectories: [String] = []
   ) -> ApplicationAuxiliaryDiscovery {
     var result = ApplicationAuxiliaryDiscovery()
     guard RelatedDataService.validBundleID(app.bundleID),
@@ -367,7 +421,7 @@ enum ApplicationAuxiliaryEvidenceProducer {
       directories(dictionary, depth: 0)
     }
     let vendor = app.bundleID.split(separator: ".").dropFirst().first.map(String.init)
-    if let vendor, vendor.count > 1 {
+    if let vendor, vendor.count > 1, vendorExclusive, !isGeneralToolDirectory(vendor) {
       for directory in ["Application Support", "Caches", "Logs"] {
         let parent = homeDirectory + "/Library/" + directory
         guard let root = try? DescriptorFileSystem.identity(at: parent),
@@ -406,31 +460,59 @@ enum ApplicationAuxiliaryEvidenceProducer {
       for record in live.records where record.executable.hasPrefix(package + "/") {
         guard let held = try? DescriptorFileSystem.identity(at: record.path),
           held.device == record.device, held.inode == record.inode,
-          let dataPath = liveDirectory(record.path, isCWD: record.isCWD, home: homeDirectory),
+          let dataPath = liveDirectory(
+            record.path, isCWD: record.isCWD, home: homeDirectory, frameworkDirectories: frameworkDirectories),
           dataPath != package, !dataPath.hasPrefix(package + "/"),
           (try? DescriptorFileSystem.identity(at: record.executable))?.kind == .regular
         else { continue }
         if live.complete {
           add(dataPath, kind: .liveProcess, references: [record.executable, record.path])
         } else {
-          result.issues.append(ApplicationAuxiliaryIssue(path: dataPath, detail: "live-process-census-incomplete"))
+          result.issues.append(
+            ApplicationAuxiliaryIssue(
+              path: dataPath, detail: "live-process-census-incomplete", bundleID: app.bundleID,
+              provenanceKind: .liveProcess))
         }
       }
     }
     return result
   }
 
-  private static func liveDirectory(_ path: String, isCWD: Bool, home: String) -> String? {
+  static func isGeneralToolDirectory(_ name: String) -> Bool {
+    let tools: Set<String> = [
+      "electron", "ms-playwright", "node-gyp", "homebrew", "pip", "cypress", "puppeteer",
+      "npm", "yarn", "pnpm", "node", "python", "cargo", "go", "gradle", "maven",
+    ]
+    return tools.contains(name.lowercased(with: Locale(identifier: "en_US_POSIX")))
+  }
+
+  private static func liveDirectory(
+    _ path: String, isCWD: Bool, home: String, frameworkDirectories: [String]
+  ) -> String? {
     guard (try? DescriptorFileSystem.validatedComponents(path)) != nil else { return nil }
-    var candidate = isCWD ? path : (path as NSString).deletingLastPathComponent
-    for directory in ["Application Support", "Caches", "Logs", "WebKit", "HTTPStorages"] {
+    let library = home + "/Library/"
+    guard path.hasPrefix(library) else { return nil }
+    var candidate: String?
+    for directory in [
+      "Application Support", "Caches", "Containers", "Group Containers", "Preferences", "Logs",
+      "Saved Application State", "WebKit", "HTTPStorages", "Cookies",
+    ] {
       let parent = home + "/Library/" + directory
       if path.hasPrefix(parent + "/") {
         let name = path.dropFirst(parent.count + 1).split(separator: "/").first.map(String.init)
-        if let name { candidate = parent + "/" + name }
+        if let name {
+          candidate = parent + "/" + name
+          if directory == "Preferences", name == "ByHost" { candidate = isCWD ? nil : path }
+        }
       }
     }
-    guard (try? DescriptorFileSystem.identity(at: candidate))?.kind == .directory,
+    if candidate == nil {
+      candidate = frameworkDirectories.first {
+        $0.hasPrefix(library) && (path == $0 || path.hasPrefix($0 + "/"))
+      }
+    }
+    guard let candidate, let identity = try? DescriptorFileSystem.identity(at: candidate),
+      identity.kind == .directory || identity.kind == .regular,
       RelatedDataService.currentUserOwns(candidate), !ScanService.isInsidePackage(candidate),
       !ExactInventory(homeDirectory: home).isBulkRoot(candidate),
       ProtectionPolicy.rule(for: candidate, homeDirectory: home) == nil
@@ -450,14 +532,17 @@ struct ApplicationLiveDataObservation: Sendable {
   }
   let records: [Record]
   let complete: Bool
+  var report: ApplicationLiveDataCensusReport? = nil
 
-  static func observe() -> Self {
-    var values = [LightenApplicationDataPath](repeating: LightenApplicationDataPath(), count: 4096)
-    var count: Int32 = 0
-    let status = values.withUnsafeMutableBufferPointer {
-      lighten_read_application_data_paths($0.baseAddress, Int32($0.count), &count)
-    }
-    let records = values.prefix(max(0, min(Int(count), values.count))).compactMap { value -> Record? in
+  static func observe(maximumBytes: Int = 256 * 1024 * 1024, timeoutMilliseconds: UInt32 = 3000) -> Self {
+    var values: UnsafeMutablePointer<LightenApplicationDataPath>?
+    var count: UInt32 = 0
+    var census = LightenApplicationDataCensus()
+    let status = lighten_copy_application_data_paths(
+      max(0, maximumBytes), timeoutMilliseconds, &values, &count, &census)
+    defer { lighten_free_application_data_paths(values) }
+    let native = UnsafeBufferPointer(start: values, count: values == nil ? 0 : Int(count))
+    let records = native.compactMap { value -> Record? in
       var value = value
       let executable = withUnsafePointer(to: &value.executable_path) {
         $0.withMemoryRebound(to: CChar.self, capacity: 4096) { String(validatingCString: $0) }
@@ -470,7 +555,37 @@ struct ApplicationLiveDataObservation: Sendable {
         pid: value.pid, executable: executable, path: path, isCWD: value.is_cwd != 0,
         device: value.data_device, inode: value.data_inode)
     }
-    return Self(records: records, complete: status == 0)
+    let complete = status == 0 && records.count == Int(count)
+    let report = ApplicationLiveDataCensusReport(
+      complete: complete, recordCount: Int(count), processesInspected: Int(census.processes_inspected),
+      applicationProcesses: Int(census.application_processes), descriptorsInspected: census.descriptors_inspected,
+      failureFlags: census.failure_flags | (records.count == Int(count) ? 0 : UInt32(LIGHTEN_CENSUS_UNAVAILABLE)),
+      elapsedMilliseconds: census.elapsed_milliseconds)
+    return Self(records: records, complete: complete, report: report)
+  }
+}
+
+/// Read-only metrics from one native current-user application fd/cwd census.
+/// An incomplete report never establishes that selected data has no other user.
+public struct ApplicationLiveDataCensusReport: Codable, Sendable {
+  public let complete: Bool
+  public let recordCount: Int
+  public let processesInspected: Int
+  public let applicationProcesses: Int
+  public let descriptorsInspected: UInt64
+  public let failureFlags: UInt32
+  public let elapsedMilliseconds: UInt64
+
+  public var timedOut: Bool { failureFlags & 4 != 0 }
+  public var incompleteReasons: [String] {
+    [(UInt32(1), "process-unavailable"), (2, "memory-limit"), (4, "time-limit"), (8, "process-changed")]
+      .compactMap { failureFlags & $0.0 == 0 ? nil : $0.1 }
+  }
+}
+
+public enum ApplicationLiveDataCensus {
+  public static func observe() -> ApplicationLiveDataCensusReport {
+    ApplicationLiveDataObservation.observe().report!
   }
 }
 

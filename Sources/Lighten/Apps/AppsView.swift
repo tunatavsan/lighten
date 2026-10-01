@@ -180,8 +180,13 @@ struct AppsView: View {
             .font(.system(size: 11, weight: .medium))
             Text(item.sourcePath).font(.system(size: 10)).textSelection(.enabled)
               .foregroundStyle(LightenStyle.muted)
-            if let detail = item.detail {
-              Text(FailureText.describe(detail)).font(.system(size: 10))
+            if item.outcome != .applied {
+              FailureReasonView(
+                presentation: FailureText.executionPresentation(
+                  ItemActionResult(
+                    itemID: item.id, outcome: item.outcome, detail: item.detail, mutationStage: item.mutationStage))
+              )
+              .font(.system(size: 10))
             }
           }
           .padding(.top, 5)
@@ -288,7 +293,7 @@ struct AppsView: View {
         Text(
           String(
             localized:
-              "No installed owner was found. These files may contain settings or documents; nothing is selected automatically."
+              "Remaining app data may contain settings or documents. Review each reason; nothing is selected automatically."
           )
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
@@ -301,7 +306,7 @@ struct AppsView: View {
           ) {
             ForEach(groups[bundleID] ?? []) { candidate in
               HStack(alignment: .top, spacing: 8) {
-                if candidate.canSelect && candidate.classification != .installed && !store.busy && !store.needsRescan {
+                if store.canSelectOrphan(candidate) {
                   Button {
                     store.toggleOrphan(candidate.path, actions: actions)
                   } label: {
@@ -315,12 +320,11 @@ struct AppsView: View {
                 }
                 VStack(alignment: .leading, spacing: 3) {
                   Text(candidate.path).font(.system(size: 10)).lineLimit(2).truncationMode(.middle)
-                  Text(
-                    candidate.classification == .installed
-                      ? String(localized: "Refresh Apps to review data left after removal.")
-                      : String(localized: "App no longer found · review carefully")
-                  )
-                  .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+                  FailureReasonView(
+                    presentation: store.retainedReason(candidate) ?? FailureText.candidate(candidate))
+                  Button(String(localized: "Show in Finder")) {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: candidate.path)])
+                  }.buttonStyle(.plain).font(.system(size: 10))
                   if let date = candidate.modifiedAt {
                     HStack(spacing: 3) {
                       Text(String(localized: "Modified:"))
@@ -434,9 +438,13 @@ struct AppsView: View {
         }
         Text(
           String(
-            localized: "Protected package contents are measured from metadata. Trash size is not freed disk space.")
+            localized: "Package contents are not opened during measurement. Moving to Trash does not free disk space.")
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        if store.externalVolumesUnchecked {
+          Text(String(localized: "Apps on disconnected or unindexed external disks were not checked."))
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+        }
         VStack(alignment: .leading, spacing: 5) {
           metadataRow(String(localized: "Bundle ID"), app.bundleID ?? String(localized: "Unknown"))
           if let target = app.linkTarget {
@@ -562,8 +570,19 @@ struct AppsView: View {
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       }
-      ForEach(app.related.filter { $0.classification != .unprovenNameOnly }) { candidate in
+      ForEach(
+        app.related.filter { $0.classification != .unprovenNameOnly && $0.provenance?.kind != .configuredDirectory }
+      ) { candidate in
         relatedRow(candidate, app: app)
+      }
+      let documents = app.related.filter { $0.provenance?.kind == .configuredDirectory }
+      if !documents.isEmpty {
+        VStack(alignment: .leading, spacing: 8) {
+          Text(String(localized: "App’s documents folders")).font(.system(size: 12, weight: .semibold))
+          Text(String(localized: "These folders may contain your documents and are never selected automatically."))
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+          ForEach(documents) { candidate in relatedRow(candidate, app: app) }
+        }
       }
       let unproven = app.related.filter { $0.classification == .unprovenNameOnly }
       if !unproven.isEmpty { unprovenSection(unproven, app: app) }
@@ -634,14 +653,8 @@ struct AppsView: View {
             Text(source).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
               .lineLimit(2).truncationMode(.middle).help(source)
           }
-          if let detail = provenance.detail {
-            Text(detail).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-              .fixedSize(horizontal: false, vertical: true)
-          }
         }
-        Text(relatedReason(candidate, eligible: eligible))
-          .font(.system(size: 10)).foregroundStyle(eligible ? LightenStyle.muted : LightenStyle.warning)
-          .fixedSize(horizontal: false, vertical: true)
+        FailureReasonView(presentation: FailureText.candidate(candidate))
         let otherPaths = store.otherInstallationPaths(candidate: candidate, app: app)
         if !otherPaths.isEmpty {
           Text(
@@ -700,33 +713,12 @@ struct AppsView: View {
     store.canSelect(candidate, app: app)
   }
 
-  private func relatedReason(_ candidate: RelatedDataCandidate, eligible: Bool) -> String {
-    if candidate.reason == .candidateAreaUnreadable || candidate.reason == .recordUnsafe {
-      return String(localized: "Metadata unavailable or unsafe · report only")
-    }
-    return switch candidate.classification {
-    case .installed:
-      eligible
-        ? String(localized: "Associated app data · separate Trash choice")
-        : String(localized: "Needs complete, safe scan and a closed app")
-    case .protected: String(localized: "Protected · report only")
-    case .shared: String(localized: "Shared · report only")
-    case .uncertain: String(localized: "Association uncertain · report only")
-    case .unprovenNameOnly:
-      eligible
-        ? String(localized: "Name match only · your explicit choice, not verified app data")
-        : String(localized: "Name match only · unavailable until a fresh, safe review")
-    case .historicallyVerifiedAbsent: String(localized: "Previously associated · review in Clean")
-    case .orphanVerified: String(localized: "App no longer found · review carefully")
-    }
-  }
-
   private func packageOutcome(_ outcome: ActionOutcome) -> String {
     switch outcome {
     case .applied: String(localized: "Moved to Trash")
     case .skipped: String(localized: "Skipped")
     case .failed: String(localized: "Failed")
-    case .uncertain: String(localized: "Uncertain")
+    case .uncertain: String(localized: "Needs review")
     case .notAttempted: String(localized: "Not attempted")
     }
   }

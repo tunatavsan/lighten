@@ -7,15 +7,17 @@ public struct ApplicationRelatedReview: Sendable {
   public let candidates: [RelatedDataCandidate]
   public let signerTeamID: String?
   public let ownershipPending: Bool
+  public let registrationReport: ApplicationRegistrationReport?
 
   public init(
     application: InstalledApplication, candidates: [RelatedDataCandidate], signerTeamID: String? = nil,
-    ownershipPending: Bool = true
+    ownershipPending: Bool = true, registrationReport: ApplicationRegistrationReport? = nil
   ) {
     self.application = application
     self.candidates = candidates
     self.signerTeamID = signerTeamID
     self.ownershipPending = ownershipPending
+    self.registrationReport = registrationReport
   }
 }
 
@@ -163,8 +165,12 @@ final class AuthenticApplicationContext: Sendable {
     let claims: [String: [ApplicationOwnedDataEvidence]]
     let sources: [ApplicationPathObservation]
     let issues: [ApplicationAuxiliaryIssue]
+    let packages: [String: [ApplicationPathObservation]]
+    let independentSources: [ApplicationPathObservation]
   }
   private let dataClaims = Mutex<DataClaims?>(nil)
+  private let dataSourceValidations = Mutex(0)
+  var dataSourceValidationCount: Int { dataSourceValidations.withLock { $0 } }
 
   init(
     scope: ApplicationContextScope, inventory: BundleInventory, lineage: [ApplicationPathObservation],
@@ -239,8 +245,27 @@ final class AuthenticApplicationContext: Sendable {
     _ claims: [String: [ApplicationOwnedDataEvidence]], sources: [ApplicationPathObservation],
     issues: [ApplicationAuxiliaryIssue]
   ) {
+    let packagePaths = Set(inventory.applications.map { $0.linkTarget ?? $0.path })
+    var packages: [String: [ApplicationPathObservation]] = [:]
+    var independent: [ApplicationPathObservation] = []
+    for source in sources {
+      let parts = source.path.split(separator: "/")
+      var prefix = ""
+      var owner: String?
+      for part in parts {
+        prefix += "/" + part
+        if packagePaths.contains(prefix) {
+          owner = prefix
+          break
+        }
+      }
+      if let owner { packages[owner, default: []].append(source) } else { independent.append(source) }
+    }
     dataClaims.withLock {
-      if $0 == nil { $0 = DataClaims(claims: claims, sources: sources, issues: issues) }
+      if $0 == nil {
+        $0 = DataClaims(
+          claims: claims, sources: sources, issues: issues, packages: packages, independentSources: independent)
+      }
     }
   }
 
@@ -249,24 +274,16 @@ final class AuthenticApplicationContext: Sendable {
   }
 
   func validateDataSources(excludingPackage: String? = nil) throws {
+    dataSourceValidations.withLock { $0 += 1 }
     let observed = dataClaims.withLock { $0 }
     guard let observed else { return }
-    let sources = observed.sources
-    let packages = Set(
-      inventory.applications.map { $0.linkTarget ?? $0.path }.filter { package in
-        sources.contains { $0.path == package && $0.identity?.kind == .directory }
-      })
-    var checked: Set<String> = []
-    for package in packages where package != excludingPackage {
-      let nodes = sources.filter { $0.path == package || $0.path.hasPrefix(package + "/") }
+    for (package, nodes) in observed.packages where package != excludingPackage {
       guard let root = nodes.first(where: { $0.path == package })?.identity else {
         throw RelatedFailure.incompleteInventory
       }
       try ApplicationPathObservation.validate(nodes, root: package, expected: root)
-      checked.formUnion(nodes.map(\.path))
     }
-    for source in sources {
-      if checked.contains(source.path) { continue }
+    for source in observed.independentSources {
       if let excludingPackage,
         source.path == excludingPackage || source.path.hasPrefix(excludingPackage + "/")
       {

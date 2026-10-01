@@ -289,7 +289,7 @@ struct CleanView: View {
     case .protected: String(localized: "A safety rule protects this data. Inspect it in Finder.")
     case .installed, .literalIdentifierOwner:
       String(localized: "An installed app owns this data. Review the app in Applications.")
-    case .incompleteInventory:
+    case .incompleteInventory, .registrationUnavailable, .liveCensusUnavailable:
       String(localized: "Lighten could not check every possible app owner of this data. Inspect it in Finder.")
     case .recordUnavailable: String(localized: "The ownership record is unavailable. Inspect this data in Finder.")
     case .historicallyVerified: String(localized: "Previously verified owner absent here; it may exist elsewhere")

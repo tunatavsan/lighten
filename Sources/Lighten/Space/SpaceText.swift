@@ -114,44 +114,10 @@ enum SpaceText {
   static func rejection(_ rejection: PlanRejection) -> String { Self.rejection(rejection, turkish: nil) }
 
   static func rejection(_ rejection: PlanRejection, turkish: Bool?) -> String {
-    if let code = rejection.ruleID {
-      if rejection.reason == .unavailable, code.hasPrefix("systemCall(") || code.hasPrefix("unavailable(") {
-        return FailureText.describe(code, turkish: turkish) + " — " + rejection.path
-      }
-      switch code {
-      case "incompleteInventory", "invalidReceipt", "ownerPresent", "changedItem", "runningOrUnknown",
-        "ambiguousOwner", "unsupportedInstalledData":
-        return FailureText.describe(code, turkish: turkish) + " — " + rejection.path
-      case "ios-wrapper":
-        return FailureText.text(
-          "This iPhone or iPad application cannot be removed here. Use Show in Finder.",
-          "Bu iPhone veya iPad uygulaması buradan kaldırılamaz. Finder’da Göster'i kullanın.", turkish: turkish)
-          + " — " + rejection.path
-      default: break
-      }
-    }
-    let catalogCopy: (String, String)? =
-      switch rejection.ruleID {
-      case "apple-system-cache":
-        ("Apple system cache. Inspect it in Finder.", "Apple sistem önbelleği. Finder’da inceleyin.")
-      case "minimum-age":
-        (
-          "This item includes recently modified files. Keep it until the category’s minimum age is reached.",
-          "Bu öğe yakın zamanda değiştirilmiş dosyalar içeriyor. Kategorinin asgari yaşına ulaşılana kadar saklayın."
-        )
-      case "age-unavailable":
-        (
-          "The age of this item could not be verified. Inspect its dates in Finder.",
-          "Bu öğenin yaşı doğrulanamadı. Tarihlerini Finder’da inceleyin."
-        )
-      default: nil
-      }
-    if let catalogCopy {
-      return FailureText.text(catalogCopy.0, catalogCopy.1, turkish: turkish) + " — " + rejection.path
-    }
-    if rejection.reason == .unavailable, let code = rejection.ruleID, !code.hasPrefix("errno:") {
-      return FailureText.describe(code, turkish: turkish) + " — " + rejection.path
-    }
+    FailureText.presentation(rejection, turkish: turkish).text + " — " + rejection.path
+  }
+
+  static func baseRejection(_ rejection: PlanRejection, turkish: Bool?) -> String {
     let copy: (String, String) =
       switch rejection.reason {
       case .bulkRoot:
@@ -266,19 +232,6 @@ enum SpaceText {
           "Lighten bu öğeyi inceleyemedi. Konumunu Finder’da inceleyin."
         )
       }
-    let text = FailureText.text(copy.0, copy.1, turkish: turkish)
-    let osDetails =
-      rejection.ruleID.flatMap { code -> String? in
-        guard code.hasPrefix("errno:"), let number = Int32(code.dropFirst("errno:".count)) else { return nil }
-        return " macOS: " + FailureText.posixDetails(number)
-      } ?? ""
-    let rule = rejection.ruleID.flatMap { id in
-      NeverRule.all.first { $0.id == id }.map { "\($0.id): \($0.reason)" }
-    }
-    let process =
-      rejection.reason == .processActive || rejection.reason == .applicationRunning
-        || rejection.reason == .activityUnavailable
-      ? rejection.ruleID.map { " (" + $0 + ")" } ?? "" : ""
-    return "\(text)\(process)\(rule.map { " \($0)" } ?? "")\(osDetails) — \(rejection.path)"
+    return FailureText.text(copy.0, copy.1, turkish: turkish)
   }
 }
