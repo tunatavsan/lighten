@@ -83,6 +83,66 @@ public struct SpaceItem: Sendable, Identifiable, Equatable {
     }
     return true
   }
+  /// Projects successful removals for presentation without changing the scan tree.
+  /// Overlapping roots are counted once. Incomplete observations stay incomplete.
+  public func excludingFromDisplay(_ removed: [SpaceItem]) -> SpaceItem? {
+    let unique = Dictionary(removed.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+    let roots = unique.values.filter { candidate in
+      !removed.contains { candidate.path.hasPrefix($0.path + "/") }
+    }
+    if roots.contains(where: { path == $0.path || path.hasPrefix($0.path + "/") }) { return nil }
+    let descendants = roots.filter { $0.path.hasPrefix(path == "/" ? "/" : path + "/") }
+    guard !descendants.isEmpty else { return self }
+    func subtract(_ value: ByteAggregate, metric: SpaceMetric) -> ByteAggregate {
+      var remaining = value.knownLowerBound
+      var complete = value.completeTotal != nil
+      for item in descendants {
+        let amount = item.bytes(metric)
+        remaining = max(0, remaining - min(remaining, amount.knownLowerBound))
+        complete = complete && amount.completeTotal != nil
+      }
+      return ByteAggregate(knownLowerBound: remaining, completeTotal: complete ? remaining : nil)
+    }
+    let remainingItems = descendants.reduce(itemCount) { max(0, $0 - min($0, $1.itemCount)) }
+    let remainingChildren = max(0, childCount - descendants.filter { $0.parentID == id }.count)
+    return SpaceItem(
+      id: id, parentID: parentID, name: name, path: path, kind: kind,
+      logical: subtract(logical, metric: .logical), allocated: subtract(allocated, metric: .allocated),
+      itemCount: remainingItems, state: state, childCount: remainingChildren,
+      device: device, inode: inode, summarizedFiles: summarizedFiles)
+  }
+
+  /// Restores an observed root into the display while a fresh scan runs.
+  public func addingToDisplay(_ restored: [SpaceItem]) -> SpaceItem {
+    let unique = Dictionary(restored.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+    let roots = unique.values.filter { candidate in
+      !restored.contains { candidate.path.hasPrefix($0.path + "/") }
+    }
+    let descendants = roots.filter { $0.path.hasPrefix(path == "/" ? "/" : path + "/") }
+    guard !descendants.isEmpty else { return self }
+    let size = ObservedPlanSize.total(
+      [ObservedPlanSize(logical: logical, allocated: allocated)]
+        + descendants.map { ObservedPlanSize(logical: $0.logical, allocated: $0.allocated) })
+    let count = descendants.reduce(itemCount) { sum, item in
+      let (total, overflow) = sum.addingReportingOverflow(item.itemCount)
+      return overflow ? Int64.max : total
+    }
+    return SpaceItem(
+      id: id, parentID: parentID, name: name, path: path, kind: kind,
+      logical: size.logical ?? ByteAggregate(knownLowerBound: 0, completeTotal: nil),
+      allocated: size.allocated ?? ByteAggregate(knownLowerBound: 0, completeTotal: nil),
+      itemCount: count, state: state,
+      childCount: childCount + descendants.filter { $0.parentID == id }.count,
+      device: device, inode: inode, summarizedFiles: summarizedFiles)
+  }
+
+  public func displayIdentity(_ id: ScanItemID, parentID: ScanItemID?, childCount: Int? = nil) -> SpaceItem {
+    SpaceItem(
+      id: id, parentID: parentID, name: name, path: path, kind: kind, logical: logical, allocated: allocated,
+      itemCount: itemCount, state: state, childCount: childCount ?? self.childCount, device: device, inode: inode,
+      summarizedFiles: summarizedFiles)
+  }
+
   public func bytes(_ metric: SpaceMetric) -> ByteAggregate {
     metric == .logical ? logical : allocated
   }

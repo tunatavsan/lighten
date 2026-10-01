@@ -136,11 +136,7 @@ struct DuplicateView: View {
         Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
           .padding(.top, 5)
       }
-      if let result = actions.result, result.planID == store.presentedPlanID {
-        Text(resultLine(result))
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          .padding(.top, 5)
-      }
+      ActionFeedbackView(actions: actions).padding(.top, 5)
     }
     .padding(20)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -150,6 +146,7 @@ struct DuplicateView: View {
       ConfirmationView(presentation: presentation, actions: actions)
     }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.targets)
+    .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: store.displayRevision)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.report?.groups.count)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.needsRescan)
     .onAppear { store.observeResult(actions: actions) }
@@ -177,6 +174,7 @@ struct DuplicateView: View {
       Divider()
       ForEach(group.members) { member in
         memberRow(member, group: group)
+          .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.96)))
       }
     }
     .padding(13)
@@ -209,6 +207,10 @@ struct DuplicateView: View {
       VStack(alignment: .leading, spacing: 2) {
         Text(URL(fileURLWithPath: member.entry.path).lastPathComponent)
           .font(.system(size: 12, weight: .medium)).lineLimit(1)
+        if let reason = actions.failure(at: member.entry.path) {
+          Text(reason).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         Text(member.entry.path)
           .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
           .lineLimit(1).truncationMode(.middle).help(member.entry.path)
@@ -231,21 +233,6 @@ struct DuplicateView: View {
     case .metadataDifferent: String(localized: "Metadata differs · report only")
     case .metadataUnknown: String(localized: "Metadata unknown · report only")
     }
-  }
-
-  private func resultLine(_ result: ActionResult) -> String {
-    let categories: [(ActionOutcome, String)] = [
-      (.applied, String(localized: "Moved to Trash")),
-      (.skipped, String(localized: "Skipped")),
-      (.failed, String(localized: "Failed")),
-      (.uncertain, String(localized: "Uncertain")),
-      (.notAttempted, String(localized: "Not attempted")),
-    ]
-    let parts = categories.compactMap { outcome, title -> String? in
-      let count = result.items.filter { $0.outcome == outcome }.count
-      return count == 0 ? nil : "\(count) \(title)"
-    }
-    return String(localized: "Last result") + ": " + parts.joined(separator: " · ")
   }
 
   private func chooseFolder() {

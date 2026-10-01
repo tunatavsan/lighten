@@ -49,6 +49,7 @@ private enum LightenSection: String, CaseIterable, Identifiable {
 }
 
 private struct LightenRootView: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var section: LightenSection? = .overview
   @State private var overview = OverviewStore()
   @State private var space = SpaceStore()
@@ -113,7 +114,26 @@ private struct LightenRootView: View {
     }
     .frame(minWidth: 820, minHeight: 560)
     .tint(LightenStyle.accent)
-    .task { await actions.reloadHistory() }
+    .onChange(of: reduceMotion, initial: true) { _, value in
+      actions.reduceMotion = value
+      space.reduceMotion = value
+    }
+    .task {
+      actions.onDisplayChange = { [weak space, weak clean, weak apps, weak duplicates] change in
+        space?.applyDisplayChange(change)
+        clean?.applyDisplayChange(change)
+        apps?.applyDisplayChange(change)
+        duplicates?.applyDisplayChange(change)
+      }
+      actions.onDisplayDiscrepancy = { [weak space, weak clean, weak apps, weak duplicates, weak actions] _ in
+        guard let actions else { return }
+        if space?.tree != nil { space?.startScan() }
+        if clean?.scannedAt != nil { clean?.startScan(actions: actions) }
+        if apps?.scannedAt != nil { apps?.startScan(actions: actions) }
+        if let folder = duplicates?.folderPath { duplicates?.startScan(folder: folder, actions: actions) }
+      }
+      await actions.reloadHistory()
+    }
   }
 
   /// Scans keep running when their screen is not shown; the sidebar says so.

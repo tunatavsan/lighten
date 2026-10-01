@@ -80,6 +80,7 @@ struct SpaceView: View {
     .background(LightenStyle.canvas)
     .tint(LightenStyle.accent)
     .navigationTitle(String(localized: "Space"))
+    .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: store.displayRevision)
     .onAppear {
       store.spaceDidAppear()
       store.loadVolumes()
@@ -497,7 +498,13 @@ struct SpaceView: View {
             Image(systemName: SpaceText.symbol(item))
               .foregroundStyle(LightenStyle.muted)
               .frame(width: 17)
-            Text(SpaceText.name(item)).lineLimit(1).truncationMode(.middle)
+            VStack(alignment: .leading, spacing: 2) {
+              Text(SpaceText.name(item)).lineLimit(1).truncationMode(.middle)
+              if let reason = actions.failure(at: item.path) {
+                Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+                  .lineLimit(2)
+              }
+            }
             Spacer(minLength: 5)
             Text(sizeLabel(item.bytes(store.metric)))
               .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
@@ -651,11 +658,10 @@ struct SpaceView: View {
         .scrollIndicators(.hidden)
         .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: actions.basket.count)
       }
-      if let result = actions.result {
-        Text(resultLine(result))
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          .lineLimit(1)
-          .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
+      ActionFeedbackView(actions: actions)
+      if let message = store.displayMessage {
+        Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+          .fixedSize(horizontal: false, vertical: true)
       }
     }
     .padding(.horizontal, 20).padding(.vertical, 10)
@@ -663,30 +669,6 @@ struct SpaceView: View {
     .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: actions.result?.planID)
   }
 
-  private func resultLine(_ result: ActionResult) -> String {
-    let parts: [(ActionOutcome, String)] = [
-      (
-        .applied,
-        actions.resultKind == .catalogDelete
-          ? String(localized: "Permanently cleaned") : String(localized: "Moved to Trash")
-      ),
-      (.skipped, String(localized: "Skipped")),
-      (.failed, String(localized: "Failed")),
-      (.uncertain, String(localized: "Uncertain")),
-      (.notAttempted, String(localized: "Not attempted")),
-    ]
-    let counts = parts.compactMap { outcome, label -> String? in
-      let count = result.items.filter { $0.outcome == outcome }.count
-      return count > 0 ? "\(count) \(label)" : nil
-    }
-    let deltas = result.items.compactMap { item -> String? in
-      guard let added = item.addedFileCount, let bytes = item.logicalByteDelta else { return nil }
-      let change = (bytes >= 0 ? "+" : "−") + format(bytes == Int64.min ? Int64.max : abs(bytes))
-      return "\(added) \(String(localized: "new files")), \(change)"
-    }
-    return "\(String(localized: "Last result")): \(counts.joined(separator: " · "))"
-      + (deltas.isEmpty ? "" : " · " + deltas.joined(separator: "; "))
-  }
 }
 
 func sizeLabel(_ bytes: ByteAggregate?) -> String {

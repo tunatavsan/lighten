@@ -289,6 +289,7 @@ private actor CleanDiscoverySequence {
   #expect(presentation.plan.kind == .trash)
   #expect(Set(presentation.plan.items.compactMap { $0.catalogProof?.rowID }).count == 2)
   let before = store.candidates.count
+  let selectedBefore = store.selected
   let movedID = try #require(store.actionableCandidates.first?.id)
   let encoded: [String: Any] = [
     "planID": presentation.id.uuidString,
@@ -298,7 +299,7 @@ private actor CleanDiscoverySequence {
   store.observeResult(actions: actions)
   #expect(store.candidates.count == before - 1)
   #expect(!store.candidates.contains { $0.id == movedID })
-  #expect(store.selected.isEmpty)
+  #expect(store.selected == selectedBefore.subtracting([movedID]))
   #expect(actions.pending == nil)
   store.observeResult(actions: actions)
   #expect(store.candidates.count == before - 1)
@@ -519,4 +520,31 @@ private actor ScopedCleanActivity: ProcessActivitySource {
   #expect(permanent.permanentPlanBuilder == nil)
   #expect(permanent.plan.items.allSatisfy { $0.policy == nil && $0.catalogProof?.method == .catalogDelete })
   #expect(actions.result == nil)
+}
+
+@Test("Clean updates every category after another module's action and restores removed observations on Undo")
+@MainActor func cleanCrossModuleLiveDisplayAndUndo() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let store = fixture.store()
+  store.startScan()
+  await store.waitForScan()
+  let before = store.candidates
+  let candidate = try #require(before.first)
+  let item = ActionDisplayItem(
+    planID: UUID(), itemID: UUID(), path: candidate.entry.path, identity: candidate.entry.identity,
+    size: ObservedPlanSize(
+      logical: ByteAggregate(knownLowerBound: candidate.logicalBytes, completeTotal: candidate.logicalBytes),
+      allocated: candidate.node.allocated), label: "Cache", returnedTrashPath: nil)
+  let total = store.toolSummary.logicalBytes
+  store.selected = Set(before.map(\.id))
+  store.applyDisplayChange(ActionDisplayChange(kind: .applied, items: [item]))
+  #expect(store.candidates.count == before.count - 1)
+  #expect(store.toolSummary.logicalBytes == total - candidate.logicalBytes)
+  #expect(!store.selected.contains(candidate.id))
+  #expect(store.selected.count == before.count - 1)
+  store.applyDisplayChange(ActionDisplayChange(kind: .restored, items: [item]))
+  #expect(store.candidates.count == before.count)
+  #expect(store.toolSummary.logicalBytes == total)
+  #expect(!store.selected.contains(candidate.id))
 }

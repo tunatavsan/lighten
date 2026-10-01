@@ -11,6 +11,9 @@ final class DuplicateStore {
   @ObservationIgnored private var scanGeneration = UUID()
   @ObservationIgnored private var preparationTask: Task<ActionPlan, Error>?
   @ObservationIgnored private var preparationGeneration = UUID()
+  @ObservationIgnored private var displayGroups: [UUID: DuplicateGroup] = [:]
+  @ObservationIgnored private var removedMembers: [UUID: Set<UUID>] = [:]
+  private(set) var displayRevision = 0
 
   init(
     planBuilder: @escaping @Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> ActionPlan = {
@@ -50,6 +53,8 @@ final class DuplicateStore {
     scanGeneration = generation
     folderPath = folder
     report = nil
+    displayGroups = [:]
+    removedMembers = [:]
     keepers = [:]
     targets = []
     needsRescan = false
@@ -95,12 +100,41 @@ final class DuplicateStore {
     invalidatePreparation(actions: actions, keepPresentedPlanID: awaitingResult || needsRescan)
   }
 
+  func applyDisplayChange(_ change: ActionDisplayChange) {
+    guard let report else { return }
+    if displayGroups.isEmpty { displayGroups = Dictionary(uniqueKeysWithValues: report.groups.map { ($0.id, $0) }) }
+    for item in change.items {
+      switch change.kind {
+      case .applied:
+        removedMembers[item.itemID] = Set(
+          displayGroups.values.flatMap(\.members).filter {
+            item.matches(path: $0.entry.path, identity: $0.entry.identity)
+          }.map(\.id))
+      case .restored: removedMembers.removeValue(forKey: item.itemID)
+      }
+    }
+    let hidden = removedMembers.values.reduce(into: Set<UUID>()) { $0.formUnion($1) }
+    let groups = displayGroups.values.sorted { $0.id.uuidString < $1.id.uuidString }.compactMap {
+      group -> DuplicateGroup? in
+      let members = group.members.filter { !hidden.contains($0.id) }
+      guard members.count > 1 else { return nil }
+      return DuplicateGroup(id: group.id, logicalBytes: group.logicalBytes, members: members)
+    }
+    self.report = DuplicateReport(
+      snapshot: report.snapshot, groups: groups, skippedCount: report.skippedCount,
+      partial: report.partial, comparisonCount: report.comparisonCount)
+    targets.subtract(hidden)
+    displayRevision += 1
+    if change.kind == .applied, !hidden.isEmpty { needsRescan = true }
+  }
+
   func observeResult(actions: ActionStore) {
     guard let presentedPlanID, actions.result?.planID == presentedPlanID,
       !needsRescan
     else { return }
     invalidatePreparation(actions: actions, keepPresentedPlanID: true)
-    targets = []
+    let applied = Set(actions.result?.items.filter { $0.outcome == .applied }.map(\.itemID) ?? [])
+    targets.subtract(applied)
     keepers = [:]
     needsRescan = true
   }

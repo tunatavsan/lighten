@@ -27,6 +27,11 @@ final class AppsStore {
   @ObservationIgnored private let usesInjectedPlanner: Bool
   @ObservationIgnored private var relatedReviewedPaths: Set<String> = []
   @ObservationIgnored private var removedPaths: Set<String> = []
+  @ObservationIgnored private var displayChanges: [UUID: ActionDisplayItem] = [:]
+  @ObservationIgnored private var removedReports: [UUID: [ApplicationReport]] = [:]
+  @ObservationIgnored private var removedData: [UUID: [String: [RelatedDataCandidate]]] = [:]
+  @ObservationIgnored private var removedOrphans: [UUID: [RelatedDataCandidate]] = [:]
+  private(set) var displayRevision = 0
   private(set) var ownershipPendingPaths: Set<String> = []
   private(set) var selectedReviewPending = false
   private(set) var backgroundStartedAt: ContinuousClock.Instant?
@@ -243,7 +248,7 @@ final class AppsStore {
           case .session(let session):
             self.session = session
           case .inventory(_, let metadata):
-            self.reports = metadata
+            self.reports = metadata.filter { !self.displayRemoved($0) }
             self.measuringPaths = Set(metadata.map(\.path))
             self.inventoryPublishedAt = .now
             self.pictureRows = []
@@ -261,9 +266,9 @@ final class AppsStore {
               }
             }
           case .orphans(let candidates):
-            self.orphanCandidates = candidates
+            self.orphanCandidates = candidates.filter { !self.displayRemoved($0) }
           case .completed(let inventory, let reports):
-            self.reports = reports.filter { !self.removedPaths.contains($0.path) }.map { report in
+            self.reports = reports.filter { !self.displayRemoved($0) }.map { report in
               self.reports.first(where: { $0.path == report.path }).map {
                 self.mergingMeasurement(report, with: $0)
               } ?? report
@@ -455,7 +460,8 @@ final class AppsStore {
         signerTeamID: review.signerTeamID ?? current.signerTeamID,
         logical: current.logical, allocated: current.allocated, knownItemCount: current.knownItemCount,
         partial: current.partial, related: current.related,
-        manualUninstallerSuggested: current.manualUninstallerSuggested, linkTarget: current.linkTarget)
+        manualUninstallerSuggested: current.manualUninstallerSuggested, linkTarget: current.linkTarget,
+        displayRootIdentity: current.displayRootIdentity)
       updated.isIOSWrapper = current.isIOSWrapper
       reports[index] = updated
     }
@@ -464,12 +470,12 @@ final class AppsStore {
   }
 
   private func publishRelated(path: String, candidates: [RelatedDataCandidate], ownershipPending: Bool) {
-    guard !removedPaths.contains(path), let index = reports.firstIndex(where: { $0.path == path }) else { return }
-    let incoming = candidates.filter { !removedPaths.contains($0.path) }
+    guard let index = reports.firstIndex(where: { $0.path == path }), !displayRemoved(reports[index]) else { return }
+    let incoming = candidates.filter { !displayRemoved($0) }
     let incomingPaths = Set(incoming.map(\.path))
     reports[index].related =
       ownershipPending
-      ? incoming + reports[index].related.filter { !incomingPaths.contains($0.path) && !removedPaths.contains($0.path) }
+      ? incoming + reports[index].related.filter { !incomingPaths.contains($0.path) && !displayRemoved($0) }
       : incoming
     relatedReviewedPaths.insert(path)
     if ownershipPending { ownershipPendingPaths.insert(path) } else { ownershipPendingPaths.remove(path) }
@@ -482,8 +488,9 @@ final class AppsStore {
       logical: report.logical, allocated: report.allocated, knownItemCount: report.knownItemCount,
       partial: report.partial,
       related: (relatedReviewedPaths.contains(report.path) ? current.related : report.related)
-        .filter { !removedPaths.contains($0.path) },
-      manualUninstallerSuggested: report.manualUninstallerSuggested, linkTarget: report.linkTarget)
+        .filter { !displayRemoved($0) },
+      manualUninstallerSuggested: report.manualUninstallerSuggested, linkTarget: report.linkTarget,
+      displayRootIdentity: report.displayRootIdentity)
     merged.isIOSWrapper = report.isIOSWrapper
     return merged
   }
@@ -584,6 +591,78 @@ final class AppsStore {
     invalidatePreparation(actions: actions, keepPresentedPlanID: actions.busy)
   }
 
+  private func displayRemoved(path: String, identity: FileIdentity?) -> Bool {
+    let observations = displayChanges.values.filter { $0.path == path }
+    if !observations.isEmpty { return observations.contains { $0.matches(path: path, identity: identity) } }
+    return removedPaths.contains(path)
+  }
+
+  private func displayRemoved(_ report: ApplicationReport) -> Bool {
+    displayRemoved(path: report.linkTarget ?? report.path, identity: report.displayRootIdentity)
+  }
+
+  private func displayRemoved(_ candidate: RelatedDataCandidate) -> Bool {
+    displayRemoved(
+      path: candidate.path, identity: candidate.snapshot?.entries.first { $0.path == candidate.path }?.identity)
+  }
+
+  func applyDisplayChange(_ change: ActionDisplayChange) {
+    for item in change.items {
+      switch change.kind {
+      case .applied:
+        displayChanges[item.itemID] = item
+        let matched = reports.filter { report in
+          item.matches(path: report.linkTarget ?? report.path, identity: report.displayRootIdentity)
+        }
+        removedReports[item.itemID] = matched
+        reports.removeAll { report in matched.contains { $0.path == report.path } }
+        var data: [String: [RelatedDataCandidate]] = [:]
+        for index in reports.indices {
+          let matched = reports[index].related.filter { candidate in
+            candidate.snapshot?.entries.contains { item.matches(path: $0.path, identity: $0.identity) } == true
+              && (candidate.path == item.path || candidate.path.hasPrefix(item.path + "/"))
+          }
+          data[reports[index].path] = matched
+          reports[index].related.removeAll { candidate in matched.contains { $0.path == candidate.path } }
+        }
+        removedData[item.itemID] = data
+        let orphans = orphanCandidates.filter { candidate in
+          candidate.snapshot?.entries.contains { item.matches(path: $0.path, identity: $0.identity) } == true
+            && (candidate.path == item.path || candidate.path.hasPrefix(item.path + "/"))
+        }
+        removedOrphans[item.itemID] = orphans
+        orphanCandidates.removeAll { candidate in orphans.contains { $0.path == candidate.path } }
+        removedPaths.formUnion(matched.map(\.path))
+        removedPaths.formUnion(data.values.flatMap { $0 }.map(\.path))
+        selectedDataPaths.subtract(data.values.flatMap { $0 }.map(\.path))
+        selectedOrphanPaths.subtract(orphans.map(\.path))
+        if let selectedPath, matched.contains(where: { $0.path == selectedPath }) {
+          self.selectedPath = nil
+          packageSelected = false
+        }
+      case .restored:
+        displayChanges.removeValue(forKey: item.itemID)
+        for report in removedReports.removeValue(forKey: item.itemID) ?? [] {
+          removedPaths.remove(report.path)
+          if !reports.contains(where: { $0.path == report.path }) { reports.append(report) }
+        }
+        for (path, candidates) in removedData.removeValue(forKey: item.itemID) ?? [:] {
+          guard let index = reports.firstIndex(where: { $0.path == path }) else { continue }
+          for candidate in candidates {
+            removedPaths.remove(candidate.path)
+            if !reports[index].related.contains(where: { $0.path == candidate.path }) {
+              reports[index].related.append(candidate)
+            }
+          }
+        }
+        for candidate in removedOrphans.removeValue(forKey: item.itemID) ?? [] {
+          if !orphanCandidates.contains(where: { $0.path == candidate.path }) { orphanCandidates.append(candidate) }
+        }
+      }
+    }
+    displayRevision += 1
+  }
+
   func observeResult(actions: ActionStore) {
     guard let presentedPlanID, let result = actions.result, result.planID == presentedPlanID,
       observedResultID != result.planID
@@ -607,6 +686,7 @@ final class AppsStore {
         removedApplications.insert(path)
       } else if physicalMoved || (pair.link.map { results[$0]?.outcome == .applied } ?? false) {
         incompletePackagePaths.insert(path)
+        if selectedPath == path { packageSelected = false }
       }
     }
     let removedRows = moved.subtracting(presentedPackages.keys).union(removedApplications)
@@ -623,9 +703,9 @@ final class AppsStore {
       return refreshed
     }
     orphanCandidates.removeAll { moved.contains($0.path) }
-    selectedDataPaths = []
-    selectedOrphanPaths = []
-    packageSelected = false
+    selectedDataPaths.subtract(moved)
+    selectedOrphanPaths.subtract(moved)
+    if !removedApplications.isEmpty { packageSelected = false }
     if let selectedPath, removedRows.contains(selectedPath) { self.selectedPath = nil }
     message = nil
   }

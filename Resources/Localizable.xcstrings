@@ -1,6 +1,142 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%@ (%@) remains in Trash; the other items were restored.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) remains in Trash; the other items were restored."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) Çöp’te kaldı; diğer öğeler geri yüklendi."
+          }
+        }
+      }
+    },
+    "%@ (%@) was moved to Trash.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) was moved to Trash."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) Çöp’e taşındı."
+          }
+        }
+      }
+    },
+    "%@ (%@) was permanently cleaned.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) was permanently cleaned."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) kalıcı olarak temizlendi."
+          }
+        }
+      }
+    },
+    "%@ (%@) was restored.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) was restored."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) geri yüklendi."
+          }
+        }
+      }
+    },
+    "%@ (%@) were moved to Trash.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) were moved to Trash."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) Çöp’e taşındı."
+          }
+        }
+      }
+    },
+    "%@ (%@) were permanently cleaned.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) were permanently cleaned."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) kalıcı olarak temizlendi."
+          }
+        }
+      }
+    },
+    "%@ (%@) were restored.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) were restored."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@) geri yüklendi."
+          }
+        }
+      }
+    },
+    "%@ and %lld more items": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ and %lld more items"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ ve %lld öğe daha"
+          }
+        }
+      }
+    },
     "A related process is running. Quit it before cleaning.": {
       "localizations": {
         "en": {
@@ -1201,6 +1337,23 @@
         }
       }
     },
+    "Empty Trash to free disk space.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Empty Trash to free disk space."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diskte yer açmak için Çöp’ü boşaltın."
+          }
+        }
+      }
+    },
     "Exact copy; verified keeper remains": {
       "localizations": {
         "en": {
@@ -1601,6 +1754,23 @@
         }
       }
     },
+    "Items that stayed in place": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Items that stayed in place"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yerinde kalan öğeler"
+          }
+        }
+      }
+    },
     "Keep this copy": {
       "localizations": {
         "en": {
@@ -1661,22 +1831,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "En büyük öğeler"
-          }
-        }
-      }
-    },
-    "Last result": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Last result"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Son sonuç"
           }
         }
       }
@@ -2129,6 +2283,23 @@
         }
       }
     },
+    "Measured in the scan": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Measured in the scan"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taramada ölçülen"
+          }
+        }
+      }
+    },
     "Measured size": {
       "localizations": {
         "en": {
@@ -2513,6 +2684,23 @@
         }
       }
     },
+    "No items were removed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No items were removed."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hiçbir öğe kaldırılmadı."
+          }
+        }
+      }
+    },
     "No matching applications": {
       "localizations": {
         "en": {
@@ -2621,22 +2809,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Denenmedi"
-          }
-        }
-      }
-    },
-    "Not moved": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not moved"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Taşınmadı"
           }
         }
       }
@@ -4097,6 +4269,23 @@
         }
       }
     },
+    "Show in Trash": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show in Trash"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çöp’te göster"
+          }
+        }
+      }
+    },
     "Signer": {
       "localizations": {
         "en": {
@@ -4317,6 +4506,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bazı öğeler okunamadığı için boyut bir alt sınırdır. Klasörü Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Some items could not be restored. Review History for the reason.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some items could not be restored. Review History for the reason."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı öğeler geri yüklenemedi. Nedenini Geçmiş’te inceleyin."
           }
         }
       }
@@ -4577,6 +4783,23 @@
         }
       }
     },
+    "The files changed after the action. Refreshing the displayed results.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The files changed after the action. Refreshing the displayed results."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşlemden sonra dosyalar değişti. Ekrandaki sonuçlar yenileniyor."
+          }
+        }
+      }
+    },
     "The item changed after it was checked. Scan again before cleaning.": {
       "localizations": {
         "en": {
@@ -4813,6 +5036,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "Fiziksel uygulama ve bu bağlantı ayrı Çöp öğeleridir. Her sonuç ayrı gösterilir."
+          }
+        }
+      }
+    },
+    "The refreshed scan differs from the removal result. The current files are shown.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The refreshed scan differs from the removal result. The current files are shown."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yenilenen tarama, kaldırma sonucundan farklı. Mevcut dosyalar gösteriliyor."
+          }
+        }
+      }
+    },
+    "The refreshed scan differs from the restoration result. The current files are shown.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The refreshed scan differs from the restoration result. The current files are shown."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yenilenen tarama, geri yükleme sonucundan farklı. Mevcut dosyalar gösteriliyor."
+          }
+        }
+      }
+    },
+    "The result could not be checked again for these paths. Review them in Finder.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The result could not be checked again for these paths. Review them in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu yollar için sonuç yeniden kontrol edilemedi. Finder’da inceleyin."
           }
         }
       }
@@ -5293,6 +5567,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu öğe bir sanal makine, yedek veya derleme arşivi içerebilir; Çöp’e taşımadan önce ihtiyacınız olanları kontrol edin."
+          }
+        }
+      }
+    },
+    "This item was not removed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item was not removed."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğe kaldırılmadı."
           }
         }
       }
@@ -5933,22 +6224,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "macOS sistem birimi"
-          }
-        }
-      }
-    },
-    "new files": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "new files"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "yeni dosya"
           }
         }
       }

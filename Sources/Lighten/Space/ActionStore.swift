@@ -1,6 +1,8 @@
+import Darwin
 import Foundation
 import LightenKit
 import Observation
+import SwiftUI
 
 struct ActionItemSummary: Sendable {
   let id: UUID
@@ -11,10 +13,11 @@ struct ActionItemSummary: Sendable {
   let allocatedBytes: Int64?
   let warning: ProtectiveWarning?
   let observedSize: ObservedPlanSize
+  let warningPaths: [String]
 
   nonisolated init(
     id: UUID, label: String, path: String, reason: String, logicalBytes: Int64?, allocatedBytes: Int64?,
-    warning: ProtectiveWarning? = nil, observedSize: ObservedPlanSize? = nil
+    warning: ProtectiveWarning? = nil, observedSize: ObservedPlanSize? = nil, warningPaths: [String] = []
   ) {
     self.id = id
     self.label = label
@@ -23,6 +26,7 @@ struct ActionItemSummary: Sendable {
     self.logicalBytes = logicalBytes
     self.allocatedBytes = allocatedBytes
     self.warning = warning
+    self.warningPaths = Array(warningPaths.prefix(3))
     self.observedSize =
       observedSize?.validated
       ?? ObservedPlanSize(
@@ -37,6 +41,7 @@ struct BasketEntry: Sendable, Equatable {
   let device: UInt64
   let inode: UInt64
   let logical: ByteAggregate
+  var allocated: ByteAggregate? = nil
 }
 
 struct ActionPresentation: Identifiable, Sendable {
@@ -74,6 +79,19 @@ final class ActionStore {
   @ObservationIgnored private let historyService: ActionHistory
   @ObservationIgnored private var claimedPlan: ActionPlan?
   @ObservationIgnored private var alternatePlanID: UUID?
+  @ObservationIgnored private var claimedSummaries: [ActionItemSummary] = []
+  @ObservationIgnored private var claimedRejections: [PlanRejection] = []
+  @ObservationIgnored var onDisplayChange: (@MainActor (ActionDisplayChange) -> Void)?
+  @ObservationIgnored var onDisplayDiscrepancy: (@MainActor (ActionDisplayChange) -> Void)?
+  @ObservationIgnored private var verificationTask: Task<Void, Never>?
+  @ObservationIgnored private var appliedDisplayItems: [UUID: ActionDisplayItem] = [:]
+  private(set) var displayRevision = 0
+  private(set) var resultSummaries: [ActionItemSummary] = []
+  private(set) var resultFailures: [ActionDisplayFailure] = []
+  private(set) var resultRejections: [PlanRejection] = []
+  private(set) var restoredItemIDs: Set<UUID> = []
+  var reduceMotion = false
+  var displayAnimation: Animation? { reduceMotion ? nil : .smooth(duration: 0.24) }
 
   init(
     journal: JSONLActionJournal = JSONLActionJournal(),
@@ -104,9 +122,10 @@ final class ActionStore {
   var message: String?
 
   func add(_ item: SpaceItem) {
-    guard item.canSelect, item.inode != 0 else { return }
+    guard !busy, item.canSelect, item.inode != 0 else { return }
     basket[item.path] = BasketEntry(
-      path: item.path, label: item.name, device: item.device, inode: item.inode, logical: item.logical)
+      path: item.path, label: item.name, device: item.device, inode: item.inode, logical: item.logical,
+      allocated: item.allocated)
   }
 
   func remove(_ path: String) { basket.removeValue(forKey: path) }
@@ -127,7 +146,7 @@ final class ActionStore {
 
   var pendingTrashSize: ObservedPlanSize {
     ObservedPlanSize.total(
-      (history?.items ?? []).filter { $0.applied && $0.state == .inTrash }.map {
+      (history?.items ?? []).filter { $0.applied && $0.state == .inTrash && !restoredItemIDs.contains($0.itemID) }.map {
         historyMetadata[$0.itemID]?.observedSize ?? .unknown
       })
   }
@@ -140,7 +159,9 @@ final class ActionStore {
     return ObservedPlanSize.total(plan.metadata.filter { applied.contains($0.id) }.map(\.displaySize))
   }
 
-  var pendingTrashCount: Int { history?.items.filter { $0.applied && $0.state == .inTrash }.count ?? 0 }
+  var pendingTrashCount: Int {
+    history?.items.filter { $0.applied && $0.state == .inTrash && !restoredItemIDs.contains($0.itemID) }.count ?? 0
+  }
 
   /// Builds the plan from a fresh exact inventory of each basket item. The scan
   /// tree only told us where to look.
@@ -149,7 +170,9 @@ final class ActionStore {
     busy = true
     defer { busy = false }
     let selections = basket.values.map {
-      PlanService.Selection(path: $0.path, device: $0.device, inode: $0.inode)
+      PlanService.Selection(
+        path: $0.path, device: $0.device, inode: $0.inode,
+        observedSize: ObservedPlanSize(logical: $0.logical, allocated: $0.allocated))
     }
     let reason = String(localized: "Selected in Space")
     let planner = planService
@@ -194,7 +217,10 @@ final class ActionStore {
           id: summary.id, label: summary.label, path: summary.path, reason: summary.reason,
           logicalBytes: size.logical?.completeTotal ?? size.logical?.knownLowerBound,
           allocatedBytes: size.allocated?.completeTotal ?? size.allocated?.knownLowerBound,
-          warning: summary.warning, observedSize: size)
+          warning: summary.warning ?? ProtectiveWarning.evaluate(item, homeDirectory: planService.homeDirectory),
+          observedSize: size,
+          warningPaths: (summary.warning ?? ProtectiveWarning.evaluate(item, homeDirectory: planService.homeDirectory))?
+            .examplePaths(item, homeDirectory: planService.homeDirectory) ?? [])
       },
       permanentPlanBuilder: plan.kind == .trash ? permanentPlanBuilder : nil, rejectedItems: rejectedItems)
   }
@@ -225,10 +251,15 @@ final class ActionStore {
       presentation.plan.kind == .trash || presentation.plan.kind == .catalogDelete
     else { return nil }
     claimedPlan = presentation.plan
+    claimedSummaries = presentation.items
+    claimedRejections = presentation.rejectedItems
     pending = nil
     busy = true
     result = nil
     resultKind = nil
+    resultSummaries = []
+    resultFailures = []
+    resultRejections = []
     return presentation.plan
   }
 
@@ -240,20 +271,193 @@ final class ActionStore {
       let confirmation =
         plan.kind == .catalogDelete
         ? IrreversibleConfirmation(planID: plan.id, method: .catalogDelete) : nil
-      result = try await executor.execute(plan, confirmation: confirmation)
-      resultKind = plan.kind
-      for item in result?.items ?? [] where item.outcome == .applied {
-        if let path = plan.items.first(where: { $0.id == item.itemID })?.sourcePath {
-          for selected in basket.keys.filter({ $0 == path || $0.hasPrefix(path + "/") }) {
-            basket.removeValue(forKey: selected)
-          }
-        }
-      }
+      let completed = try await executor.execute(plan, confirmation: confirmation)
+      publishExecution(plan: plan, result: completed, summaries: claimedSummaries, rejections: claimedRejections)
+      claimedSummaries = []
+      claimedRejections = []
       message = nil
     } catch {
       message = FailureText.describe(error)
     }
     await reloadHistory()
+  }
+
+  /// Publish only exact completed IDs. Failed, skipped and uncertain paths stay visible.
+  func publishExecution(
+    plan: ActionPlan, result completed: ActionResult, summaries: [ActionItemSummary], rejections: [PlanRejection] = []
+  ) {
+    guard completed.planID == plan.id else { return }
+    let outcomes = Dictionary(completed.items.map { ($0.itemID, $0) }, uniquingKeysWith: { first, _ in first })
+    let summariesByID = Dictionary(summaries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    let applied = plan.items.compactMap { item -> ActionDisplayItem? in
+      guard let outcome = outcomes[item.id], outcome.outcome == .applied else { return nil }
+      let summary = summariesByID[item.id]
+      return ActionDisplayItem(
+        planID: plan.id, itemID: item.id, path: item.sourcePath,
+        identity: item.inventory.first { $0.path == item.sourcePath }?.identity,
+        size: summary?.observedSize ?? item.displaySize,
+        label: summary?.label ?? URL(fileURLWithPath: item.sourcePath).lastPathComponent,
+        returnedTrashPath: nil)
+    }
+    withAnimation(displayAnimation) {
+      result = completed
+      resultKind = plan.kind
+      resultRejections = rejections
+      resultSummaries = plan.items.compactMap { summariesByID[$0.id] }
+      resultFailures = plan.items.compactMap { item in
+        guard let outcome = outcomes[item.id], outcome.outcome != .applied else { return nil }
+        return ActionDisplayFailure(
+          itemID: item.id, path: item.sourcePath, outcome: outcome.outcome,
+          detail: outcome.detail.map { FailureText.describe($0) } ?? String(localized: "This item was not removed."))
+      }
+      for item in applied {
+        appliedDisplayItems[item.itemID] = item
+        restoredItemIDs.remove(item.itemID)
+      }
+      let roots = applied.filter { item in !applied.contains { item.path.hasPrefix($0.path + "/") } }
+      func subtract(_ value: ByteAggregate?, amounts: [ByteAggregate?]) -> ByteAggregate? {
+        guard let value else { return nil }
+        var remaining = value.knownLowerBound
+        var complete = value.completeTotal != nil
+        for amount in amounts {
+          guard let amount else { return ByteAggregate(knownLowerBound: 0, completeTotal: nil) }
+          remaining = max(0, remaining - min(remaining, amount.knownLowerBound))
+          complete = complete && amount.completeTotal != nil
+        }
+        return ByteAggregate(knownLowerBound: remaining, completeTotal: complete ? remaining : nil)
+      }
+      for (path, entry) in basket {
+        if let root = roots.first(where: { path == $0.path || path.hasPrefix($0.path + "/") }) {
+          let identity = plan.items.first { $0.id == root.itemID }?.inventory.first { $0.path == path }?.identity
+          if identity?.device == entry.device, identity?.inode == entry.inode { basket.removeValue(forKey: path) }
+        } else {
+          let descendants = roots.filter { $0.path.hasPrefix(path + "/") }
+          guard !descendants.isEmpty else { continue }
+          basket[path] = BasketEntry(
+            path: entry.path, label: entry.label, device: entry.device, inode: entry.inode,
+            logical: subtract(entry.logical, amounts: descendants.map { $0.size.logical })
+              ?? ByteAggregate(knownLowerBound: 0, completeTotal: nil),
+            allocated: subtract(entry.allocated, amounts: descendants.map { $0.size.allocated }))
+        }
+      }
+      displayRevision += 1
+      onDisplayChange?(ActionDisplayChange(kind: .applied, items: applied))
+    }
+    verifyInBackground(ActionDisplayChange(kind: .applied, items: applied))
+  }
+
+  func failure(at path: String) -> String? {
+    resultFailures.first { $0.path == path }?.detail
+      ?? resultRejections.first { $0.path == path }.map(SpaceText.rejection)
+  }
+
+  var completedSummary: String? {
+    guard let result else { return nil }
+    let appliedIDs = Set(result.items.filter { $0.outcome == .applied }.map(\.itemID))
+    let applied = resultSummaries.filter { appliedIDs.contains($0.id) }
+    let remaining = applied.filter { !restoredItemIDs.contains($0.id) }
+    let showing = remaining.isEmpty ? applied : remaining
+    guard let first = showing.first else { return String(localized: "No items were removed.") }
+    let name =
+      showing.count == 1
+      ? first.label
+      : String.localizedStringWithFormat(
+        String(localized: "%@ and %lld more items"), first.label, showing.count - 1)
+    let size = PlanItemSize.text(ObservedPlanSize.total(showing.map(\.observedSize)).logical)
+    if remaining.isEmpty {
+      return showing.count == 1
+        ? String.localizedStringWithFormat(String(localized: "%@ (%@) was restored."), name, size)
+        : String.localizedStringWithFormat(String(localized: "%@ (%@) were restored."), name, size)
+    }
+    if remaining.count != applied.count {
+      return String.localizedStringWithFormat(
+        String(localized: "%@ (%@) remains in Trash; the other items were restored."), name, size)
+    }
+    if resultKind == .catalogDelete {
+      return showing.count == 1
+        ? String.localizedStringWithFormat(String(localized: "%@ (%@) was permanently cleaned."), name, size)
+        : String.localizedStringWithFormat(String(localized: "%@ (%@) were permanently cleaned."), name, size)
+    }
+    return showing.count == 1
+      ? String.localizedStringWithFormat(String(localized: "%@ (%@) was moved to Trash."), name, size)
+      : String.localizedStringWithFormat(String(localized: "%@ (%@) were moved to Trash."), name, size)
+  }
+
+  var latestTrashPaths: [String] {
+    guard resultKind == .trash, let result else { return [] }
+    let ids = Set(result.items.filter { $0.outcome == .applied && !restoredItemIDs.contains($0.itemID) }.map(\.itemID))
+    return (history?.items ?? []).filter { $0.planID == result.planID && ids.contains($0.itemID) }
+      .compactMap(\.returnedTrashPath)
+  }
+
+  var canUndoLatest: Bool {
+    guard resultKind == .trash, let result else { return false }
+    return result.items.contains { $0.outcome == .applied && !restoredItemIDs.contains($0.itemID) }
+  }
+
+  func undoLatest() async {
+    guard !busy, canUndoLatest, let planID = result?.planID else { return }
+    busy = true
+    defer { busy = false }
+    do {
+      let restored = try await historyService.undo(planID: planID)
+      undoResults[planID] = restored
+      publishRestored(planID: planID, itemIDs: Set(restored.items.filter { $0.outcome == .restored }.map(\.itemID)))
+      message =
+        restored.remainingCount == 0
+        ? nil : String(localized: "Some items could not be restored. Review History for the reason.")
+    } catch { message = FailureText.describe(error) }
+    await reloadHistory()
+  }
+
+  func publishRestored(planID: UUID, itemIDs: Set<UUID>) {
+    let restored = itemIDs.compactMap { id -> ActionDisplayItem? in
+      guard let item = appliedDisplayItems[id], item.planID == planID else { return nil }
+      return item
+    }
+    withAnimation(displayAnimation) {
+      restoredItemIDs.formUnion(itemIDs)
+      displayRevision += 1
+      onDisplayChange?(ActionDisplayChange(kind: .restored, items: restored))
+    }
+    verifyInBackground(ActionDisplayChange(kind: .restored, items: restored))
+  }
+
+  private func verifyInBackground(_ change: ActionDisplayChange) {
+    guard !change.items.isEmpty else { return }
+    // No cached observation grants authority: this read only checks the result display.
+    verificationTask?.cancel()
+    verificationTask = Task(priority: .utility) { @concurrent [weak self] in
+      var mismatches: [String] = []
+      var unknown: [String] = []
+      for item in change.items {
+        do {
+          let current = try DescriptorFileSystem.identity(at: item.path)
+          if change.kind == .applied || !item.matches(path: item.path, identity: current) {
+            mismatches.append(item.path)
+          }
+        } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT {
+          if change.kind == .restored { mismatches.append(item.path) }
+        } catch { unknown.append(item.path) }
+      }
+      guard !Task.isCancelled else { return }
+      let changed = mismatches
+      let unreadable = unknown
+      await self?.finishVerification(change, mismatches: changed, unknown: unreadable)
+    }
+  }
+
+  private func finishVerification(_ change: ActionDisplayChange, mismatches: [String], unknown: [String]) {
+    if !mismatches.isEmpty {
+      message =
+        String(localized: "The files changed after the action. Refreshing the displayed results.")
+        + "\n" + mismatches.joined(separator: "\n")
+      onDisplayDiscrepancy?(change)
+    } else if !unknown.isEmpty {
+      message =
+        String(localized: "The result could not be checked again for these paths. Review them in Finder.")
+        + "\n" + unknown.joined(separator: "\n")
+    }
   }
 
   func reloadHistory() async {
@@ -320,6 +524,7 @@ final class ActionStore {
     do {
       let result = try await historyService.undo(planID: plan.id)
       undoResults[plan.id] = result
+      publishRestored(planID: plan.id, itemIDs: Set(result.items.filter { $0.outcome == .restored }.map(\.itemID)))
       message =
         "\(result.restoredCount) \(String(localized: "Restored")) · \(result.remainingCount) \(String(localized: "Not restored"))"
     } catch {
@@ -334,6 +539,7 @@ final class ActionStore {
     defer { busy = false }
     do {
       try await historyService.undo(planID: item.planID, itemID: item.itemID)
+      publishRestored(planID: item.planID, itemIDs: [item.itemID])
       message = nil
     } catch {
       message = FailureText.describe(error)

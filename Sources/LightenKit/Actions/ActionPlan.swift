@@ -272,11 +272,14 @@ public struct PlanService: Sendable {
     public let path: String
     public let device: UInt64
     public let inode: UInt64
+    /// Display-only contents measured by the selected scan; never inventory evidence.
+    public let observedSize: ObservedPlanSize?
 
-    public init(path: String, device: UInt64, inode: UInt64) {
+    public init(path: String, device: UInt64, inode: UInt64, observedSize: ObservedPlanSize? = nil) {
       self.path = path
       self.device = device
       self.inode = inode
+      self.observedSize = observedSize?.validated
     }
   }
 
@@ -421,7 +424,7 @@ public struct PlanService: Sendable {
             id: result.entries[0].id, sourcePath: root.path, volumeID: result.volumeID, inventory: result.entries,
             ancestors: result.ancestors, policy: result.policy, applicationBundleID: bundleID,
             nestedApplicationIDs: result.nestedApplicationIDs,
-            applicationPackageObservation: packageObservation))
+            observedSize: root.observedSize, applicationPackageObservation: packageObservation))
       } catch {
         rejections.append(error)
       }

@@ -333,8 +333,12 @@ private actor AppsAvailableGate {
   actions.result = ActionResult(
     planID: plan.id,
     items: [
-      ItemActionResult(itemID: physical.id, outcome: physicalApplied ? .applied : .failed),
-      ItemActionResult(itemID: leaf.id, outcome: physicalApplied ? .skipped : .applied),
+      ItemActionResult(
+        itemID: physical.id, outcome: physicalApplied ? .applied : .failed,
+        detail: physicalApplied ? nil : "fixtureMoveFailed"),
+      ItemActionResult(
+        itemID: leaf.id, outcome: physicalApplied ? .skipped : .applied,
+        detail: physicalApplied ? "changedSinceScan" : nil),
     ])
   store.observeResult(actions: actions)
   #expect(store.selectedReport?.path == listed)
@@ -347,6 +351,12 @@ private actor AppsAvailableGate {
   )
   #expect(store.packageUnavailableReason(report)?.contains("incomplete") == true)
   #expect(!store.packageSelected)
+  #expect(
+    store.packageItemResults.first { $0.outcome != .applied }?.detail
+      == (physicalApplied ? "changedSinceScan" : "fixtureMoveFailed"))
+  #expect(actions.pending == nil)
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending == nil && store.selectedReport?.path == listed)
 }
 
 @Test("A linked review rejects a forged leaf without its same-plan physical item")
@@ -520,16 +530,20 @@ private actor AppsAvailableGate {
     planID: plan.id,
     items: [
       ItemActionResult(itemID: firstItem.id, outcome: .applied),
-      ItemActionResult(itemID: secondItem.id, outcome: .skipped),
+      ItemActionResult(itemID: secondItem.id, outcome: .skipped, detail: "changedSinceScan"),
     ])
   store.observeResult(actions: actions)
   #expect(!store.needsRescan)
-  #expect(store.selectedDataPaths.isEmpty)
-  #expect(store.selectedReport?.related.map(\.path) == [second.path])
-  store.toggleData(second.path, actions: actions)
   #expect(store.selectedDataPaths == [second.path])
+  #expect(!store.selectedDataPaths.contains(first.path))
+  #expect(store.selectedReport?.related.map(\.path) == [second.path])
+  #expect(actions.result?.items.first { $0.itemID == secondItem.id }?.detail == "changedSinceScan")
   store.observeResult(actions: actions)
   #expect(store.selectedDataPaths == [second.path])
+  store.toggleData(second.path, actions: actions)
+  #expect(store.selectedDataPaths.isEmpty)
+  store.observeResult(actions: actions)
+  #expect(store.selectedDataPaths.isEmpty)
 }
 
 @Test("Application window rejects non-app drops with a reason before discovery")

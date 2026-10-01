@@ -91,6 +91,10 @@ private actor HistoryStoreJournalSpy: ActionJournal {
   let fixture = try HistoryStoreFixture()
   defer { fixture.cleanup() }
   let (store, plan) = try await applyHistoryFixture(fixture)
+  var restoredIDs: Set<UUID> = []
+  store.onDisplayChange = { change in
+    if change.kind == .restored { restoredIDs.formUnion(change.items.map(\.itemID)) }
+  }
   try Data("collision".utf8).write(to: URL(fileURLWithPath: fixture.paths[1]))
   await store.reloadHistory()
   await store.setHistoryGroupExpanded(plan.id, expanded: true)
@@ -101,6 +105,8 @@ private actor HistoryStoreJournalSpy: ActionJournal {
   let result = try #require(store.undoResults[plan.id])
   #expect(result.restoredCount == 2)
   #expect(result.remainingCount == 1)
+  #expect(restoredIDs == Set(result.items.filter { $0.outcome == .restored }.map(\.itemID)))
+  #expect(store.restoredItemIDs == restoredIDs)
   let second = try #require(plan.items.first { $0.sourcePath == fixture.paths[1] })
   #expect(result.items.first { $0.itemID == second.id }?.failure == .nameOccupied)
   #expect(store.message?.contains("2") == true && store.message?.contains("1") == true)

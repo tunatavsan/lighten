@@ -171,10 +171,7 @@ struct AppsView: View {
           Divider()
           Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning).padding(.top, 9)
         }
-        if let result = actions.result, result.planID == store.presentedPlanID {
-          Text(resultLine(result))
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted).padding(.top, 7)
-        }
+        ActionFeedbackView(actions: actions).padding(.top, 7)
         ForEach(store.packageItemResults) { item in
           VStack(alignment: .leading, spacing: 2) {
             Text(
@@ -202,6 +199,7 @@ struct AppsView: View {
       if !busy { store.scanDidLayout() }
     }
     .navigationTitle(String(localized: "Apps"))
+    .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: store.displayRevision)
     .sheet(item: $actions.pending) { presentation in
       ConfirmationView(presentation: presentation, actions: actions)
     }
@@ -230,7 +228,16 @@ struct AppsView: View {
       } else {
         ScrollView {
           LazyVStack(spacing: 5) {
-            ForEach(filtered) { app in appRow(app) }
+            ForEach(filtered) { app in
+              VStack(alignment: .leading, spacing: 2) {
+                appRow(app)
+                if let reason = actions.failure(at: app.path) {
+                  Text(reason).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+              }
+              .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.96)))
+            }
             orphanSection
           }
           .padding(.vertical, 10)
@@ -589,6 +596,10 @@ struct AppsView: View {
           .font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
         Text(candidate.path).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
           .lineLimit(1).truncationMode(.middle).help(candidate.path)
+        if let reason = actions.failure(at: candidate.path) {
+          Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         Text(relatedReason(candidate, eligible: eligible))
           .font(.system(size: 10)).foregroundStyle(eligible ? LightenStyle.muted : LightenStyle.warning)
           .fixedSize(horizontal: false, vertical: true)
@@ -656,22 +667,6 @@ struct AppsView: View {
     case .uncertain: String(localized: "Uncertain")
     case .notAttempted: String(localized: "Not attempted")
     }
-  }
-
-  private func resultLine(_ result: ActionResult) -> String {
-    let categories: [(ActionOutcome, String)] = [
-      (.applied, String(localized: "Moved to Trash")),
-      (.skipped, String(localized: "Skipped")),
-      (.failed, String(localized: "Failed")),
-      (.uncertain, String(localized: "Uncertain")),
-      (.notAttempted, String(localized: "Not attempted")),
-    ]
-    let counts = categories.compactMap { outcome, label -> String? in
-      let count = result.items.filter { $0.outcome == outcome }.count
-      return count > 0 ? "\(count) \(label)" : nil
-    }
-    let details = result.items.compactMap(\.detail).map(FailureText.describe)
-    return (counts + details).joined(separator: " · ")
   }
 
   private func sizeText(_ app: ApplicationReport) -> String {

@@ -42,10 +42,16 @@ struct ConfirmationView: View {
             VStack(alignment: .leading, spacing: 3) {
               Text(item.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
               Text(item.reason).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+              if let planned = presentation.plan.items.first(where: { $0.id == item.id }),
+                planned.containsOpaquePackages, planned.observedSize?.logical != nil
+              {
+                Text(String(localized: "Measured in the scan"))
+                  .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+              }
               if let warning = item.warning {
                 Label(String(localized: "Check before removing"), systemImage: "exclamationmark.triangle.fill")
                   .font(.system(size: 11, weight: .semibold)).foregroundStyle(LightenStyle.warning)
-                Text(SpaceText.warning(warning))
+                Text(SpaceText.warning(warning, paths: item.warningPaths))
                   .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
                   .fixedSize(horizontal: false, vertical: true)
               }
@@ -104,8 +110,58 @@ struct ConfirmationView: View {
   }
 }
 
+struct ActionFeedbackView: View {
+  @Bindable var actions: ActionStore
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    if let summary = actions.completedSummary {
+      VStack(alignment: .leading, spacing: 5) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+          Text(summary).font(.system(size: 12, weight: .medium))
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 4)
+          if actions.canUndoLatest {
+            Button(String(localized: "Undo")) { Task { await actions.undoLatest() } }
+              .disabled(actions.busy)
+          }
+          if !actions.latestTrashPaths.isEmpty {
+            Button(String(localized: "Show in Trash")) {
+              NSWorkspace.shared.activateFileViewerSelecting(actions.latestTrashPaths.map { URL(fileURLWithPath: $0) })
+            }
+          }
+        }
+        if actions.resultKind == .trash && actions.canUndoLatest {
+          Text(String(localized: "Empty Trash to free disk space."))
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        }
+        if !actions.resultFailures.isEmpty || !actions.resultRejections.isEmpty {
+          DisclosureGroup(String(localized: "Items that stayed in place")) {
+            ForEach(actions.resultRejections, id: \.path) { rejection in
+              Text(SpaceText.rejection(rejection))
+                .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+            ForEach(actions.resultFailures, id: \.itemID) { item in
+              Text("\(URL(fileURLWithPath: item.path).lastPathComponent): \(item.detail)")
+                .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                .help(item.path)
+            }
+          }
+          .font(.system(size: 11))
+        }
+      }
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("action.completed-result")
+      .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .bottom)))
+    }
+  }
+}
+
 struct HistoryView: View {
   @Bindable var actions: ActionStore
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -234,19 +290,14 @@ struct HistoryView: View {
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-      if let result = actions.result {
-        Text(
-          "\(String(localized: "Last result")): \(result.items.map { status($0.outcome, kind: actions.resultKind) }.joined(separator: ", "))"
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        .padding(.top, 8)
-      }
+      ActionFeedbackView(actions: actions).padding(.top, 8)
     }
     .padding(20)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .background(LightenStyle.canvas)
     .tint(LightenStyle.accent)
     .navigationTitle(String(localized: "History"))
+    .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: actions.displayRevision)
     .task { await actions.reloadHistory() }
   }
 

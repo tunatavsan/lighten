@@ -14,9 +14,11 @@ struct CleanCandidate: Identifiable, Sendable {
   let refusal: String?
   let requiresFullDiskAccess: Bool
   let processNames: [String]
+  var displayLogicalBytes: Int64? = nil
+  var displaySizeComplete: Bool? = nil
 
-  var logicalBytes: Int64 { exactLogicalBytes ?? node.logical.knownLowerBound }
-  var sizeComplete: Bool { exactLogicalBytes != nil || node.logical.completeTotal != nil }
+  var logicalBytes: Int64 { displayLogicalBytes ?? exactLogicalBytes ?? node.logical.knownLowerBound }
+  var sizeComplete: Bool { displaySizeComplete ?? (exactLogicalBytes != nil || node.logical.completeTotal != nil) }
 
   var canAct: Bool {
     guard allowed, activity == .clearObservedCurrentUID, let identity = entry.identity,
@@ -53,6 +55,10 @@ final class CleanStore: ToolSummaryProviding {
   @ObservationIgnored private var preparationTask: Task<ActionPlan, Error>?
   @ObservationIgnored private var availablePreparationTask: Task<CatalogPlanOutcome, Error>?
   @ObservationIgnored private var observedPlanID: UUID?
+  @ObservationIgnored private var removedCandidates: [UUID: [CleanCandidate]] = [:]
+  @ObservationIgnored private var removedRelated: [UUID: [RelatedDataCandidate]] = [:]
+  @ObservationIgnored private var displayChanges: [UUID: ActionDisplayItem] = [:]
+  private(set) var displayRevision = 0
   let tool = ToolStore()
   var candidates: [CleanCandidate] = []
   var relatedCandidates: [RelatedDataCandidate] = []
@@ -294,6 +300,60 @@ final class CleanStore: ToolSummaryProviding {
     message = nil
   }
 
+  func applyDisplayChange(_ change: ActionDisplayChange) {
+    for item in change.items {
+      switch change.kind {
+      case .applied:
+        displayChanges[item.itemID] = item
+        let removed = candidates.filter { candidate in
+          item.matches(path: candidate.entry.path, identity: candidate.entry.identity)
+            || candidate.entry.path.hasPrefix(item.path + "/")
+              && candidate.snapshot.entries.contains { item.matches(path: $0.path, identity: $0.identity) }
+        }
+        removedCandidates[item.itemID] = removed
+        candidates.removeAll { candidate in removed.contains { $0.id == candidate.id } }
+        let related = relatedCandidates.filter { candidate in
+          candidate.snapshot?.entries.contains { item.matches(path: $0.path, identity: $0.identity) } == true
+            && (candidate.path == item.path || candidate.path.hasPrefix(item.path + "/"))
+        }
+        removedRelated[item.itemID] = related
+        relatedCandidates.removeAll { candidate in related.contains { $0.path == candidate.path } }
+        selected.subtract(removed.map(\.id))
+      case .restored:
+        displayChanges.removeValue(forKey: item.itemID)
+        for candidate in removedCandidates.removeValue(forKey: item.itemID) ?? [] {
+          if !candidates.contains(where: { $0.id == candidate.id || $0.entry.path == candidate.entry.path }) {
+            candidates.append(candidate)
+          }
+        }
+        for candidate in removedRelated.removeValue(forKey: item.itemID) ?? [] {
+          if !relatedCandidates.contains(where: { $0.path == candidate.path }) { relatedCandidates.append(candidate) }
+        }
+      }
+    }
+    candidates = candidates.map { candidate in
+      var updated = candidate
+      var bytes = candidate.exactLogicalBytes ?? candidate.node.logical.knownLowerBound
+      var complete = candidate.exactLogicalBytes != nil || candidate.node.logical.completeTotal != nil
+      let removed = displayChanges.values.filter { item in
+        item.path.hasPrefix(candidate.entry.path + "/")
+          && candidate.snapshot.entries.contains { item.matches(path: $0.path, identity: $0.identity) }
+      }
+      for item in removed where !removed.contains(where: { item.path.hasPrefix($0.path + "/") }) {
+        if let amount = item.size.logical {
+          bytes = max(0, bytes - min(bytes, amount.knownLowerBound))
+          complete = complete && amount.completeTotal != nil
+        } else {
+          complete = false
+        }
+      }
+      updated.displayLogicalBytes = bytes
+      updated.displaySizeComplete = complete
+      return updated
+    }
+    displayRevision += 1
+  }
+
   func observeResult(actions: ActionStore) {
     guard let planID = presentedPlanID, let result = actions.result,
       result.planID == planID, observedPlanID != planID
@@ -304,7 +364,7 @@ final class CleanStore: ToolSummaryProviding {
     relatedCandidates.removeAll { candidate in
       candidate.snapshot?.entries.contains { moved.contains($0.id) && $0.path == candidate.path } == true
     }
-    selected = []
+    selected.subtract(moved)
     expirePreparation(actions: actions, keepPresentedPlanID: true)
   }
 

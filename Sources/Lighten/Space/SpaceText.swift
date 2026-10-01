@@ -9,7 +9,7 @@ enum SpaceText {
       "Bu öğe artık kayıtlı Çöp konumunda değil. Finder’da Çöp’ü kontrol edin.", turkish: turkish)
   }
 
-  static func warning(_ warning: ProtectiveWarning, turkish: Bool? = nil) -> String {
+  static func warning(_ warning: ProtectiveWarning, paths: [String] = [], turkish: Bool? = nil) -> String {
     let copy: (String, String) =
       switch warning {
       case .valuableData:
@@ -28,7 +28,9 @@ enum SpaceText {
           "Bu öğe çoğunlukla kişisel dosyalar içeriyor ve başka bir kopyası bilinmiyor; Çöp’e taşımadan önce kontrol edin."
         )
       }
-    return FailureText.text(copy.0, copy.1, turkish: turkish)
+    let explanation = FailureText.text(copy.0, copy.1, turkish: turkish)
+    guard !paths.isEmpty else { return explanation }
+    return explanation + "\n" + paths.prefix(3).joined(separator: "\n")
   }
 
   static func name(_ item: SpaceItem) -> String {

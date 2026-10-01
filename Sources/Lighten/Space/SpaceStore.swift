@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import LightenKit
 import Observation
+import SwiftUI
 
 enum ScanPhase: Equatable {
   case idle, scanning, cancelled, partial, complete
@@ -19,6 +20,14 @@ final class SpaceStore {
   @ObservationIgnored private var picture: ResultPicture<SpacePicture>?
   @ObservationIgnored private var appearedAt: ContinuousClock.Instant?
   @ObservationIgnored private var scanBaseline: ScanReplayBaseline?
+  @ObservationIgnored private var displayRemovals: [UUID: SpaceItem] = [:]
+  @ObservationIgnored private var removedObservations: [UUID: SpaceItem] = [:]
+  @ObservationIgnored private var displayRestorations: [UUID: SpaceItem] = [:]
+  @ObservationIgnored private var restoredDisplayNode: Int32 = -100
+  @ObservationIgnored private var displayVerificationTask: Task<Void, Never>?
+  private(set) var displayRevision = 0
+  var displayMessage: String?
+  var reduceMotion = false
   private(set) var rootSummary: SpaceItem?
   private(set) var firstLayoutMilliseconds: Double?
   private(set) var appearanceToken: UUID?
@@ -118,6 +127,7 @@ final class SpaceStore {
     let width: Int
     let height: Int
     let values: [Int64]
+    let ids: [ScanItemID]
   }
 
   func loadVolumes() {
@@ -231,6 +241,64 @@ final class SpaceStore {
     startScan(keepingCache: true)
   }
 
+  /// Exact applied paths are projected immediately; the background scan only verifies them.
+  func applyDisplayChange(_ change: ActionDisplayChange) {
+    guard let tree else { return }
+    for item in change.items {
+      switch change.kind {
+      case .applied:
+        if let observed = observedItem(path: item.path, tree: tree), item.matches(observed) {
+          displayRemovals[item.itemID] = observed
+          removedObservations[item.itemID] = observed
+          displayRestorations.removeValue(forKey: item.itemID)
+        }
+      case .restored:
+        displayRemovals.removeValue(forKey: item.itemID)
+        if observedItem(path: item.path, tree: tree) == nil,
+          let restored = removedObservations[item.itemID],
+          let parentID = tree.find(path: (restored.path as NSString).deletingLastPathComponent)
+        {
+          restoredDisplayNode -= 1
+          displayRestorations[item.itemID] = restored.displayIdentity(
+            ScanItemID(node: restoredDisplayNode), parentID: parentID, childCount: 0)
+        }
+      }
+    }
+    guard !change.items.isEmpty else { return }
+    displayRevision += 1
+    displayMessage = nil
+    if let currentID, displayed(tree.item(currentID)) == nil {
+      let parent = tree.item(currentID)?.parentID ?? tree.rootID
+      self.currentID = parent
+      showingOther = false
+    }
+    refreshView(forceLayout: true)
+    measureVolume()
+    verifyDisplayInBackground()
+  }
+
+  private func observedItem(path: String, tree: ScanTree) -> SpaceItem? {
+    if let id = tree.find(path: path) { return tree.item(id) }
+    let parent = (path as NSString).deletingLastPathComponent
+    guard let id = tree.find(path: parent) else { return nil }
+    return tree.children(of: id, metric: .logical).first { $0.path == path }
+  }
+
+  private func displayed(_ item: SpaceItem?) -> SpaceItem? {
+    item?.excludingFromDisplay(Array(displayRemovals.values))?.addingToDisplay(Array(displayRestorations.values))
+  }
+
+  private func verifyDisplayInBackground() {
+    displayVerificationTask?.cancel()
+    // Coalesce nearby results. Keep the projected map visible until the finished scan arrives.
+    displayVerificationTask = Task { [weak self] in
+      try? await Task.sleep(for: .milliseconds(300))
+      guard let self, !Task.isCancelled else { return }
+      self.cachedAt = self.cachedAt ?? Date()
+      self.startScan(keepingCache: true)
+    }
+  }
+
   private func measureVolume() {
     let path = selectedRoot.path
     Task {
@@ -255,6 +323,8 @@ final class SpaceStore {
     phase = .scanning
     progress = nil
     if !keepingCache {
+      displayRemovals = [:]
+      displayRestorations = [:]
       cachedAt = nil
       picture = nil
       install(tree: started.tree)
@@ -299,9 +369,37 @@ final class SpaceStore {
   }
 
   private func install(tree newTree: ScanTree?, keepingPath: String? = nil) {
+    if let newTree, newTree.isFinished, !displayRemovals.isEmpty {
+      let changedPaths = displayRemovals.values.filter { removed in
+        observedItem(path: removed.path, tree: newTree) != nil
+      }.map(\.path)
+      displayRemovals = [:]
+      if !changedPaths.isEmpty {
+        displayMessage =
+          String(localized: "The refreshed scan differs from the removal result. The current files are shown.")
+          + "\n" + changedPaths.sorted().joined(separator: "\n")
+      }
+    }
+    if let newTree, newTree.isFinished {
+      let changedPaths = displayRestorations.values.filter { restored in
+        guard let current = observedItem(path: restored.path, tree: newTree) else { return true }
+        return current.device != restored.device || current.inode != restored.inode
+      }.map(\.path)
+      displayRestorations = [:]
+      if !changedPaths.isEmpty {
+        displayMessage =
+          String(localized: "The refreshed scan differs from the restoration result. The current files are shown.")
+          + "\n" + changedPaths.sorted().joined(separator: "\n")
+      }
+    }
     tree = newTree
     rootSummary = newTree.flatMap { $0.item($0.rootID) }
-    if newTree == nil { picture = nil }
+    if newTree == nil {
+      picture = nil
+      displayRemovals = [:]
+      displayRestorations = [:]
+      removedObservations = [:]
+    }
     currentID = newTree.map { tree in keepingPath.flatMap { tree.find(path: $0) } ?? tree.rootID }
     selectedID = nil
     showingOther = false
@@ -311,6 +409,8 @@ final class SpaceStore {
   }
 
   func cancel() {
+    displayVerificationTask?.cancel()
+    displayVerificationTask = nil
     cancelRun()
     if phase == .scanning { phase = .cancelled }
     layoutTask?.cancel()
@@ -387,11 +487,24 @@ final class SpaceStore {
       selected = nil
       return
     }
-    rootSummary = tree.item(tree.rootID)
-    current = tree.item(currentID)
-    let newGroup = tree.group(at: currentID, metric: metric)
+    rootSummary = displayed(tree.item(tree.rootID))
+    current = displayed(tree.item(currentID))
+    let raw = tree.children(of: currentID, metric: metric)
+    let restored = displayRestorations.values.filter { restored in
+      restored.parentID == currentID && !raw.contains(where: { $0.path == restored.path })
+    }
+    let sorted = (raw.compactMap { displayed($0) } + restored).sorted {
+      $0.bytes(metric).knownLowerBound > $1.bytes(metric).knownLowerBound
+    }
+    let front = Array(sorted.prefix(24))
+    let rest = Array(sorted.dropFirst(24))
+    let restSize = ObservedPlanSize.total(rest.map { ObservedPlanSize(logical: $0.logical, allocated: $0.allocated) })
+    let newGroup = SpaceGroup(
+      items: front, other: rest,
+      otherBytes: (metric == .logical ? restSize.logical : restSize.allocated)
+        ?? ByteAggregate(knownLowerBound: 0, completeTotal: nil))
     group = newGroup
-    crumbs = tree.breadcrumb(to: currentID)
+    crumbs = tree.breadcrumb(to: currentID).compactMap { displayed($0) }
     var byID: [ScanItemID: SpaceItem] = [:]
     for item in newGroup.items { byID[item.id] = item }
     for item in newGroup.other { byID[item.id] = item }
@@ -401,7 +514,7 @@ final class SpaceStore {
   }
 
   private func refreshSelection() {
-    let item = selectedID.flatMap { visibleByID[$0] ?? tree?.item($0) }
+    let item = selectedID.flatMap { visibleByID[$0] ?? displayed(tree?.item($0)) }
     if selected != item { selected = item }
   }
 
@@ -419,7 +532,8 @@ final class SpaceStore {
     }
     let key = LayoutKey(
       run: tree?.runID ?? generation, node: currentID, metric: metric, showingOther: showingOther,
-      width: Int(size.width.rounded()), height: Int(size.height.rounded()), values: values.map(\.1))
+      width: Int(size.width.rounded()), height: Int(size.height.rounded()), values: values.map(\.1),
+      ids: values.map(\.0))
     guard key != layoutKey else { return }
     let now = ContinuousClock.now
     if !force, layout != nil, now - lastLayoutAt < .milliseconds(350) {
@@ -442,7 +556,7 @@ final class SpaceStore {
         Treemap.layout(values: layoutValues, width: size.width, height: size.height)
       }.value
       guard !Task.isCancelled, layoutKey == key else { return }
-      layout = result
+      withAnimation(reduceMotion ? nil : .smooth(duration: 0.24)) { layout = result }
     }
   }
 }

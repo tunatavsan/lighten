@@ -46,6 +46,7 @@ struct CleanView: View {
           "\(store.toolSummary.count) \(String(localized: "candidates")) · \(format(store.toolSummary.logicalBytes))"
         )
         .font(.system(size: 12)).monospacedDigit()
+        .contentTransition(reduceMotion ? .identity : .numericText())
       }
       HStack {
         Text(scanStatus).font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
@@ -78,6 +79,7 @@ struct CleanView: View {
       HStack {
         Text("\(store.selected.count) \(String(localized: "selected")) · \(format(store.selectedLogicalBytes))")
           .font(.system(size: 12)).monospacedDigit()
+          .contentTransition(reduceMotion ? .identity : .numericText())
         Spacer()
         Button(String(localized: "Clean")) { Task { await store.prepare(actions: actions) } }
           .buttonStyle(.borderedProminent)
@@ -89,9 +91,7 @@ struct CleanView: View {
       } else if let message = actions.message {
         Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
       }
-      if let result = actions.result, result.planID == store.presentedPlanID {
-        Text(resultLine(result)).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-      }
+      ActionFeedbackView(actions: actions)
     }
     .padding(20)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -101,6 +101,7 @@ struct CleanView: View {
     .onChange(of: actions.result?.planID) { store.observeResult(actions: actions) }
     .onDisappear { store.deactivate(actions: actions) }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.selected)
+    .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: store.displayRevision)
   }
 
   private var scanStatus: String {
@@ -130,6 +131,7 @@ struct CleanView: View {
           "\(candidates.count) \(String(localized: "items")) · \(incomplete ? String(localized: "At least") + " " : "")\(format(bytes))"
         )
         .font(.system(size: 12)).monospacedDigit()
+        .contentTransition(reduceMotion ? .identity : .numericText())
       }
       Text(row.reason(turkish: turkish) + " " + row.cost(turkish: turkish))
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
@@ -137,8 +139,13 @@ struct CleanView: View {
         LazyVStack(alignment: .leading, spacing: 4) {
           ForEach(candidates) { candidate in
             HStack {
-              Text(URL(fileURLWithPath: candidate.entry.path).lastPathComponent).lineLimit(1)
-                .help(candidate.entry.path)
+              VStack(alignment: .leading, spacing: 2) {
+                Text(URL(fileURLWithPath: candidate.entry.path).lastPathComponent).lineLimit(1)
+                  .help(candidate.entry.path)
+                if let reason = actions.failure(at: candidate.entry.path) {
+                  Text(reason).foregroundStyle(LightenStyle.warning).fixedSize(horizontal: false, vertical: true)
+                }
+              }
               Spacer()
               Text(format(candidate.logicalBytes)).monospacedDigit()
             }.font(.system(size: 11))
@@ -300,15 +307,6 @@ struct CleanView: View {
     case .mediumMatch:
       String(localized: "The name and signing team suggest a match. Review this data before selecting it.")
     }
-  }
-
-  private func resultLine(_ result: ActionResult) -> String {
-    let applied = result.items.filter { $0.outcome == .applied }.count
-    let remaining = result.items.count - applied
-    let label =
-      actions.resultKind == .catalogDelete
-      ? String(localized: "Permanently cleaned") : String(localized: "Moved to Trash")
-    return "\(applied) \(label) · \(remaining) \(String(localized: "Not moved"))"
   }
 
   private func format(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
