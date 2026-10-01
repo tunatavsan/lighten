@@ -75,6 +75,10 @@ struct LocalizationTests {
     let pattern = #"(?:String\s*\(\s*localized:\s*|Text\s*\(\s*|Label\s*\(\s*)"([^"\\]+)""#
     let expression = try NSRegularExpression(pattern: pattern)
     var keys = Set<String>()
+    let bilingualCopyPaths = Set([
+      root.appending(path: "Lighten/Services/FailureText.swift").path,
+      root.appending(path: "Lighten/Space/SpaceText.swift").path,
+    ])
 
     for case let url as URL in enumerator where url.pathExtension == "swift" {
       let source = try String(contentsOf: url, encoding: .utf8)
@@ -83,7 +87,91 @@ struct LocalizationTests {
         guard let keyRange = Range(match.range(at: 1), in: source) else { continue }
         keys.insert(String(source[keyRange]))
       }
+      if bilingualCopyPaths.contains(url.path) { keys.formUnion(try bilingualCopyKeys(in: source)) }
     }
     return keys
   }
+
+  @Test("Bilingual copy extraction decodes actual literals and excludes code identifiers")
+  func bilingualCopyLiteralsArePrecise() throws {
+    let source = #"""
+      let copy = ("Keep \"quoted\" \u{1F4C1}\nfiles.", "Alıntılı dosyaları saklayın.")
+      case "machine-id", "internal-code": break
+      let identifiers = ["implementation-id", "another-id"]
+      helper("not a bilingual copy", "internal value")
+      helper ("not a spaced call copy", "internal value")
+      let identifiersTuple = ("implementation-id", "another-id")
+      Other.text("not the local copy helper", "internal value")
+      return FailureText.text("A direct reason. Choose another item.", "Doğrudan neden. Başka bir öğe seçin.", turkish: true)
+      """#
+    #expect(
+      try Self.bilingualCopyKeys(in: source) == [
+        "Keep \"quoted\" 📁\nfiles.", "A direct reason. Choose another item.",
+      ])
+    #expect(throws: CopyLiteralFailure.interpolation) {
+      try Self.bilingualCopyKeys(in: #"text("Current \(path)", "Güncel konum", turkish: true)"#)
+    }
+  }
+
+  private enum CopyLiteralFailure: Error, Equatable { case invalidEscape, invalidUnicode, interpolation }
+
+  /// Only these two files define literal (English, Turkish) display-copy pairs.
+  private static func bilingualCopyKeys(in source: String) throws -> Set<String> {
+    let literal = #""((?:\\.|[^"\\])*)""#
+    let opening = #"(?:(?<![A-Za-z0-9_.])(?:FailureText\.)?text\s*\(|\bcopy\s*=\s*\(|(?m:^\s*\())"#
+    let pattern = opening + #"\s*"# + literal + #"\s*,\s*"# + literal + #"\s*(?:\)|,\s*turkish:)"#
+    let expression = try NSRegularExpression(pattern: pattern)
+    let range = NSRange(source.startIndex..., in: source)
+    var keys = Set<String>()
+    for match in expression.matches(in: source, range: range) {
+      let english = try #require(Range(match.range(at: 1), in: source))
+      let translation = try #require(Range(match.range(at: 2), in: source))
+      let key = try decodedCopyLiteral(String(source[english]))
+      let translated = try decodedCopyLiteral(String(source[translation]))
+      #expect(!key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      #expect(!translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      keys.insert(key)
+    }
+    return keys
+  }
+
+  private static func decodedCopyLiteral(_ source: String) throws -> String {
+    let scalars = Array(source.unicodeScalars)
+    var result = ""
+    var index = 0
+    while index < scalars.count {
+      let scalar = scalars[index]
+      index += 1
+      guard scalar == "\\" else {
+        result.unicodeScalars.append(scalar)
+        continue
+      }
+      guard index < scalars.count else { throw CopyLiteralFailure.invalidEscape }
+      let escaped = scalars[index]
+      index += 1
+      switch escaped {
+      case "0": result.append("\0")
+      case "t": result.append("\t")
+      case "n": result.append("\n")
+      case "r": result.append("\r")
+      case "\\", "\"", "'": result.unicodeScalars.append(escaped)
+      case "(": throw CopyLiteralFailure.interpolation
+      case "u":
+        guard index < scalars.count, scalars[index] == "{" else { throw CopyLiteralFailure.invalidUnicode }
+        index += 1
+        let start = index
+        while index < scalars.count, scalars[index] != "}" { index += 1 }
+        guard index < scalars.count, index > start, index - start <= 8 else { throw CopyLiteralFailure.invalidUnicode }
+        let digits = String(String.UnicodeScalarView(scalars[start..<index]))
+        guard let number = UInt32(digits, radix: 16), let value = UnicodeScalar(number) else {
+          throw CopyLiteralFailure.invalidUnicode
+        }
+        result.unicodeScalars.append(value)
+        index += 1
+      default: throw CopyLiteralFailure.invalidEscape
+      }
+    }
+    return result
+  }
+
 }

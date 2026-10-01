@@ -97,7 +97,9 @@ struct SpaceSafetyTests {
       ancestors: try DescriptorFileSystem.ancestorIdentities(of: path), policy: .wholeBundle)
     #expect(item.applicationBundleID == nil)
     if variant == "self" {
-      #expect(throws: GuardFailure.protectedItem) { try ActionGuard(homeDirectory: home).validate(item) }
+      #expect(throws: PlanRejection(.lightenItself, path: path, ruleID: identifier)) {
+        try ActionGuard(homeDirectory: home).validate(item)
+      }
       do {
         _ = try ExactInventory(homeDirectory: home).collect(rootPath: path, expected: (identity.device, identity.inode))
         Issue.record("Fresh Lighten root was accepted")
@@ -151,7 +153,10 @@ struct SpaceSafetyTests {
     try spaceApp(app, id: "qa.lighten.tool")
     let item = try #require(try spacePlan(app, home: home).items.first)
     try spacePut(app + "/Contents/fixture.photoslibrary/database")
-    #expect(throws: GuardFailure.protectedItem) { try ActionGuard(homeDirectory: home).validate(item) }
+    #expect(
+      throws: PlanRejection(
+        .containsProtectedItem, path: app + "/Contents/fixture.photoslibrary", ruleID: "photos-library")
+    ) { try ActionGuard(homeDirectory: home).validate(item) }
     do {
       _ = try spacePlan(app, home: home)
       Issue.record("Protected package boundary was accepted")
@@ -159,11 +164,31 @@ struct SpaceSafetyTests {
       throw error
     }
     try FileManager.default.removeItem(atPath: app + "/Contents/fixture.photoslibrary")
+    let overlapping = app + "/Contents/Resources/Base.lproj/fixture.photoslibrary"
+    try spacePut(overlapping + "/database")
+    #expect(
+      ProtectionPolicy.rules(for: overlapping, homeDirectory: home).map(\.id)
+        == ["localization-bundles", "photos-library"])
+    #expect(throws: PlanRejection(.containsProtectedItem, path: overlapping, ruleID: "photos-library")) {
+      try ActionGuard(homeDirectory: home).validate(item)
+    }
+    do {
+      _ = try spacePlan(app, home: home)
+      Issue.record("Protected package boundary inside localization resources was accepted")
+    } catch let failure as PlanRejections {
+      #expect(
+        failure.rejections == [PlanRejection(.containsProtectedItem, path: overlapping, ruleID: "photos-library")])
+    } catch { throw error }
+    try FileManager.default.removeItem(atPath: overlapping)
     try spaceApp(app + "/Contents/Helpers/LightenQA-agent.app", id: "qa.lighten.agent")
     #expect(throws: GuardFailure.changedInventory) { try ActionGuard(homeDirectory: home).validate(item) }
     let refreshed = try #require(try spacePlan(app, home: home).items.first)
     #expect(refreshed.inventory.map(\.path) == [app])
     #expect(refreshed.nestedApplicationIDs == ["qa.lighten.agent"])
+    try spaceApp(app + "/Contents/Helpers/LightenQA-agent.app", id: LightenIdentity.bundleIdentifier)
+    #expect(throws: PlanRejection(.lightenItself, path: app, ruleID: LightenIdentity.bundleIdentifier)) {
+      try ActionGuard(homeDirectory: home).validate(refreshed)
+    }
   }
 
   @Test("Opaque packages preserve nested image attachment checks")
@@ -347,7 +372,10 @@ struct SpaceSafetyTests {
     let strict = PlanItem(
       id: plan.items[0].id, sourcePath: backup, volumeID: plan.items[0].volumeID,
       inventory: plan.items[0].inventory, ancestors: plan.items[0].ancestors)
-    #expect(throws: GuardFailure.self) { try ActionGuard(homeDirectory: home).validate(strict) }
+    #expect(
+      throws: PlanRejection(
+        .protectedItem, path: home + "/Library/Application Support/MobileSync", ruleID: "mobile-sync")
+    ) { try ActionGuard(homeDirectory: home).validate(strict) }
   }
 
   @Test(
@@ -710,6 +738,45 @@ struct SpaceScanProtectionTests {
     #expect(rules.contains { $0.scope == .never })
     let automaton = ProtectionAutomaton(homeDirectory: home)
     #expect(automaton.scanMatch(automaton.state(forPath: path), path: path, homeDirectory: home) != nil)
+    let ruleID =
+      switch relative {
+      case "Library/Mail": "mail"
+      case "Library/Messages": "messages"
+      case "Library/Keychains": "keychains"
+      case ".ssh": "ssh"
+      default: "photos-library"
+      }
+    let entry = ScanEntry(
+      parentID: nil, path: path, identity: try DescriptorFileSystem.identity(at: path), issues: [], readable: true)
+    let forged = PlanItem(
+      id: entry.id, sourcePath: path, volumeID: try DescriptorFileSystem.volumeID(at: path), inventory: [entry],
+      ancestors: try DescriptorFileSystem.ancestorIdentities(of: path), policy: .spaceTrash)
+    #expect(throws: PlanRejection(.protectedItem, path: path, ruleID: ruleID)) {
+      try ActionGuard(homeDirectory: home).validate(forged)
+    }
+    if relative == ".ssh" {
+      let payload = path + "/payload"
+      let child = ScanEntry(
+        parentID: nil, path: payload, identity: try DescriptorFileSystem.identity(at: payload), issues: [],
+        readable: true)
+      let ancestors = try DescriptorFileSystem.ancestorIdentities(of: payload)
+      let protectedChild = PlanItem(
+        id: child.id, sourcePath: payload, volumeID: try DescriptorFileSystem.volumeID(at: payload), inventory: [child],
+        ancestors: ancestors, policy: .spaceTrash)
+      #expect(throws: PlanRejection(.protectedItem, path: path, ruleID: "ssh")) {
+        try ActionGuard(homeDirectory: home).validate(protectedChild)
+      }
+      let otherIdentity = try DescriptorFileSystem.identity(at: home)
+      let changedAncestors = ancestors.map {
+        $0.path == path ? PathIdentity(path: $0.path, identity: otherIdentity) : $0
+      }
+      let staleChild = PlanItem(
+        id: child.id, sourcePath: payload, volumeID: protectedChild.volumeID, inventory: [child],
+        ancestors: changedAncestors, policy: .spaceTrash)
+      #expect(throws: GuardFailure.changedAncestor) {
+        try ActionGuard(homeDirectory: home).validate(staleChild)
+      }
+    }
   }
 
   @Test("A native detached-image observation reads the current registry")

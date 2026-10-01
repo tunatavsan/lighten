@@ -76,10 +76,10 @@ public struct ActionGuard: Sendable {
       guard item.inventory.first?.identity?.kind == .directory,
         ExactInventory.isApplicationName(item.sourcePath)
       else { throw GuardFailure.unsupportedItem }
-      if ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath)?
-        .caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
+      if let identifier = ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath),
+        identifier.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
       {
-        throw GuardFailure.protectedItem
+        throw PlanRejection(.lightenItself, path: item.sourcePath, ruleID: identifier)
       }
     }
     if policy == .catalogTrash || policy == .catalogBuildOutput || relatedPolicy
@@ -90,14 +90,17 @@ public struct ActionGuard: Sendable {
         identifiers = try ExactInventory.packageObservations(for: item, homeDirectory: homeDirectory).applicationIDs
       } catch let rejection {
         if rejection.reason == .containsProtectedItem || rejection.reason == .protectedItem {
-          throw GuardFailure.protectedItem
+          throw rejection
         }
         throw GuardFailure.changedInventory
       }
       guard
         !identifiers.contains(where: { $0.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame })
       else {
-        throw GuardFailure.protectedItem
+        let identifier = identifiers.first {
+          $0.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
+        }
+        throw PlanRejection(.lightenItself, path: item.sourcePath, ruleID: identifier)
       }
       guard identifiers.sorted() == (item.nestedApplicationIDs ?? []).sorted() else {
         throw GuardFailure.changedInventory
@@ -142,6 +145,16 @@ public struct ActionGuard: Sendable {
         : rules.allSatisfy { policy == .relatedGroupContainer && $0.id == "group-containers" }
       guard current.sameStableDirectory(as: ancestor.identity), permitted
       else {
+        if current.sameStableDirectory(as: ancestor.identity), !permitted,
+          let rule = rules.first(where: { rule in
+            (policy == .spaceTrash || policy == .wholeBundle)
+              ? !ProtectionPolicy.spaceTrashPermits(
+                [rule], path: ancestor.path, rootPath: item.sourcePath, homeDirectory: homeDirectory, ancestor: true)
+              : !(policy == .relatedGroupContainer && rule.id == "group-containers")
+          })
+        {
+          throw PlanRejection(.protectedItem, path: ancestor.path, ruleID: rule.id)
+        }
         throw GuardFailure.changedAncestor
       }
     }
@@ -194,7 +207,19 @@ public struct ActionGuard: Sendable {
             ExactInventory.permits(
               rules, policy: $0, path: entry.path, rootPath: item.sourcePath, homeDirectory: homeDirectory)
           } == true
-        if !exempt { throw GuardFailure.protectedItem }
+        if !exempt {
+          let rule = rules.first { rule in
+            !(((entry.id != item.id && entry.path.hasPrefix(item.sourcePath + "/"))
+              || (entry.id == item.id
+                && (policy == .relatedGroupContainer || policy == .spaceTrash || policy == .wholeBundle)))
+              && policy.map {
+                ExactInventory.permits(
+                  [rule], policy: $0, path: entry.path, rootPath: item.sourcePath, homeDirectory: homeDirectory)
+              } == true)
+          }
+          throw PlanRejection(
+            entry.id == item.id ? .protectedItem : .containsProtectedItem, path: entry.path, ruleID: rule?.id)
+        }
       }
       // Tree policies move symlinks as leaves (never followed) and packages as contents.
       let packageBoundary =

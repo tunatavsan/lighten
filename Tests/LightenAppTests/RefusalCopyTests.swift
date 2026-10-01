@@ -1,3 +1,5 @@
+import Darwin
+import Foundation
 import LightenKit
 import Testing
 
@@ -9,6 +11,7 @@ import Testing
     RejectionReason.bulkRoot, .scanRoot, .insidePackage, .protectedItem, .containsProtectedItem,
     .containsApplication, .mountPoint, .cloudItem, .unreadableFolder, .specialFile, .symbolicLinkRoot,
     .missingMetadata, .changedSinceScan, .differentVolume, .needsAdministrator, .userPermissionDenied,
+    .processActive, .activityUnavailable, .mountedImage, .imageStateUnavailable,
     .applicationRunning, .lightenItself, .tooManyItems, .unavailable,
   ])
 @MainActor func cleanRefusalTranslations(_ reason: RejectionReason) {
@@ -20,6 +23,13 @@ import Testing
   #expect(english.contains("/fixture/child") && turkish.contains("/fixture/child"))
   #expect(english.split(separator: ".").count >= 2)
   #expect(turkish.split(separator: ".").count >= 2)
+  if reason == .missingMetadata {
+    #expect(!english.localizedCaseInsensitiveContains("metadata"))
+    #expect(!english.localizedCaseInsensitiveContains("undo"))
+    #expect(!english.localizedCaseInsensitiveContains("scan again"))
+    #expect(!turkish.localizedCaseInsensitiveContains("metaveri"))
+    #expect(!turkish.localizedCaseInsensitiveContains("yeniden tarayın"))
+  }
   if reason == .userPermissionDenied {
     #expect(!english.localizedCaseInsensitiveContains("administrator"))
     #expect(!turkish.localizedCaseInsensitiveContains("yönetici"))
@@ -47,6 +57,10 @@ import Testing
   #expect(!english.contains("(\(code))"))
   #expect(english.split(separator: ".").count >= 2)
   #expect(turkish.split(separator: ".").count >= 2)
+  if ["incompleteInventory", "invalidReceipt", "invalidProof", "metadataUnknown"].contains(code) {
+    #expect(!english.localizedCaseInsensitiveContains("scan"))
+    #expect(!turkish.localizedCaseInsensitiveContains("tarayın"))
+  }
 }
 
 @Test("Protected refusals preserve both safety rule reason and descendant path")
@@ -54,6 +68,7 @@ import Testing
   let rule = try #require(NeverRule.all.first)
   let text = SpaceText.rejection(
     PlanRejection(.containsProtectedItem, path: "/fixture/protected-child", ruleID: rule.id))
+  #expect(text.contains(rule.id))
   #expect(text.contains(rule.reason))
   #expect(text.contains("/fixture/protected-child"))
 }
@@ -63,6 +78,7 @@ import Testing
   let text = FailureText.describe(CatalogFailure.resourceFailure(stage: "read catalog", code: 2))
   #expect(text.contains("read catalog"))
   #expect(text.contains("(2)"))
+  #expect(text.contains(String(cString: strerror(ENOENT))))
 }
 
 @Test("Process refusals include process names and translate the next step")
@@ -72,6 +88,10 @@ import Testing
   #expect(english.contains("LightenQA, pip"))
   #expect(turkish.contains("LightenQA, pip"))
   #expect(english != turkish)
+  #expect(english.contains("Quit") && !english.localizedCaseInsensitiveContains("scan"))
+  #expect(turkish.localizedCaseInsensitiveContains("kapat") && !turkish.localizedCaseInsensitiveContains("tarayın"))
+  let refusal = SpaceText.rejection(PlanRejection(.processActive, path: "/fixture/in-use", ruleID: "LightenQA, pip"))
+  #expect(refusal.contains("LightenQA, pip") && refusal.contains("/fixture/in-use"))
   #expect(!FailureText.describe("processActivityUnavailable", turkish: false).isEmpty)
   #expect(!FailureText.describe("processActivityUnavailable", turkish: true).isEmpty)
 }
@@ -95,4 +115,40 @@ import Testing
   default:
     #expect(english.contains("could not be verified") && turkish.contains("doğrulanamadı"))
   }
+}
+
+@Test("File operation refusals preserve actual errno, OS reason and path without guessing another cause")
+@MainActor func fileOperationFailureContext() {
+  let path = "/fixture/owned/blocked"
+  let failure = NSError(
+    domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError,
+    userInfo: [NSFilePathErrorKey: path, NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES))])
+  for turkish in [false, true] {
+    let text = FailureText.describe(failure, turkish: turkish)
+    #expect(text.contains(path))
+    #expect(text.contains("(\(EACCES))"))
+    #expect(text.contains(String(cString: strerror(EACCES))))
+    let refusal = SpaceText.rejection(
+      PlanRejection(.unreadableFolder, path: path, ruleID: "errno:\(EACCES)"), turkish: turkish)
+    #expect(refusal.contains(path) && refusal.contains("(\(EACCES))"))
+    #expect(refusal.contains(String(cString: strerror(EACCES))))
+    #expect(!refusal.localizedCaseInsensitiveContains(turkish ? "tarayın" : "scan"))
+  }
+  let typed = FailureText.describe(FileSystemFailure.systemCall("open", EROFS), turkish: false)
+  #expect(typed.contains("read-only") && typed.contains("(\(EROFS))") && typed.contains("open"))
+  let serialized = FailureText.describe("systemCall(\"open \(path)\", \(EACCES))", turkish: false)
+  #expect(serialized.contains(path) && serialized.contains(String(cString: strerror(EACCES))))
+}
+
+@Test("An unknown refusal retains its supplied details without inventing missing files or permissions")
+@MainActor func unknownFailureContextIsHonest() {
+  let raw = "futureFailure(/fixture/unknown)"
+  let english = FailureText.describe(raw, turkish: false)
+  let turkish = FailureText.describe(raw, turkish: true)
+  #expect(english.contains("could not determine why") && english.contains(raw))
+  #expect(turkish.contains("neden başarısız") && turkish.contains(raw))
+  #expect(!english.localizedCaseInsensitiveContains("permission"))
+  #expect(!english.localizedCaseInsensitiveContains("missing"))
+  let refusal = SpaceText.rejection(PlanRejection(.unavailable, path: "/fixture/actual", ruleID: raw), turkish: false)
+  #expect(refusal.contains(raw) && refusal.contains("/fixture/actual"))
 }

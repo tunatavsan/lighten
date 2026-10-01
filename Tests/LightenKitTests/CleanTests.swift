@@ -897,7 +897,9 @@ func catalogGuardRejectsProtectedDescendantInForgedInventory() async throws {
     id: original.id, sourcePath: original.sourcePath, volumeID: original.volumeID,
     inventory: entries, ancestors: original.ancestors, catalogProof: original.catalogProof,
     policy: original.policy, snapshotRunID: original.snapshotRunID)
-  #expect(throws: GuardFailure.protectedItem) { try ActionGuard(homeDirectory: fixture.home).validate(forged) }
+  #expect(throws: PlanRejection(.containsProtectedItem, path: protected, ruleID: "photos-library")) {
+    try ActionGuard(homeDirectory: fixture.home).validate(forged)
+  }
 }
 
 private actor CountedItemActivity: ProcessActivitySource {

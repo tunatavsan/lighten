@@ -325,7 +325,7 @@ struct AppsView: View {
       store.needsRescan
         ? String(localized: "Scan again to review data")
         : store.selectedReviewPending
-          ? String(localized: "Selected app data is being reviewed. Package review is available independently.")
+          ? String(localized: "Checking this app’s data. You can review the app itself now.")
           : String(localized: "Select the app, its data, or both")
     )
     .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
@@ -513,7 +513,7 @@ struct AppsView: View {
       }
       if store.ownershipPendingPaths.contains(app.path) {
         Label(
-          String(localized: "Shared-container ownership is still being checked. Other choices remain available."),
+          String(localized: "Checking which apps use the shared folder. You can review other items now."),
           systemImage: "clock"
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)

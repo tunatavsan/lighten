@@ -224,16 +224,17 @@ struct CleanView: View {
       if let refusal = candidate.refusal { return refusal }
       if candidate.activity == .active {
         let names = candidate.processNames.isEmpty ? "" : " " + candidate.processNames.joined(separator: ", ")
-        return String(localized: "A related process is running. Quit it, then scan again.") + names
+        return String(localized: "A related process is running. Quit it before cleaning.") + names
       }
       if candidate.activity == .unknown {
-        return String(localized: "Process activity could not be checked. Scan again before cleaning.")
+        return String(localized: "Process activity could not be checked. Check Activity Monitor.")
       }
       if let rule = ProtectionPolicy.rule(
         for: candidate.entry.path,
         homeDirectory: store.homeDirectory)
       {
-        return String(localized: "A safety rule protects this item. Inspect it in Finder.") + " " + rule.reason
+        return String(localized: "A safety rule protects this item. Inspect it in Finder.")
+          + " \(rule.id): \(rule.reason)"
       }
       if row.relativeRoot == "Library/Caches" {
         if URL(fileURLWithPath: candidate.entry.path).lastPathComponent.lowercased().hasPrefix("com.apple.") {
@@ -260,11 +261,11 @@ struct CleanView: View {
 
   private func reportReason(_ row: CatalogRow) -> String {
     switch store.rowStatuses[row.id] {
-    case .toolRunning: String(localized: "A related process is running. Quit it, then scan again.")
-    case .processUnknown: String(localized: "Process activity could not be checked. Scan again before cleaning.")
+    case .toolRunning: String(localized: "A related process is running. Quit it before cleaning.")
+    case .processUnknown: String(localized: "Process activity could not be checked. Check Activity Monitor.")
     case .unavailable:
       String(
-        localized: "This area is missing or unreadable. Inspect it in Finder; if it exists, check Full Disk Access.")
+        localized: "Lighten could not read this area. Inspect its location in Finder.")
     default:
       row.methods.isEmpty
         ? row.reason(turkish: turkish) + " " + row.cost(turkish: turkish)
@@ -276,17 +277,17 @@ struct CleanView: View {
   private func relatedReason(_ value: RelatedReason) -> String {
     switch value {
     case .candidateAreaUnreadable:
-      String(localized: "This data area is unreadable. Check Full Disk Access and folder permissions.")
+      String(localized: "Lighten could not read this data area. Check access to this folder in Finder.")
     case .recordUnsafe: String(localized: "The ownership record could not be verified. Inspect this data in Finder.")
     case .protected: String(localized: "A safety rule protects this data. Inspect it in Finder.")
     case .installed: String(localized: "An installed app owns this data. Review the app in Applications.")
     case .incompleteInventory:
-      String(localized: "The application inventory is incomplete. Scan Applications again before cleaning this data.")
+      String(localized: "Lighten could not check every possible app owner of this data. Inspect it in Finder.")
     case .recordUnavailable: String(localized: "The ownership record is unavailable. Inspect this data in Finder.")
     case .historicallyVerified: String(localized: "Previously verified owner absent here; it may exist elsewhere")
     case .nameOnly: String(localized: "The name alone does not prove former ownership. Inspect this data in Finder.")
     case .ownershipUnavailable:
-      String(localized: "Application-group ownership could not be verified. This data will stay in place.")
+      String(localized: "Lighten could not confirm which apps use this shared folder. Inspect the folder in Finder.")
     case .sharedGroup:
       String(localized: "Shared Group Containers may contain data from several apps. Inspect the folder in Finder.")
     case .installedElsewhere:

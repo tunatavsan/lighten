@@ -189,7 +189,14 @@ public struct ExactInventory: Sendable {
       ? ProtectionPolicy.spaceTrashPermits(rootRules, path: rootPath, rootPath: rootPath, homeDirectory: homeDirectory)
       : rootRules.allSatisfy { policy == .relatedGroupContainer && $0.id == "group-containers" }
     if !permittedRoot, let rule = rootRules.first {
-      throw PlanRejection(.protectedItem, path: rootPath, ruleID: rule.id)
+      let blockingRule =
+        rootRules.first { candidate in
+          (policy == .spaceTrash || policy == .wholeBundle)
+            ? !ProtectionPolicy.spaceTrashPermits(
+              [candidate], path: rootPath, rootPath: rootPath, homeDirectory: homeDirectory)
+            : !(policy == .relatedGroupContainer && candidate.id == "group-containers")
+        } ?? rule
+      throw PlanRejection(.protectedItem, path: rootPath, ruleID: blockingRule.id)
     }
     for ancestor in ancestors {
       let rules = ProtectionPolicy.rules(for: ancestor.path, homeDirectory: homeDirectory)
@@ -199,7 +206,14 @@ public struct ExactInventory: Sendable {
           rules, path: ancestor.path, rootPath: rootPath, homeDirectory: homeDirectory, ancestor: true)
         : rules.allSatisfy { policy == .relatedGroupContainer && $0.id == "group-containers" }
       if !permitted, let rule = rules.first {
-        throw PlanRejection(.protectedItem, path: ancestor.path, ruleID: rule.id)
+        let blockingRule =
+          rules.first { candidate in
+            (policy == .spaceTrash || policy == .wholeBundle)
+              ? !ProtectionPolicy.spaceTrashPermits(
+                [candidate], path: ancestor.path, rootPath: rootPath, homeDirectory: homeDirectory, ancestor: true)
+              : !(policy == .relatedGroupContainer && candidate.id == "group-containers")
+          } ?? rule
+        throw PlanRejection(.protectedItem, path: ancestor.path, ruleID: blockingRule.id)
       }
     }
     var nested: [String] = []
@@ -259,11 +273,15 @@ public struct ExactInventory: Sendable {
       if let rule = rules.first,
         !Self.permits(rules, policy: policy, path: childPath, rootPath: rootPath, homeDirectory: homeDirectory)
       {
+        let blockingRule =
+          rules.first {
+            !Self.permits([$0], policy: policy, path: childPath, rootPath: rootPath, homeDirectory: homeDirectory)
+          } ?? rule
         let package = Self.enclosingPackage(of: childPath, below: rootPath)
-        let inApplication = Self.applicationRules.contains(rule.id) && Self.isApplicationName(package)
+        let inApplication = Self.applicationRules.contains(blockingRule.id) && Self.isApplicationName(package)
         throw PlanRejection(
           inApplication ? .containsApplication : .containsProtectedItem,
-          path: inApplication ? package : childPath, ruleID: rule.id)
+          path: inApplication ? package : childPath, ruleID: blockingRule.id)
       }
       if child.device != rootDevice { throw PlanRejection(.mountPoint, path: childPath) }
       if child.flags & UInt32(SF_DATALESS | UF_DATAVAULT) != 0 { throw PlanRejection(.cloudItem, path: childPath) }
@@ -390,7 +408,11 @@ public struct ExactInventory: Sendable {
             rules, policy: policy, path: childPath,
             rootPath: rootPath, homeDirectory: homeDirectory)
         {
-          throw PlanRejection(.containsProtectedItem, path: childPath, ruleID: rule.id)
+          let blockingRule =
+            rules.first {
+              !Self.permits([$0], policy: policy, path: childPath, rootPath: rootPath, homeDirectory: homeDirectory)
+            } ?? rule
+          throw PlanRejection(.containsProtectedItem, path: childPath, ruleID: blockingRule.id)
         }
         guard identity.device == opened.device else {
           throw PlanRejection(.mountPoint, path: childPath)

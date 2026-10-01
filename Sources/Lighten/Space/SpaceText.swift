@@ -5,8 +5,8 @@ import LightenKit
 enum SpaceText {
   static func trashMissing(turkish: Bool? = nil) -> String {
     FailureText.text(
-      "This item is no longer at its recorded Trash location. Lighten cannot restore it.",
-      "Bu öğe artık kayıtlı Çöp konumunda değil. Lighten öğeyi geri yükleyemez.", turkish: turkish)
+      "This item is no longer at its recorded Trash location. Check Trash in Finder.",
+      "Bu öğe artık kayıtlı Çöp konumunda değil. Finder’da Çöp’ü kontrol edin.", turkish: turkish)
   }
 
   static func warning(_ warning: ProtectiveWarning, turkish: Bool? = nil) -> String {
@@ -56,23 +56,31 @@ enum SpaceText {
     case .complete: return nil
     case .measuring: return String(localized: "Measuring. The size shown is a known minimum.")
     case .protectedMetadataOnly(let ruleID):
-      let reason = NeverRule.all.first { $0.id == ruleID }?.reason ?? ""
+      let reason = NeverRule.all.first { $0.id == ruleID }.map { "\($0.id): \($0.reason)" } ?? ruleID
       return
-        "\(String(localized: "Protected by Lighten's safety rules. Measured from metadata only; it cannot be removed here.")) \(reason)"
+        "\(String(localized: "Lighten protects this item and does not open it. Inspect it in Finder.")) \(reason)"
     case .partial(let reason):
       switch reason {
       case .unreadable:
         return String(
           localized:
-            "Lighten cannot read this folder. Full Disk Access in Settings or the folder's permissions decide this.")
-      case .mountBoundary: return String(localized: "Another volume is mounted here and is not included.")
-      case .cloudNotMeasured: return String(localized: "Cloud files are not downloaded or measured.")
-      case .protectedNotTraversed: return String(localized: "Private keys and keychains are never opened.")
-      case .entryError: return String(localized: "Some items could not be read, so the size is a minimum.")
+            "Lighten cannot read this folder. Check access to this folder in Finder.")
+      case .mountBoundary:
+        return String(
+          localized: "Another volume is mounted here and is not included. Choose items on the current volume.")
+      case .cloudNotMeasured:
+        return String(localized: "Cloud files are not downloaded or measured. Download them in Finder first.")
+      case .protectedNotTraversed:
+        return String(localized: "Lighten never opens private keys or keychains. Inspect their location in Finder.")
+      case .entryError:
+        return String(
+          localized: "Some items could not be read, so the size is a minimum. Inspect the folder in Finder.")
       case .changedDuringScan: return String(localized: "This folder changed during the scan. Scan again.")
-      case .cancelled: return String(localized: "The scan was cancelled, so the size is a minimum.")
+      case .cancelled:
+        return String(localized: "The scan was cancelled, so the size is a minimum. Scan the folder again.")
       case .descendant:
-        return String(localized: "Contains areas that could not be measured, so the size is a minimum.")
+        return String(
+          localized: "Some areas could not be measured, so the size is a minimum. Inspect the folder in Finder.")
       }
     }
   }
@@ -84,11 +92,15 @@ enum SpaceText {
       return String(localized: "The scanned folder itself cannot be removed. Open it and choose items inside.")
     }
     switch item.kind {
-    case .symlink: return String(localized: "A symbolic link moves only together with its folder.")
+    case .symlink: return String(localized: "A symbolic link moves only with its folder. Select its containing folder.")
     case .smallFiles: return String(localized: "Small files are summarized. Select their folder instead.")
-    case .systemVolume: return String(localized: "The macOS system volume is sealed and read-only.")
-    case .other: return String(localized: "Special files such as sockets and devices are not removed.")
-    default: return state(item)
+    case .systemVolume:
+      return String(localized: "The macOS system volume is read-only. Choose an item on your data volume.")
+    case .other:
+      return String(localized: "Sockets and devices cannot be removed here. Choose an ordinary file or folder.")
+    default:
+      return state(item)
+        ?? String(localized: "Lighten could not confirm this item can be moved. Inspect it in Finder.")
     }
   }
 
@@ -96,6 +108,9 @@ enum SpaceText {
 
   static func rejection(_ rejection: PlanRejection, turkish: Bool?) -> String {
     if let code = rejection.ruleID {
+      if rejection.reason == .unavailable, code.hasPrefix("systemCall(") || code.hasPrefix("unavailable(") {
+        return FailureText.describe(code, turkish: turkish) + " — " + rejection.path
+      }
       switch code {
       case "incompleteInventory", "invalidReceipt", "ownerPresent", "changedItem", "runningOrUnknown",
         "ambiguousOwner", "unsupportedInstalledData":
@@ -119,13 +134,16 @@ enum SpaceText {
         )
       case "age-unavailable":
         (
-          "The age of this item could not be verified. Inspect it in Finder, then scan again.",
-          "Bu öğenin yaşı doğrulanamadı. Finder’da inceleyip yeniden tarayın."
+          "The age of this item could not be verified. Inspect its dates in Finder.",
+          "Bu öğenin yaşı doğrulanamadı. Tarihlerini Finder’da inceleyin."
         )
       default: nil
       }
     if let catalogCopy {
       return FailureText.text(catalogCopy.0, catalogCopy.1, turkish: turkish) + " — " + rejection.path
+    }
+    if rejection.reason == .unavailable, let code = rejection.ruleID, !code.hasPrefix("errno:") {
+      return FailureText.describe(code, turkish: turkish) + " — " + rejection.path
     }
     let copy: (String, String) =
       switch rejection.reason {
@@ -156,8 +174,8 @@ enum SpaceText {
         )
       case .containsApplication:
         (
-          "This folder contains an app. Select the app itself or choose other items.",
-          "Bu klasörde bir uygulama var. Uygulamanın kendisini veya başka öğeleri seçin."
+          "This folder contains an app. Select the app itself.",
+          "Bu klasörde bir uygulama var. Uygulamanın kendisini seçin."
         )
       case .mountPoint:
         (
@@ -171,8 +189,8 @@ enum SpaceText {
         )
       case .unreadableFolder:
         (
-          "Lighten cannot read this folder. Check Full Disk Access and folder permissions.",
-          "Lighten bu klasörü okuyamıyor. Tam Disk Erişimi’ni ve klasör izinlerini kontrol edin."
+          "Lighten cannot read this folder. Check access to this folder in Finder.",
+          "Lighten bu klasörü okuyamıyor. Bu klasöre erişimi Finder’da kontrol edin."
         )
       case .specialFile:
         (
@@ -186,8 +204,8 @@ enum SpaceText {
         )
       case .missingMetadata:
         (
-          "File metadata is incomplete, so undo cannot be guaranteed. Scan again before cleaning.",
-          "Dosya metaverisi eksik; geri alma garantilenemiyor. Temizlemeden önce yeniden tarayın."
+          "Lighten could not confirm this item’s current details. Inspect it in Finder.",
+          "Lighten bu öğenin güncel bilgilerini doğrulayamadı. Finder’da inceleyin."
         )
       case .changedSinceScan:
         (
@@ -201,8 +219,8 @@ enum SpaceText {
         )
       case .needsAdministrator:
         (
-          "This item belongs to another account or requires elevated access. Inspect its permissions in Finder.",
-          "Bu öğe başka bir hesaba ait veya yükseltilmiş erişim gerektiriyor. İzinlerini Finder’da inceleyin."
+          "Your account cannot move this item. Check its owner and permissions in Finder.",
+          "Hesabınız bu öğeyi taşıyamıyor. Sahibini ve izinlerini Finder’da kontrol edin."
         )
       case .userPermissionDenied:
         (
@@ -216,8 +234,8 @@ enum SpaceText {
         )
       case .activityUnavailable:
         (
-          "Related process activity could not be checked. Try again before cleaning.",
-          "İlişkili işlem etkinliği kontrol edilemedi. Temizlemeden önce yeniden deneyin."
+          "Related process activity could not be checked. Check Activity Monitor.",
+          "İlişkili işlem etkinliği kontrol edilemedi. Etkinlik Monitörü’nü kontrol edin."
         )
       case .mountedImage:
         ("This disk image is mounted. Eject it before cleaning.", "Bu disk imajı bağlı. Temizlemeden önce çıkarın.")
@@ -237,13 +255,22 @@ enum SpaceText {
         )
       case .unavailable:
         (
-          "This item is no longer available. Inspect its location in Finder.",
-          "Bu öğe artık mevcut değil. Konumunu Finder’da inceleyin."
+          "Lighten could not inspect this item. Inspect its location in Finder.",
+          "Lighten bu öğeyi inceleyemedi. Konumunu Finder’da inceleyin."
         )
       }
     let text = FailureText.text(copy.0, copy.1, turkish: turkish)
-    let rule = rejection.ruleID.flatMap { id in NeverRule.all.first { $0.id == id }?.reason }
-    let process = rejection.reason == .processActive ? rejection.ruleID.map { " (" + $0 + ")" } ?? "" : ""
-    return "\(text)\(process)\(rule.map { " \($0)" } ?? "") — \(rejection.path)"
+    let osDetails =
+      rejection.ruleID.flatMap { code -> String? in
+        guard code.hasPrefix("errno:"), let number = Int32(code.dropFirst("errno:".count)) else { return nil }
+        return " macOS: " + FailureText.posixDetails(number)
+      } ?? ""
+    let rule = rejection.ruleID.flatMap { id in
+      NeverRule.all.first { $0.id == id }.map { "\($0.id): \($0.reason)" }
+    }
+    let process =
+      rejection.reason == .processActive || rejection.reason == .applicationRunning
+      ? rejection.ruleID.map { " (" + $0 + ")" } ?? "" : ""
+    return "\(text)\(process)\(rule.map { " \($0)" } ?? "")\(osDetails) — \(rejection.path)"
   }
 }

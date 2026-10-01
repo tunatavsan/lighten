@@ -33,16 +33,34 @@ struct SpaceUITests {
   @Test(
     "Confirmation preserves each related-data refusal's concrete reason and path",
     arguments: [
-      ("incompleteInventory", "inventory is incomplete", "envanteri eksik"),
-      ("invalidReceipt", "prepared action is no longer valid", "Hazırlanan işlem artık geçerli değil"),
-      ("ownerPresent", "may own this data", "verinin sahibi olabilir"),
-      ("changedItem", "changed after it was checked", "denetlendikten sonra değişti"),
       (
-        "runningOrUnknown", "app is running or its state could not be checked",
-        "Uygulama çalışıyor veya durumu denetlenemedi"
+        "incompleteInventory", "could not check every possible app owner of this data. Inspect it in Finder.",
+        "bu verinin olası tüm uygulama sahiplerini denetleyemedi. Finder’da inceleyin."
       ),
-      ("ambiguousOwner", "may own this data", "verinin sahibi olabilir"),
-      ("unsupportedInstalledData", "not eligible for this action", "bu işlem için uygun değil"),
+      (
+        "invalidReceipt", "could not confirm which app created this data. Inspect it in Finder.",
+        "bu veriyi hangi uygulamanın oluşturduğunu doğrulayamadı. Finder’da inceleyin."
+      ),
+      (
+        "ownerPresent", "may still use this data. Review the app in Apps.",
+        "bu veriyi hâlâ kullanıyor olabilir. Uygulamayı Uygulamalar’da inceleyin."
+      ),
+      (
+        "changedItem", "changed after it was checked. Scan again before cleaning.",
+        "denetlendikten sonra değişti. Temizlemeden önce yeniden tarayın."
+      ),
+      (
+        "runningOrUnknown", "could not confirm that the app is closed. Check the app in Activity Monitor.",
+        "uygulamanın kapalı olduğunu doğrulayamadı. Uygulamayı Etkinlik Monitörü’nde kontrol edin."
+      ),
+      (
+        "ambiguousOwner", "may still use this data. Review the app in Apps.",
+        "bu veriyi hâlâ kullanıyor olabilir. Uygulamayı Uygulamalar’da inceleyin."
+      ),
+      (
+        "unsupportedInstalledData", "not eligible for this action. Review it in Applications.",
+        "bu işlem için uygun değil. Uygulamalar’da inceleyin."
+      ),
     ])
   func confirmationRelatedRefusal(code: String, english: String, turkish: String) throws {
     let path = "/private/tmp/LightenQA-" + UUID().uuidString + "/Library/Caches/qa.lighten." + code
@@ -50,6 +68,7 @@ struct SpaceUITests {
       plan: ActionPlan(snapshotRunID: UUID(), kind: .trash, items: []), items: [],
       rejectedItems: [PlanRejection(.unavailable, path: path, ruleID: code)])
     let refusal = try #require(presentation.rejectedItems.first)
+    #expect(refusal.ruleID == code)
     let englishCopy = SpaceText.rejection(refusal, turkish: false)
     let turkishCopy = SpaceText.rejection(refusal, turkish: true)
     #expect(englishCopy.contains(english) && englishCopy.hasSuffix(path))
@@ -58,7 +77,7 @@ struct SpaceUITests {
     #expect(!turkishCopy.contains("artık mevcut değil"))
   }
 
-  @MainActor @Test("Wrapper confirmation uses its Finder reason and unknown rule codes retain the generic refusal")
+  @MainActor @Test("Wrapper confirmation uses its Finder reason and unknown refusals preserve honest context")
   func confirmationWrapperRefusal() {
     let path = "/private/tmp/LightenQA-" + UUID().uuidString + "/LightenQA-" + UUID().uuidString + ".app"
     let wrapper = PlanRejection(.unavailable, path: path, ruleID: "ios-wrapper")
@@ -69,8 +88,13 @@ struct SpaceUITests {
       SpaceText.rejection(wrapper, turkish: true)
         == "Bu iPhone veya iPad uygulaması buradan kaldırılamaz. Finder’da Göster'i kullanın. — " + path)
     let unknown = PlanRejection(.unavailable, path: path, ruleID: "future-refusal")
-    #expect(SpaceText.rejection(unknown, turkish: false).contains("no longer available"))
-    #expect(SpaceText.rejection(unknown, turkish: true).contains("artık mevcut değil"))
+    let english = SpaceText.rejection(unknown, turkish: false)
+    let turkish = SpaceText.rejection(unknown, turkish: true)
+    #expect(english.contains("could not determine why this action failed. Inspect the item in Finder."))
+    #expect(turkish.contains("bu işlemin neden başarısız olduğunu belirleyemedi. Öğeyi Finder’da inceleyin."))
+    #expect(english.contains("future-refusal") && english.hasSuffix(path))
+    #expect(turkish.contains("future-refusal") && turkish.hasSuffix(path))
+    #expect(!english.contains("no longer available") && !turkish.contains("artık mevcut değil"))
     let cache = PlanRejection(.protectedItem, path: path, ruleID: "apple-system-cache")
     #expect(SpaceText.rejection(cache, turkish: false) == "Apple system cache. Inspect it in Finder. — " + path)
   }
@@ -132,7 +156,11 @@ extension SpaceUITests {
       store.history?.items.first { $0.detail == String(describing: UndoFailure.trashItemMissing) })
     #expect(!missingTrash.canUndo)
     #expect(missingTrash.state == .uncertain)
-    #expect(SpaceText.trashMissing(turkish: false).contains("cannot restore"))
-    #expect(SpaceText.trashMissing(turkish: true).contains("geri yükleyemez"))
+    #expect(
+      SpaceText.trashMissing(turkish: false)
+        == "This item is no longer at its recorded Trash location. Check Trash in Finder.")
+    #expect(
+      SpaceText.trashMissing(turkish: true) == "Bu öğe artık kayıtlı Çöp konumunda değil. Finder’da Çöp’ü kontrol edin."
+    )
   }
 }

@@ -1,18 +1,50 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "A related process is running. Quit it, then scan again.": {
+    "A related process is running. Quit it before cleaning.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A related process is running. Quit it, then scan again."
+            "value": "A related process is running. Quit it before cleaning."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "İlgili bir süreç çalışıyor. Kapatıp yeniden tarayın."
+            "value": "İlgili bir süreç çalışıyor. Temizlemeden önce kapatın."
+          }
+        }
+      }
+    },
+    "A related process is using this item. Quit it before cleaning.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A related process is using this item. Quit it before cleaning."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişkili bir işlem bu öğeyi kullanıyor. Temizlemeden önce kapatın."
+          }
+        }
+      }
+    },
+    "A safety rule protects an item inside this folder. Inspect that item in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A safety rule protects an item inside this folder. Inspect that item in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir güvenlik kuralı bu klasördeki bir öğeyi koruyor. O öğeyi Finder’da inceleyin."
           }
         }
       }
@@ -49,18 +81,34 @@
         }
       }
     },
-    "A symbolic link moves only together with its folder.": {
+    "A symbolic link moves only with its folder. Select its containing folder.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "A symbolic link moves only together with its folder."
+            "value": "A symbolic link moves only with its folder. Select its containing folder."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sembolik bağlantı yalnızca bulunduğu klasörle birlikte taşınır."
+            "value": "Sembolik bağlantı yalnız onu içeren klasörle taşınır. Onu içeren klasörü seçin."
+          }
+        }
+      }
+    },
+    "A whole standard folder cannot be moved. Choose items inside it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A whole standard folder cannot be moved. Choose items inside it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standart bir klasörün tamamı taşınamaz. İçindeki öğeleri seçin."
           }
         }
       }
@@ -161,6 +209,22 @@
         }
       }
     },
+    "An app may still use this data. Review the app in Apps.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An app may still use this data. Review the app in Apps."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir uygulama bu veriyi hâlâ kullanıyor olabilir. Uygulamayı Uygulamalar’da inceleyin."
+          }
+        }
+      }
+    },
     "An app with this identifier is installed elsewhere. Review the app in Applications.": {
       "localizations": {
         "en": {
@@ -193,6 +257,38 @@
         }
       }
     },
+    "Another action is running. Wait for it to finish.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another action is running. Wait for it to finish."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka bir işlem çalışıyor. Tamamlanmasını bekleyin."
+          }
+        }
+      }
+    },
+    "Another item now uses the original name. Rename that item in Finder before restoring.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another item now uses the original name. Rename that item in Finder before restoring."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka bir öğe eski adı kullanıyor. Geri yüklemeden önce o öğeyi Finder’da yeniden adlandırın."
+          }
+        }
+      }
+    },
     "Another user owns this data. Inspect it in Finder.": {
       "localizations": {
         "en": {
@@ -209,18 +305,34 @@
         }
       }
     },
-    "Another volume is mounted here and is not included.": {
+    "Another volume is mounted here and is not included. Choose items on the current volume.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Another volume is mounted here and is not included."
+            "value": "Another volume is mounted here and is not included. Choose items on the current volume."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Buraya başka bir birim bağlı; dahil edilmedi."
+            "value": "Buraya başka bir disk bağlı ve taramaya dahil değil. Geçerli diskteki öğeleri seçin."
+          }
+        }
+      }
+    },
+    "Another volume is mounted inside this folder. Choose items on the same volume.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another volume is mounted inside this folder. Choose items on the same volume."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu klasörün içinde başka bir disk bağlı. Aynı diskteki öğeleri seçin."
           }
         }
       }
@@ -273,6 +385,22 @@
         }
       }
     },
+    "Apple system cache. Inspect it in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple system cache. Inspect it in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple sistem önbelleği. Finder’da inceleyin."
+          }
+        }
+      }
+    },
     "Apple-managed caches are excluded. Inspect this cache in Finder.": {
       "localizations": {
         "en": {
@@ -301,22 +429,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulama envanteri eksik. Diğer konumlar ve okunamayan uygulamalar bilinmiyor."
-          }
-        }
-      }
-    },
-    "Application-group ownership could not be verified. This data will stay in place.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Application-group ownership could not be verified. This data will stay in place."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Uygulama grubu sahipliği doğrulanamadı. Bu veri yerinde kalacak."
           }
         }
       }
@@ -577,6 +689,38 @@
         }
       }
     },
+    "Checking this app’s data. You can review the app itself now.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking this app’s data. You can review the app itself now."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamanın verileri denetleniyor. Uygulamanın kendisini şimdi inceleyebilirsiniz."
+          }
+        }
+      }
+    },
+    "Checking which apps use the shared folder. You can review other items now.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking which apps use the shared folder. You can review other items now."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paylaşılan klasörü hangi uygulamaların kullandığı denetleniyor. Diğer öğeleri şimdi inceleyebilirsiniz."
+          }
+        }
+      }
+    },
     "Choose": {
       "localizations": {
         "en": {
@@ -732,7 +876,7 @@
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Clean kataloğunu yükleyemedi. Lighten’ı yeniden kurun."
+            "value": "Temizlik kataloğu yüklenemedi. Lighten’ı yeniden kurun."
           }
         }
       }
@@ -785,18 +929,18 @@
         }
       }
     },
-    "Cloud files are not downloaded or measured.": {
+    "Cloud files are not downloaded or measured. Download them in Finder first.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cloud files are not downloaded or measured."
+            "value": "Cloud files are not downloaded or measured. Download them in Finder first."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bulut dosyaları indirilmez ve ölçülmez."
+            "value": "Bulut dosyaları indirilmemiş ve ölçülmemiş. Önce Finder’da indirin."
           }
         }
       }
@@ -813,22 +957,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Karşılaştırma tamamlandı"
-          }
-        }
-      }
-    },
-    "Contains areas that could not be measured, so the size is a minimum.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contains areas that could not be measured, so the size is a minimum."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ölçülemeyen alanlar içeriyor; boyut en az değerdir."
           }
         }
       }
@@ -973,6 +1101,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Disk denetlendi"
+          }
+        }
+      }
+    },
+    "Disk image state could not be checked. Inspect it in Disk Utility.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disk image state could not be checked. Inspect it in Disk Utility."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disk imajının durumu kontrol edilemedi. Disk İzlencesi’nde inceleyin."
           }
         }
       }
@@ -1569,18 +1713,242 @@
         }
       }
     },
-    "Lighten cannot read this folder. Full Disk Access in Settings or the folder's permissions decide this.": {
+    "Lighten cannot read this folder. Check access to this folder in Finder.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Lighten cannot read this folder. Full Disk Access in Settings or the folder's permissions decide this."
+            "value": "Lighten cannot read this folder. Check access to this folder in Finder."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Lighten bu klasörü okuyamıyor. Bunu Ayarlar'daki Tam Disk Erişimi ya da klasörün izinleri belirler."
+            "value": "Lighten bu klasörü okuyamıyor. Bu klasöre erişimi Finder’da kontrol edin."
+          }
+        }
+      }
+    },
+    "Lighten cannot remove itself. Choose another item.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten cannot remove itself. Choose another item."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten kendisini kaldıramaz. Başka bir öğe seçin."
+          }
+        }
+      }
+    },
+    "Lighten could not check every possible app owner of this data. Inspect it in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not check every possible app owner of this data. Inspect it in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu verinin olası tüm uygulama sahiplerini denetleyemedi. Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Lighten could not confirm that the app is closed. Check the app in Activity Monitor.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not confirm that the app is closed. Check the app in Activity Monitor."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten uygulamanın kapalı olduğunu doğrulayamadı. Uygulamayı Etkinlik Monitörü’nde kontrol edin."
+          }
+        }
+      }
+    },
+    "Lighten could not confirm that the related tool is idle. Check the tool in Activity Monitor.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not confirm that the related tool is idle. Check the tool in Activity Monitor."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten ilgili aracın boşta olduğunu doğrulayamadı. Aracı Etkinlik Monitörü’nde kontrol edin."
+          }
+        }
+      }
+    },
+    "Lighten could not confirm that these files are identical. Inspect the files in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not confirm that these files are identical. Inspect the files in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu dosyaların aynı olduğunu doğrulayamadı. Dosyaları Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Lighten could not confirm this item can be moved. Inspect it in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not confirm this item can be moved. Inspect it in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu öğenin taşınabileceğini doğrulayamadı. Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Lighten could not confirm this item’s current details. Inspect it in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not confirm this item’s current details. Inspect it in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu öğenin güncel bilgilerini doğrulayamadı. Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Lighten could not confirm which app created this data. Inspect it in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not confirm which app created this data. Inspect it in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu veriyi hangi uygulamanın oluşturduğunu doğrulayamadı. Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Lighten could not confirm which apps use this shared folder. Inspect the folder in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not confirm which apps use this shared folder. Inspect the folder in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu paylaşılan klasörü hangi uygulamaların kullandığını doğrulayamadı. Klasörü Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Lighten could not determine why this action failed. Inspect the item in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not determine why this action failed. Inspect the item in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu işlemin neden başarısız olduğunu belirleyemedi. Öğeyi Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Lighten could not inspect this item. Inspect its location in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not inspect this item. Inspect its location in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu öğeyi inceleyemedi. Konumunu Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Lighten could not read a reliable action record. Inspect the item in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not read a reliable action record. Inspect the item in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten güvenilir bir işlem kaydı okuyamadı. Öğeyi Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Lighten could not read this area. Inspect its location in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not read this area. Inspect its location in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu alanı okuyamadı. Konumunu Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Lighten could not read this data area. Check access to this folder in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not read this data area. Check access to this folder in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu veri alanını okuyamadı. Bu klasöre erişimi Finder’da kontrol edin."
           }
         }
       }
@@ -1597,6 +1965,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Lighten kendini kaldırmaz."
+          }
+        }
+      }
+    },
+    "Lighten never opens private keys or keychains. Inspect their location in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten never opens private keys or keychains. Inspect their location in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten özel anahtarları veya anahtar zincirlerini açmaz. Konumlarını Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Lighten protects this item and does not open it. Inspect it in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten protects this item and does not open it. Inspect it in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu öğeyi korur ve açmaz. Finder’da inceleyin."
           }
         }
       }
@@ -2013,6 +2413,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulama bulunamadı"
+          }
+        }
+      }
+    },
+    "No eligible item is selected. Select an eligible item.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No eligible item is selected. Select an eligible item."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygun bir öğe seçilmedi. Uygun bir öğe seçin."
           }
         }
       }
@@ -2561,22 +2977,6 @@
         }
       }
     },
-    "Private keys and keychains are never opened.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Private keys and keychains are never opened."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Özel anahtarlar ve anahtar zincirleri asla açılmaz."
-          }
-        }
-      }
-    },
     "Process": {
       "localizations": {
         "en": {
@@ -2593,18 +2993,18 @@
         }
       }
     },
-    "Process activity could not be checked. Scan again before cleaning.": {
+    "Process activity could not be checked. Check Activity Monitor.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Process activity could not be checked. Scan again before cleaning."
+            "value": "Process activity could not be checked. Check Activity Monitor."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Süreç etkinliği denetlenemedi. Temizlemeden önce yeniden tarayın."
+            "value": "Süreç etkinliği denetlenemedi. Etkinlik Monitörü’nü kontrol edin."
           }
         }
       }
@@ -2637,22 +3037,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bellek kullanan işlemler"
-          }
-        }
-      }
-    },
-    "Protected by Lighten's safety rules. Measured from metadata only; it cannot be removed here.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Protected by Lighten's safety rules. Measured from metadata only; it cannot be removed here."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Lighten'ın güvenlik kurallarıyla korunuyor. Yalnızca dosya bilgilerinden ölçüldü; burada kaldırılamaz."
           }
         }
       }
@@ -2829,6 +3213,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "İlgili veriler inceleniyor"
+          }
+        }
+      }
+    },
+    "Related process activity could not be checked. Check Activity Monitor.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Related process activity could not be checked. Check Activity Monitor."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişkili işlem etkinliği kontrol edilemedi. Etkinlik Monitörü’nü kontrol edin."
           }
         }
       }
@@ -3505,22 +3905,6 @@
         }
       }
     },
-    "Selected app data is being reviewed. Package review is available independently.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Selected app data is being reviewed. Package review is available independently."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Seçilen uygulamanın verileri inceleniyor. Uygulama paketi ayrıca incelenebilir."
-          }
-        }
-      }
-    },
     "Selected app data. Preferences and support files may contain personal settings or documents.": {
       "localizations": {
         "en": {
@@ -3629,22 +4013,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Paylaşılan · yalnızca rapor"
-          }
-        }
-      }
-    },
-    "Shared-container ownership is still being checked. Other choices remain available.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared-container ownership is still being checked. Other choices remain available."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Paylaşılan kapsayıcı sahipliği denetleniyor. Diğer seçenekler kullanılabilir."
           }
         }
       }
@@ -3825,6 +4193,38 @@
         }
       }
     },
+    "Sockets and devices cannot be removed here. Choose an ordinary file or folder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sockets and devices cannot be removed here. Choose an ordinary file or folder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soketler ve aygıtlar buradan kaldırılamaz. Normal bir dosya veya klasör seçin."
+          }
+        }
+      }
+    },
+    "Some areas could not be measured, so the size is a minimum. Inspect the folder in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some areas could not be measured, so the size is a minimum. Inspect the folder in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı alanlar ölçülemediği için boyut bir alt sınırdır. Klasörü Finder’da inceleyin."
+          }
+        }
+      }
+    },
     "Some files or areas could not be verified; results are partial.": {
       "localizations": {
         "en": {
@@ -3857,18 +4257,18 @@
         }
       }
     },
-    "Some items could not be read, so the size is a minimum.": {
+    "Some items could not be read, so the size is a minimum. Inspect the folder in Finder.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Some items could not be read, so the size is a minimum."
+            "value": "Some items could not be read, so the size is a minimum. Inspect the folder in Finder."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bazı öğeler okunamadı; boyut en az değerdir."
+            "value": "Bazı öğeler okunamadığı için boyut bir alt sınırdır. Klasörü Finder’da inceleyin."
           }
         }
       }
@@ -3921,22 +4321,6 @@
         }
       }
     },
-    "Special files such as sockets and devices are not removed.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Special files such as sockets and devices are not removed."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Soket ve aygıt gibi özel dosyalar kaldırılmaz."
-          }
-        }
-      }
-    },
     "Status": {
       "localizations": {
         "en": {
@@ -3985,6 +4369,54 @@
         }
       }
     },
+    "The Clean catalog could not be verified. Reinstall Lighten.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Clean catalog could not be verified. Reinstall Lighten."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean kataloğu doğrulanamadı. Lighten’ı yeniden kurun."
+          }
+        }
+      }
+    },
+    "The age of this item could not be verified. Inspect its dates in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The age of this item could not be verified. Inspect its dates in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğenin yaşı doğrulanamadı. Tarihlerini Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "The app is running. Quit it before cleaning.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app is running. Quit it before cleaning."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama çalışıyor. Temizlemeden önce kapatın."
+          }
+        }
+      }
+    },
     "The app is running. Quit it first.": {
       "localizations": {
         "en": {
@@ -4017,34 +4449,194 @@
         }
       }
     },
-    "The application inventory is incomplete. Scan Applications again before cleaning this data.": {
+    "The chosen item is not a folder. Choose a folder to scan.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The application inventory is incomplete. Scan Applications again before cleaning this data."
+            "value": "The chosen item is not a folder. Choose a folder to scan."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Uygulama envanteri eksik. Bu veriyi temizlemeden önce Uygulamalar’ı yeniden tarayın."
+            "value": "Seçilen öğe bir klasör değil. Taramak için bir klasör seçin."
           }
         }
       }
     },
-    "The macOS system volume is sealed and read-only.": {
+    "The disk has no space for this operation. Review disk space in System Settings.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The macOS system volume is sealed and read-only."
+            "value": "The disk has no space for this operation. Review disk space in System Settings."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "macOS sistem birimi mühürlü ve salt okunurdur."
+            "value": "Diskte bu işlem için yer yok. Disk alanını Sistem Ayarları’nda inceleyin."
+          }
+        }
+      }
+    },
+    "The disk image is attached. Eject it in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The disk image is attached. Eject it in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disk imajı bağlı. Finder’da çıkarın."
+          }
+        }
+      }
+    },
+    "The disk image’s attachment state could not be checked. Inspect it in Disk Utility.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The disk image’s attachment state could not be checked. Inspect it in Disk Utility."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disk imajının bağlılık durumu denetlenemedi. Disk İzlencesi’nde inceleyin."
+          }
+        }
+      }
+    },
+    "The item changed after it was checked. Scan again before cleaning.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The item changed after it was checked. Scan again before cleaning."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öğe denetlendikten sonra değişti. Temizlemeden önce yeniden tarayın."
+          }
+        }
+      }
+    },
+    "The item changed after the scan. Scan again before cleaning.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The item changed after the scan. Scan again before cleaning."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öğe taramadan sonra değişti. Temizlemeden önce yeniden tarayın."
+          }
+        }
+      }
+    },
+    "The item in Trash changed after removal. Inspect it in Finder before restoring it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The item in Trash changed after removal. Inspect it in Finder before restoring it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çöp’teki öğe kaldırıldıktan sonra değişti. Geri yüklemeden önce Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "The item is no longer in Trash. Check its location in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The item is no longer in Trash. Check its location in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öğe artık Çöp’te değil. Konumunu Finder’da kontrol edin."
+          }
+        }
+      }
+    },
+    "The item or its containing folder could not be found. Check its location in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The item or its containing folder could not be found. Check its location in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öğe veya onu içeren klasör bulunamadı. Konumunu Finder’da kontrol edin."
+          }
+        }
+      }
+    },
+    "The item’s volume could not be verified. Inspect its location in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The item’s volume could not be verified. Inspect its location in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öğenin diski doğrulanamadı. Konumunu Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "The location is missing or unreadable. Inspect it in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The location is missing or unreadable. Inspect it in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konum yok veya okunamıyor. Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "The macOS system volume is read-only. Choose an item on your data volume.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The macOS system volume is read-only. Choose an item on your data volume."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS sistem diski salt okunur. Veri diskinizdeki bir öğeyi seçin."
           }
         }
       }
@@ -4097,6 +4689,22 @@
         }
       }
     },
+    "The original location could not be verified. Inspect the item in Trash with Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The original location could not be verified. Inspect the item in Trash with Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eski konum doğrulanamadı. Çöp’teki öğeyi Finder’da inceleyin."
+          }
+        }
+      }
+    },
     "The ownership record could not be verified. Inspect this data in Finder.": {
       "localizations": {
         "en": {
@@ -4129,18 +4737,50 @@
         }
       }
     },
-    "The scan was cancelled, so the size is a minimum.": {
+    "The scan no longer matches this selection. Scan this folder again.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The scan was cancelled, so the size is a minimum."
+            "value": "The scan no longer matches this selection. Scan this folder again."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Tarama iptal edildi; boyut en az değerdir."
+            "value": "Tarama artık bu seçimle eşleşmiyor. Bu klasörü yeniden tarayın."
+          }
+        }
+      }
+    },
+    "The scan was cancelled, so the size is a minimum. Scan the folder again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan was cancelled, so the size is a minimum. Scan the folder again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tarama iptal edildiği için boyut bir alt sınırdır. Klasörü yeniden tarayın."
+          }
+        }
+      }
+    },
+    "The scanned folder itself cannot be removed. Choose items inside it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scanned folder itself cannot be removed. Choose items inside it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taranan klasörün kendisi kaldırılamaz. İçindeki öğeleri seçin."
           }
         }
       }
@@ -4157,6 +4797,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Taranan klasörün kendisi kaldırılamaz. Açın ve içindeki öğeleri seçin."
+          }
+        }
+      }
+    },
+    "These files no longer match. Scan the copies again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These files no longer match. Scan the copies again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu dosyalar artık eşleşmiyor. Kopyaları yeniden tarayın."
           }
         }
       }
@@ -4209,6 +4865,22 @@
         }
       }
     },
+    "This app data is not eligible for this action. Review it in Applications.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This app data is not eligible for this action. Review it in Applications."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulama verisi bu işlem için uygun değil. Uygulamalar’da inceleyin."
+          }
+        }
+      }
+    },
     "This application could not be identified safely.": {
       "localizations": {
         "en": {
@@ -4221,22 +4893,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu uygulama güvenli biçimde tanımlanamadı."
-          }
-        }
-      }
-    },
-    "This area is missing or unreadable. Inspect it in Finder; if it exists, check Full Disk Access.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This area is missing or unreadable. Inspect it in Finder; if it exists, check Full Disk Access."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bu alan yok veya okunamıyor. Finder’da inceleyin; mevcutsa Tam Disk Erişimi’ni kontrol edin."
           }
         }
       }
@@ -4257,18 +4913,34 @@
         }
       }
     },
-    "This data area is unreadable. Check Full Disk Access and folder permissions.": {
+    "This disk image is mounted. Eject it before cleaning.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This data area is unreadable. Check Full Disk Access and folder permissions."
+            "value": "This disk image is mounted. Eject it before cleaning."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bu veri alanı okunamıyor. Tam Disk Erişimi’ni ve klasör izinlerini kontrol edin."
+            "value": "Bu disk imajı bağlı. Temizlemeden önce çıkarın."
+          }
+        }
+      }
+    },
+    "This disk is read-only. Choose an item on a writable disk.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This disk is read-only. Choose an item on a writable disk."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu disk salt okunur. Yazılabilir bir diskteki öğeyi seçin."
           }
         }
       }
@@ -4285,6 +4957,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu klasör tarama sırasında değişti. Yeniden tarayın."
+          }
+        }
+      }
+    },
+    "This folder contains a special file such as a socket or device. Choose ordinary files or folders.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This folder contains a special file such as a socket or device. Choose ordinary files or folders."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu klasörde soket veya aygıt gibi özel bir dosya var. Normal dosya veya klasörleri seçin."
+          }
+        }
+      }
+    },
+    "This folder contains an app. Select the app itself.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This folder contains an app. Select the app itself."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu klasörde bir uygulama var. Uygulamanın kendisini seçin."
+          }
+        }
+      }
+    },
+    "This folder contains too many items to verify at once. Choose a smaller subfolder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This folder contains too many items to verify at once. Choose a smaller subfolder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu klasörde bir kerede doğrulanamayacak kadar çok öğe var. Daha küçük bir alt klasör seçin."
           }
         }
       }
@@ -4321,6 +5041,150 @@
         }
       }
     },
+    "This item contains mostly personal files and another copy is not known; check before moving it to Trash.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item contains mostly personal files and another copy is not known; check before moving it to Trash."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğe çoğunlukla kişisel dosyalar içeriyor ve başka bir kopyası bilinmiyor; Çöp’e taşımadan önce kontrol edin."
+          }
+        }
+      }
+    },
+    "This item contains names associated with keys or secrets; check before moving it to Trash.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item contains names associated with keys or secrets; check before moving it to Trash."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğede anahtar veya gizli bilgilerle ilişkili dosya adları var; Çöp’e taşımadan önce kontrol edin."
+          }
+        }
+      }
+    },
+    "This item does not meet the safety requirements. Inspect it in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item does not meet the safety requirements. Inspect it in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğe güvenlik koşullarını karşılamıyor. Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "This item includes cloud files that are not downloaded. Download them in Finder first.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item includes cloud files that are not downloaded. Download them in Finder first."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğede indirilmemiş bulut dosyaları var. Önce Finder’da indirin."
+          }
+        }
+      }
+    },
+    "This item includes recently modified files. Keep it until the category’s minimum age is reached.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item includes recently modified files. Keep it until the category’s minimum age is reached."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğe yakın zamanda değiştirilmiş dosyalar içeriyor. Kategorinin asgari yaşına ulaşılana kadar saklayın."
+          }
+        }
+      }
+    },
+    "This item is inside an app or package. Select the whole app or package instead.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is inside an app or package. Select the whole app or package instead."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğe bir uygulama veya paketin içinde. Uygulamanın veya paketin tamamını seçin."
+          }
+        }
+      }
+    },
+    "This item is no longer at its recorded Trash location. Check Trash in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is no longer at its recorded Trash location. Check Trash in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğe artık kayıtlı Çöp konumunda değil. Finder’da Çöp’ü kontrol edin."
+          }
+        }
+      }
+    },
+    "This item is outside the locations this action can change. Choose an item from the listed folder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is outside the locations this action can change. Choose an item from the listed folder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğe, bu işlemin değiştirebileceği konumların dışında. Listelenen klasörden bir öğe seçin."
+          }
+        }
+      }
+    },
+    "This item may contain a virtual machine, backup, or build archive; check what you need before moving it to Trash.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item may contain a virtual machine, backup, or build archive; check what you need before moving it to Trash."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğe bir sanal makine, yedek veya derleme arşivi içerebilir; Çöp’e taşımadan önce ihtiyacınız olanları kontrol edin."
+          }
+        }
+      }
+    },
     "This list needs a new scan before actions are available.": {
       "localizations": {
         "en": {
@@ -4333,6 +5197,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Eylemler için bu listeyi yeniden tarayın."
+          }
+        }
+      }
+    },
+    "This review no longer matches the requested action. Review your selection again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This review no longer matches the requested action. Review your selection again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu inceleme artık istenen işlemle eşleşmiyor. Seçiminizi yeniden inceleyin."
+          }
+        }
+      }
+    },
+    "This symbolic link cannot be moved by this action. Select its containing folder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This symbolic link cannot be moved by this action. Select its containing folder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu sembolik bağlantı bu işlemle taşınamaz. İçinde bulunduğu klasörü seçin."
           }
         }
       }
@@ -4625,6 +5521,38 @@
         }
       }
     },
+    "Your account cannot move this item from its folder. Check the folder’s permissions in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your account cannot move this item from its folder. Check the folder’s permissions in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hesabınız bu öğeyi klasöründen taşıyamıyor. Klasörün izinlerini Finder’da kontrol edin."
+          }
+        }
+      }
+    },
+    "Your account cannot move this item. Check its owner and permissions in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your account cannot move this item. Check its owner and permissions in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hesabınız bu öğeyi taşıyamıyor. Sahibini ve izinlerini Finder’da kontrol edin."
+          }
+        }
+      }
+    },
     "applications measured": {
       "localizations": {
         "en": {
@@ -4829,6 +5757,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu izni macOS yönetir. Ayarları açmak erişim vermez. Erişimi değiştirdikten sonra Lighten’a dönüp taramayı yeniden başlatın."
+          }
+        }
+      }
+    },
+    "macOS denied access to this item. Check its access permissions in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS denied access to this item. Check its access permissions in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS bu öğeye erişimi reddetti. Erişim izinlerini Finder’da kontrol edin."
+          }
+        }
+      }
+    },
+    "macOS refused the operation. Inspect the item in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS refused the operation. Inspect the item in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS işlemi reddetti. Öğeyi Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "macOS reported a file operation error. Inspect the item in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS reported a file operation error. Inspect the item in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS bir dosya işlemi hatası bildirdi. Öğeyi Finder’da inceleyin."
           }
         }
       }
