@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import LightenKit
@@ -471,9 +472,82 @@ private func flowRoot() throws -> String {
   #expect(package.sourcePath == app)
   #expect(package.applicationBundleID == bundleID)
   #expect(package.policy == .wholeBundle)
-  #expect(package.inventory.contains { $0.path == app + "/Contents/payload" })
+  let packageRoot = try #require(package.inventory.first { $0.path == app && $0.parentID == nil })
+  let packageIdentity = try #require(packageRoot.identity)
+  let currentIdentity = try DescriptorFileSystem.identity(at: app)
+  #expect(packageIdentity.kind == .directory)
+  expectSameFlowRoot(packageIdentity, currentIdentity)
+  #expect(package.containsOpaquePackages)
+  #expect(package.inventory.count == 1)
   #expect(FileManager.default.fileExists(atPath: app))
   #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+
+  // A fresh execution plan moves only this owned fixture; native history Undo must preserve its files.
+  let before = try appFileManifest(app)
+  #expect(Set(before.keys) == ["Contents/Info.plist", "Contents/payload"])
+  let trash = root + "/trash"
+  try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: false)
+  let journal = JSONLActionJournal(path: root + "/journal.jsonl")
+  let executionPlan = try related.planUninstall(
+    app: InstalledApplication(bundleID: bundleID, path: app, version: nil), selectedRelated: [])
+  let executionPackage = try #require(executionPlan.items.first)
+  #expect(executionPlan.id != plan.id)
+  let moved = try await ActionExecutor(
+    journal: journal, trash: OwnedFlowTrash(destination: trash),
+    guardService: ActionGuard(homeDirectory: root), related: related,
+    runningApplications: AppsClosedSource(), applicationActivity: ClearFlowApplicationActivity()
+  ).execute(executionPlan)
+  #expect(moved.items.map(\.outcome) == [.applied])
+  #expect(!FileManager.default.fileExists(atPath: app))
+  let history = ActionHistory(journal: journal, homeDirectory: root)
+  let historyItem = try #require(
+    try await history.reconcile().items.first { $0.planID == executionPlan.id })
+  #expect(historyItem.state == .inTrash)
+  let undoGroup = try await history.loadGroup(planID: executionPlan.id)
+  #expect(undoGroup.canUndo)
+  try await history.undo(planID: executionPlan.id, itemID: executionPackage.id)
+  #expect(try appFileManifest(app) == before)
+  expectSameFlowRoot(try DescriptorFileSystem.identity(at: app), currentIdentity)
+}
+
+private func expectSameFlowRoot(_ actual: FileIdentity, _ expected: FileIdentity) {
+  #expect(actual.kind == .directory)
+  #expect(expected.kind == .directory)
+  #expect(actual.device == expected.device)
+  #expect(actual.inode == expected.inode)
+  #expect(actual.birthSeconds != nil)
+  #expect(actual.birthNanoseconds != nil)
+  #expect(actual.birthSeconds == expected.birthSeconds)
+  #expect(actual.birthNanoseconds == expected.birthNanoseconds)
+  #expect(actual.flags == expected.flags)
+}
+
+private struct OwnedFlowTrash: TrashMoving {
+  let destination: String
+  func moveToTrash(path: String) async throws -> String {
+    let target = destination + "/" + URL(fileURLWithPath: path).lastPathComponent
+    try FileManager.default.moveItem(atPath: path, toPath: target)
+    return target
+  }
+}
+
+private struct ClearFlowApplicationActivity: ApplicationActivitySource {
+  func activity(applicationPath: String) async -> ApplicationActivity {
+    ApplicationActivity(state: .clearObservedProcesses)
+  }
+}
+
+private func appFileManifest(_ path: String) throws -> [String: String] {
+  let enumerator = try #require(FileManager.default.enumerator(atPath: path))
+  var manifest: [String: String] = [:]
+  while let name = enumerator.nextObject() as? String {
+    let file = path + "/" + name
+    if try DescriptorFileSystem.identity(at: file).kind == .regular {
+      let data = try Data(contentsOf: URL(fileURLWithPath: file))
+      manifest[name] = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+  }
+  return manifest
 }
 
 @Test("Selecting an app includes all strong data and retains skipped data when the package moves")

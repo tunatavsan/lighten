@@ -24,6 +24,11 @@ public struct PlanItem: Codable, Sendable, Identifiable, Equatable {
   /// Application packages included by the inventory; none may be running.
   public let nestedApplicationIDs: [String]?
 
+  /// A presentation observation only; neither this value nor inventory size grants action authority.
+  public var containsOpaquePackages: Bool {
+    policy != nil && inventory.contains { $0.identity?.kind == .directory && ScanService.isPackage($0.path) }
+  }
+
   public init(
     id: UUID, sourcePath: String, volumeID: UUID? = nil,
     inventory: [ScanEntry], ancestors: [PathIdentity], catalogProof: CatalogProof? = nil,
@@ -83,17 +88,20 @@ public struct PlanService: Sendable {
   private let runningApplications: any RunningApplicationSource
   private let spaceActivity: any SpaceActivitySource
   private let mountedImages: any MountedImageSource
+  private let applicationActivity: any ApplicationActivitySource
 
   public init(
     homeDirectory: String = NSHomeDirectory(),
     runningApplications: any RunningApplicationSource = NativeRunningApplicationSource(),
     spaceActivity: any SpaceActivitySource = NativeSpaceActivitySource(),
-    mountedImages: any MountedImageSource = NativeMountedImageSource()
+    mountedImages: any MountedImageSource = NativeMountedImageSource(),
+    applicationActivity: any ApplicationActivitySource = NativeApplicationActivitySource()
   ) {
     self.homeDirectory = homeDirectory
     self.runningApplications = runningApplications
     self.spaceActivity = spaceActivity
     self.mountedImages = mountedImages
+    self.applicationActivity = applicationActivity
   }
 
   /// Planning walks the complete snapshot and performs descriptor checks.
@@ -221,6 +229,21 @@ public struct PlanService: Sendable {
         break
       }
       if refusal == nil {
+        for entry in item.inventory
+        where entry.identity.map({ ExactInventory.isOpaquePackage(path: entry.path, identity: $0, policy: item.policy) }
+        ) == true {
+          let observation = await applicationActivity.activity(applicationPath: entry.path)
+          switch observation.state {
+          case .clearObservedProcesses: break
+          case .active:
+            refusal = PlanRejection(
+              .applicationRunning, path: entry.path, ruleID: observation.processNames.joined(separator: ", "))
+          case .unknown: refusal = PlanRejection(.activityUnavailable, path: entry.path)
+          }
+          if refusal != nil { break }
+        }
+      }
+      if refusal == nil {
         let observation = await spaceActivity.activity(rootPath: item.sourcePath)
         switch observation.state {
         case .clearObservedCurrentUID: break
@@ -231,14 +254,23 @@ public struct PlanService: Sendable {
         }
       }
       if refusal == nil {
-        for path in ProtectionPolicy.sparseImageRoots(in: item.inventory, homeDirectory: homeDirectory) {
-          switch await mountedImages.state(imagePath: path) {
-          case .detached: break
-          case .attached: refusal = PlanRejection(.mountedImage, path: path)
-          case .unknown: refusal = PlanRejection(.imageStateUnavailable, path: path)
+        do throws(PlanRejection) {
+          let observations = try ExactInventory.packageObservations(for: item, homeDirectory: homeDirectory)
+          guard observations.applicationIDs.sorted() == (item.nestedApplicationIDs ?? []).sorted() else {
+            throw PlanRejection(.changedSinceScan, path: item.sourcePath)
           }
-          if refusal != nil { break }
-        }
+          for path in Set(
+            ProtectionPolicy.sparseImageRoots(in: item.inventory, homeDirectory: homeDirectory)
+              + observations.imagePaths)
+          {
+            switch await mountedImages.state(imagePath: path) {
+            case .detached: break
+            case .attached: refusal = PlanRejection(.mountedImage, path: path)
+            case .unknown: refusal = PlanRejection(.imageStateUnavailable, path: path)
+            }
+            if refusal != nil { break }
+          }
+        } catch let rejection { refusal = rejection }
       }
       if let refusal { rejections.append(refusal) } else { items.append(item) }
     }
@@ -272,8 +304,7 @@ public struct PlanService: Sendable {
         var bundleID: String?
         if result.policy == .wholeBundle {
           bundleID = ApplicationIdentity.bundleIdentifier(ofApplicationAt: root.path)
-          guard let bundleID else { throw PlanRejection(.missingMetadata, path: root.path) }
-          let identifiers = [bundleID] + result.nestedApplicationIDs
+          let identifiers = [bundleID].compactMap { $0 } + result.nestedApplicationIDs
           if identifiers.contains(where: {
             $0.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
           }) {

@@ -4,10 +4,10 @@ import Foundation
 /// How a Trash plan treats its descendants. `nil` on a plan item keeps the
 /// original strict rules, including for journal records written before this field.
 public enum TreePolicy: String, Codable, Sendable {
-  /// Space selection: symlinks move as leaves, packages without protected contents move with their folder.
+  /// Space selection: symbolic links and intact packages move as leaves.
   case spaceTrash
-  /// A whole package selected as the operation root. The application-slice and
-  /// localization rules do not apply beneath that root; every other rule does.
+  /// A whole application package moved intact. Its root still receives every
+  /// protection check; its contents do not supply Trash or Undo authority.
   case wholeBundle
   /// Catalog cache packages and symbolic links, authorized only by a Trash proof.
   case catalogTrash
@@ -127,15 +127,26 @@ public struct ExactInventory: Sendable {
       throw PlanRejection(.unavailable, path: rootPath)
     }
     if isBulkRoot(rootPath) { throw PlanRejection(.bulkRoot, path: rootPath) }
-    if ScanService.isInsidePackage(rootPath) { throw PlanRejection(.insidePackage, path: rootPath) }
     let root: FileIdentity
     do { root = try DescriptorFileSystem.identity(at: rootPath) } catch {
-      throw PlanRejection(.changedSinceScan, path: rootPath)
+      throw Self.readFailure(error, path: rootPath)
+    }
+    let wholeBundle = root.kind == .directory && Self.isApplicationName(rootPath)
+    let policy: TreePolicy = requestedPolicy ?? (wholeBundle ? .wholeBundle : .spaceTrash)
+    let opaque = Self.isOpaquePackage(path: rootPath, identity: root, policy: policy)
+    if wholeBundle,
+      ApplicationIdentity.bundleIdentifier(ofApplicationAt: rootPath)?
+        .caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
+    {
+      throw PlanRejection(.lightenItself, path: rootPath)
+    }
+    if ScanService.isInsidePackage(rootPath) {
+      throw PlanRejection(.insidePackage, path: rootPath)
     }
     let relatedPolicy =
       requestedPolicy == .relatedTrash || requestedPolicy == .relatedContainer
       || requestedPolicy == .relatedGroupContainer
-    if relatedPolicy && !RelatedDataService.currentUserOwns(rootPath) {
+    if (relatedPolicy || opaque) && !RelatedDataService.currentUserOwns(rootPath) {
       throw PlanRejection(.needsAdministrator, path: rootPath)
     }
     if let expected, root.device != expected.device || root.inode != expected.inode {
@@ -149,7 +160,9 @@ public struct ExactInventory: Sendable {
     case .other: throw PlanRejection(.specialFile, path: rootPath)
     case .regular, .directory: break
     }
-    guard root.hasStableTrashProof else { throw PlanRejection(.missingMetadata, path: rootPath) }
+    guard opaque ? root.hasOpaquePackageProof : root.hasStableTrashProof else {
+      throw PlanRejection(.missingMetadata, path: rootPath)
+    }
     if root.flags & UInt32(SF_DATALESS | UF_DATAVAULT) != 0 { throw PlanRejection(.cloudItem, path: rootPath) }
     guard let volumeID = try? DescriptorFileSystem.volumeID(at: rootPath) else {
       throw PlanRejection(.differentVolume, path: rootPath)
@@ -159,17 +172,17 @@ public struct ExactInventory: Sendable {
       throw PlanRejection(.mountPoint, path: rootPath)
     }
     if access(parent, W_OK) != 0 || (root.kind == .directory && access(rootPath, W_OK) != 0) {
+      let permissionError = errno
       var details = stat()
       let owned = lstat(rootPath, &details) == 0 && details.st_uid == geteuid()
-      throw PlanRejection(owned ? .userPermissionDenied : .needsAdministrator, path: rootPath)
+      throw PlanRejection(
+        owned ? .userPermissionDenied : .needsAdministrator, path: rootPath, ruleID: "errno:\(permissionError)")
     }
     let ancestors: [PathIdentity]
     do { ancestors = try DescriptorFileSystem.ancestorIdentities(of: rootPath) } catch {
       throw PlanRejection(.changedSinceScan, path: rootPath)
     }
     // Catalog Trash permissions come from a later manifest-proof validation.
-    let wholeBundle = root.kind == .directory && Self.isApplicationName(rootPath)
-    let policy: TreePolicy = requestedPolicy ?? (wholeBundle ? .wholeBundle : .spaceTrash)
     let rootRules = ProtectionPolicy.rules(for: rootPath, homeDirectory: homeDirectory)
     let permittedRoot =
       (policy == .spaceTrash || policy == .wholeBundle)
@@ -190,19 +203,15 @@ public struct ExactInventory: Sendable {
       }
     }
     var nested: [String] = []
-    if wholeBundle {
-      if policy == .catalogTrash || policy == .catalogBuildOutput {
-        guard let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: rootPath) else {
-          throw PlanRejection(.missingMetadata, path: rootPath)
-        }
-        nested.append(id)
-      } else if relatedPolicy, let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: rootPath) {
-        nested.append(id)
-      }
-    }
     let rootEntry = ScanEntry(parentID: nil, path: rootPath, identity: root, issues: [], readable: true)
     var entries = [rootEntry]
-    if root.kind == .directory {
+    if opaque {
+      try Self.validateOpaqueRoot(path: rootPath, expected: root)
+      nested = try Self.observePackage(
+        path: rootPath, rootPath: rootPath, policy: policy,
+        homeDirectory: homeDirectory, includeRootIdentifier: policy != .wholeBundle, isCancelled: isCancelled
+      ).applicationIDs
+    } else if root.kind == .directory {
       let automaton = ProtectionAutomaton(homeDirectory: homeDirectory)
       try walk(
         path: rootPath, parentID: rootEntry.id, identity: root, rootDevice: root.device,
@@ -258,7 +267,11 @@ public struct ExactInventory: Sendable {
       }
       if child.device != rootDevice { throw PlanRejection(.mountPoint, path: childPath) }
       if child.flags & UInt32(SF_DATALESS | UF_DATAVAULT) != 0 { throw PlanRejection(.cloudItem, path: childPath) }
-      guard child.hasStableTrashProof else { throw PlanRejection(.missingMetadata, path: childPath) }
+      let opaque = Self.isOpaquePackage(path: childPath, identity: child, policy: policy)
+      if opaque && details.st_uid != geteuid() { throw PlanRejection(.needsAdministrator, path: childPath) }
+      guard opaque ? child.hasOpaquePackageProof : child.hasStableTrashProof else {
+        throw PlanRejection(.missingMetadata, path: childPath)
+      }
       let entry = ScanEntry(parentID: parentID, path: childPath, identity: child, issues: [], readable: true)
       entries.append(entry)
       if entries.count > limit { throw PlanRejection(.tooManyItems, path: rootPath) }
@@ -270,12 +283,13 @@ public struct ExactInventory: Sendable {
         continue
       case .symbolicLink, .regular: continue
       case .directory:
-        if Self.isApplicationName(childPath) {
-          // A nested app (a helper or bundled tool) must also be closed before the move.
-          guard let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: childPath) else {
-            throw PlanRejection(.missingMetadata, path: childPath)
-          }
-          nested.append(id)
+        if opaque {
+          try Self.validateOpaqueRoot(path: childPath, expected: child)
+          nested += try Self.observePackage(
+            path: childPath, rootPath: rootPath, policy: policy,
+            homeDirectory: homeDirectory, includeRootIdentifier: true, isCancelled: isCancelled
+          ).applicationIDs
+          continue
         }
         try walk(
           path: childPath, parentID: entry.id, identity: child, rootDevice: rootDevice, rootPath: rootPath,
@@ -283,6 +297,172 @@ public struct ExactInventory: Sendable {
           isCancelled: isCancelled)
       }
     }
+  }
+
+  struct PackageObservation {
+    var applicationIDs: [String] = []
+    var imagePaths: [String] = []
+  }
+
+  /// Reads directory/code boundaries as observations. Payload files never become
+  /// inventory entries or proof for moving or restoring an intact package.
+  static func observePackage(
+    path: String, rootPath: String, policy: TreePolicy, homeDirectory: String,
+    includeRootIdentifier: Bool, isCancelled: @Sendable () -> Bool = { false }
+  ) throws(PlanRejection) -> PackageObservation {
+    var result = PackageObservation()
+    var visited = 0
+    let automaton = ProtectionAutomaton(homeDirectory: homeDirectory)
+    func visit(
+      _ path: String, parentFD: Int32?, name: String?, includeIdentifier: Bool,
+      state: ProtectionAutomaton.State, depth: Int, expected: FileIdentity?
+    ) throws {
+      if isCancelled() { throw PlanRejection(.unavailable, path: path) }
+      visited += 1
+      guard visited <= 2_000_000, depth < 1024 else { throw PlanRejection(.tooManyItems, path: rootPath) }
+      if path.lowercased().hasSuffix(".sparsebundle") { result.imagePaths.append(path) }
+      let fd: Int32
+      if let parentFD, let name {
+        fd = openat(parentFD, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY)
+      } else {
+        fd = DirectoryReader.openDirectory(path)
+      }
+      guard fd >= 0 else {
+        let code = errno
+        // A resource-only subtree may be inaccessible while its intact package
+        // remains movable. Executable/helper directories remain fail-closed.
+        let codeBoundary = [".app", ".bundle", ".framework", ".appex", ".xpc"].contains {
+          path.lowercased().hasSuffix($0)
+        }
+        if code == EACCES || code == EPERM, !codeBoundary,
+          path.contains("/Contents/Resources/") || path.hasSuffix("/Contents/Resources")
+        {
+          return
+        }
+        throw PlanRejection(.unreadableFolder, path: path, ruleID: "errno:\(code)")
+      }
+      defer { close(fd) }
+      var openedDetails = stat()
+      guard fstat(fd, &openedDetails) == 0 else {
+        throw PlanRejection(.unreadableFolder, path: path, ruleID: "errno:\(errno)")
+      }
+      let opened = DescriptorFileSystem.identity(from: openedDetails)
+      if let expected, !opened.sameStableDirectory(as: expected) { throw PlanRejection(.changedSinceScan, path: path) }
+      if includeIdentifier, Self.isApplicationName(path),
+        let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: path)
+      {
+        result.applicationIDs.append(id)
+      }
+      let copy = dup(fd)
+      guard copy >= 0, let directory = fdopendir(copy) else {
+        let code = errno
+        if copy >= 0 { close(copy) }
+        throw PlanRejection(.unreadableFolder, path: path, ruleID: "errno:\(code)")
+      }
+      defer { closedir(directory) }
+      var children: [(String, UInt8)] = []
+      while true {
+        errno = 0
+        guard let entry = readdir(directory) else {
+          if errno != 0 { throw PlanRejection(.unreadableFolder, path: path, ruleID: "errno:\(errno)") }
+          break
+        }
+        let name = withUnsafePointer(to: &entry.pointee.d_name) {
+          $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
+        }
+        if name != "." && name != ".." { children.append((name, entry.pointee.d_type)) }
+      }
+      for (name, type) in children.sorted(by: { $0.0 < $1.0 }) {
+        let childPath = path + "/" + name
+        if type != UInt8(DT_LNK), name.lowercased().hasSuffix(".sparseimage") { result.imagePaths.append(childPath) }
+        // Most filesystems supply d_type: ordinary payloads need no stat or read.
+        guard type == UInt8(DT_DIR) || type == UInt8(DT_UNKNOWN) else { continue }
+        var details = stat()
+        guard fstatat(fd, name, &details, AT_SYMLINK_NOFOLLOW_ANY) == 0 else {
+          throw PlanRejection(.changedSinceScan, path: childPath, ruleID: "errno:\(errno)")
+        }
+        guard details.st_mode & S_IFMT == S_IFDIR else { continue }
+        let identity = DescriptorFileSystem.identity(from: details)
+        let childState = automaton.step(state, name)
+        let rules = automaton.matches(childState, path: childPath, homeDirectory: homeDirectory)
+        if let rule = rules.first,
+          !Self.permits(
+            rules, policy: policy, path: childPath,
+            rootPath: rootPath, homeDirectory: homeDirectory)
+        {
+          throw PlanRejection(.containsProtectedItem, path: childPath, ruleID: rule.id)
+        }
+        guard identity.device == opened.device else {
+          throw PlanRejection(.mountPoint, path: childPath)
+        }
+        if identity.flags & UInt32(SF_DATALESS | UF_DATAVAULT) != 0 { throw PlanRejection(.cloudItem, path: childPath) }
+        try visit(
+          childPath, parentFD: fd, name: name, includeIdentifier: true, state: childState, depth: depth + 1,
+          expected: identity)
+      }
+      if let parentFD, let name {
+        var current = stat()
+        guard fstatat(parentFD, name, &current, AT_SYMLINK_NOFOLLOW_ANY) == 0,
+          opened.sameStableDirectory(as: DescriptorFileSystem.identity(from: current))
+        else {
+          throw PlanRejection(.changedSinceScan, path: path)
+        }
+      }
+    }
+    do {
+      try visit(
+        path, parentFD: nil, name: nil, includeIdentifier: includeRootIdentifier,
+        state: automaton.state(forPath: path), depth: 0, expected: nil)
+    } catch let rejection as PlanRejection { throw rejection } catch { throw PlanRejection(.unavailable, path: path) }
+    return result
+  }
+
+  static func packageObservations(for item: PlanItem, homeDirectory: String) throws(PlanRejection) -> PackageObservation
+  {
+    guard let policy = item.policy else { return PackageObservation() }
+    var observed = PackageObservation()
+    var roots: [String] = []
+    for entry in item.inventory {
+      guard let identity = entry.identity,
+        !roots.contains(where: { entry.path.hasPrefix($0 + "/") }),
+        Self.isOpaquePackage(path: entry.path, identity: identity, policy: policy)
+      else { continue }
+      let current = try Self.observePackage(
+        path: entry.path, rootPath: item.sourcePath, policy: policy,
+        homeDirectory: homeDirectory, includeRootIdentifier: entry.id != item.id || policy != .wholeBundle)
+      observed.applicationIDs += current.applicationIDs
+      observed.imagePaths += current.imagePaths
+      roots.append(entry.path)
+    }
+    return observed
+  }
+
+  /// The package boundary is observed from the current filesystem, never granted by a cached tree.
+  static func isOpaquePackage(path: String, identity: FileIdentity, policy: TreePolicy?) -> Bool {
+    policy != nil && identity.kind == .directory && ScanService.isPackage(path)
+  }
+
+  static func validateOpaqueRoot(path: String, expected: FileIdentity) throws(PlanRejection) {
+    let fd = DirectoryReader.openDirectory(path)
+    guard fd >= 0 else { throw PlanRejection(.unreadableFolder, path: path, ruleID: "errno:\(errno)") }
+    defer { close(fd) }
+    var details = stat()
+    guard fstat(fd, &details) == 0 else {
+      throw PlanRejection(.unreadableFolder, path: path, ruleID: "errno:\(errno)")
+    }
+    guard details.st_uid == geteuid() else { throw PlanRejection(.needsAdministrator, path: path) }
+    guard expected.hasOpaquePackageProof,
+      expected.matchesStableTrashIdentity(DescriptorFileSystem.identity(from: details))
+    else { throw PlanRejection(.changedSinceScan, path: path) }
+  }
+
+  private static func readFailure(_ error: Error, path: String) -> PlanRejection {
+    if case FileSystemFailure.systemCall(_, let code) = error {
+      return PlanRejection(
+        code == EACCES || code == EPERM ? .unreadableFolder : .changedSinceScan,
+        path: path, ruleID: "errno:\(code)")
+    }
+    return PlanRejection(.changedSinceScan, path: path)
   }
 
   /// The outermost package between the root and a protected application path.
@@ -315,5 +495,12 @@ public struct ExactInventory: Sendable {
       if name != "." && name != ".." { names.append(name) }
     }
     return names.sorted()
+  }
+}
+
+extension FileIdentity {
+  var hasOpaquePackageProof: Bool {
+    kind == .directory && birthSeconds != nil && birthNanoseconds != nil
+      && flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0
   }
 }

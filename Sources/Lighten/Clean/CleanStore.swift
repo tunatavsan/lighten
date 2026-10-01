@@ -194,7 +194,9 @@ final class CleanStore: ToolSummaryProviding {
                 let plan = try await Task.detached(priority: .utility) {
                   try catalog.plan(snapshot: snapshot, selectedIDs: [entry.id], rowID: row.id, kind: .trash)
                 }.value
-                exactLogical = plan.items.reduce(Int64(0)) { $0 + PlanItemSize.measure($1).0 }
+                if !plan.items.contains(where: { $0.containsOpaquePackages }) {
+                  exactLogical = plan.items.reduce(Int64(0)) { $0 + PlanItemSize.measure($1).0 }
+                }
               } catch {
                 allowed = false
                 requiresFullDiskAccess =

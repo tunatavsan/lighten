@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import Testing
@@ -755,6 +756,20 @@ private func buildFixture(_ home: String) throws -> (root: String, project: Stri
   return (root, project)
 }
 
+private func cleanFixtureHashes(_ root: String) throws -> [String: SHA256.Digest] {
+  var hashes: [String: SHA256.Digest] = [:]
+  func visit(_ path: String) throws {
+    let identity = try DescriptorFileSystem.identity(at: path)
+    if identity.kind == .regular {
+      hashes[path] = SHA256.hash(data: try Data(contentsOf: URL(fileURLWithPath: path)))
+    } else if identity.kind == .directory {
+      for name in try FileManager.default.contentsOfDirectory(atPath: path) { try visit(path + "/" + name) }
+    }
+  }
+  try visit(root)
+  return hashes
+}
+
 @Test("Build output moves application products, symbols and symlink leaves together and restores exactly")
 func catalogBuildOutputTrashAndUndo() async throws {
   let fixture = try cleanFixture()
@@ -767,17 +782,17 @@ func catalogBuildOutputTrashAndUndo() async throws {
   let plan = try catalog.plan(snapshot: snapshot, selectedIDs: [entry.id], rowID: "xcode-derived-data", kind: .trash)
   let item = try #require(plan.items.first)
   #expect(item.policy == .catalogBuildOutput)
-  #expect(item.inventory.contains { $0.path.contains(".dSYM/Contents/Resources/DWARF") })
+  #expect(item.inventory.contains { $0.path.hasSuffix("/Tool.dSYM") })
+  #expect(item.inventory.contains { $0.path.hasSuffix(".app") })
+  #expect(!item.inventory.contains { $0.path.contains(".dSYM/") || $0.path.contains(".app/") })
   #expect(!item.inventory.contains { $0.path.hasPrefix(build.project + "/outside-link/") })
   try ActionGuard(homeDirectory: fixture.home).validate(item)
   #expect(throws: CatalogFailure.self) {
     try catalog.plan(snapshot: snapshot, selectedIDs: [entry.id], rowID: "xcode-derived-data", kind: .catalogDelete)
   }
-  let original = try Dictionary(
-    uniqueKeysWithValues: item.inventory.compactMap { entry -> (String, Data)? in
-      guard entry.identity?.kind == .regular else { return nil }
-      return (entry.path, try Data(contentsOf: URL(fileURLWithPath: entry.path)))
-    })
+  let original = try cleanFixtureHashes(build.project)
+  #expect(original.count == 4)
+  #expect(original.keys.contains { $0.contains(".dSYM/Contents/Resources/DWARF") })
   let trash = fixture.home + "/Trash"
   try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: true)
   let journal = CleanJournal()
@@ -785,12 +800,12 @@ func catalogBuildOutputTrashAndUndo() async throws {
     journal: journal, trash: LocalTrash(directory: trash),
     guardService: ActionGuard(homeDirectory: fixture.home),
     activity: FixedActivity(state: .clearObservedCurrentUID), catalog: catalog,
-    runningApplications: FixedRunning(value: false)
+    runningApplications: FixedRunning(value: false), applicationActivity: FixtureClearApplicationActivity()
   ).execute(plan)
   #expect(result.items[0].outcome == .applied)
   #expect(FileManager.default.fileExists(atPath: fixture.candidate + "/a"))
   try await ActionHistory(journal: journal, homeDirectory: fixture.home).undo(planID: plan.id)
-  for (path, data) in original { #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == data) }
+  #expect(try cleanFixtureHashes(build.project) == original)
   #expect(
     try FileManager.default.destinationOfSymbolicLink(atPath: build.project + "/outside-link") == fixture.candidate)
 }

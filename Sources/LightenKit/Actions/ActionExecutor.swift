@@ -188,9 +188,7 @@ public actor ActionExecutor {
             return binding.bundleID == package.applicationBundleID
               && binding.appIdentity == package.inventory.first?.identity
               && binding.infoIdentity
-                == package.inventory.first(where: {
-                  $0.path == package.sourcePath + "/Contents/Info.plist"
-                })?.identity
+                == (try? DescriptorFileSystem.identity(at: package.sourcePath + "/Contents/Info.plist"))
           })
         else { throw RelatedFailure.changedItem }
         try guardService.validate(package)
@@ -417,6 +415,19 @@ public actor ActionExecutor {
   }
 
   private func validateApplication(_ item: PlanItem) async throws {
+    if item.policy != nil {
+      for entry in item.inventory
+      where entry.identity.map({ ExactInventory.isOpaquePackage(path: entry.path, identity: $0, policy: item.policy) })
+        == true
+      {
+        let observation = await applicationActivity.activity(applicationPath: entry.path)
+        switch observation.state {
+        case .clearObservedProcesses: break
+        case .active: throw ProcessActivityFailure.active(processNames: observation.processNames)
+        case .unknown: throw ProcessActivityFailure.unavailable
+        }
+      }
+    }
     if item.policy == .spaceTrash || item.policy == .catalogTrash || item.policy == .catalogBuildOutput
       || item.policy == .relatedTrash || item.policy == .relatedContainer || item.policy == .relatedGroupContainer
     {
@@ -431,16 +442,13 @@ public actor ActionExecutor {
       return
     }
     guard item.policy == .wholeBundle else { return }
-    let executableActivity = await applicationActivity.activity(applicationPath: item.sourcePath)
-    switch executableActivity.state {
-    case .clearObservedProcesses: break
-    case .active: throw ProcessActivityFailure.active(processNames: executableActivity.processNames)
-    case .unknown: throw ProcessActivityFailure.unavailable
+    let currentIdentifier = ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath)
+    if let expected = item.applicationBundleID,
+      currentIdentifier != expected
+    {
+      throw RelatedFailure.changedItem
     }
-    guard let expected = item.applicationBundleID,
-      ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath) == expected
-    else { throw RelatedFailure.changedItem }
-    let everyID = [expected] + (item.nestedApplicationIDs ?? [])
+    let everyID = [currentIdentifier].compactMap { $0 } + (item.nestedApplicationIDs ?? [])
     if everyID.contains(where: { $0.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame }) {
       throw ExecutionFailure.selfRemoval
     }
@@ -487,7 +495,11 @@ public actor ActionExecutor {
     case .active: throw ProcessActivityFailure.active(processNames: observed.processNames)
     case .unknown: throw ProcessActivityFailure.unavailable
     }
-    for path in ProtectionPolicy.sparseImageRoots(in: item.inventory, homeDirectory: guardService.homeDirectory) {
+    let observations = try ExactInventory.packageObservations(for: item, homeDirectory: guardService.homeDirectory)
+    for path in Set(
+      ProtectionPolicy.sparseImageRoots(in: item.inventory, homeDirectory: guardService.homeDirectory)
+        + observations.imagePaths)
+    {
       switch await mountedImages.state(imagePath: path) {
       case .detached: break
       case .attached: throw SpaceValidationFailure(detail: "mountedImage")

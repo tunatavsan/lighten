@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import Testing
@@ -45,7 +46,17 @@ private func rejection(_ path: String, home: String) -> PlanRejection? {
   }
 }
 
-@Test func folderWithSymlinksAndPackageBecomesSpaceTrashPlan() throws {
+private struct InventoryLocalTrash: TrashMoving {
+  let directory: String
+  func moveToTrash(path: String) async throws -> String {
+    try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    let target = directory + "/" + (path as NSString).lastPathComponent
+    try FileManager.default.moveItem(atPath: path, toPath: target)
+    return target
+  }
+}
+
+@Test func folderWithSymlinksAndPackageBecomesSpaceTrashPlan() async throws {
   let home = try inventoryRoot()
   defer { try? FileManager.default.removeItem(atPath: home) }
   let outside = home + "/elsewhere"
@@ -61,11 +72,24 @@ private func rejection(_ path: String, home: String) -> PlanRejection? {
   #expect(item.id == item.inventory[0].id)
   let paths = Set(item.inventory.map(\.path))
   #expect(paths.contains(folder + "/link-out"))
-  #expect(paths.contains(folder + "/Sample.bundle/Contents/Resources/r"))
+  #expect(paths.contains(folder + "/Sample.bundle"))
+  #expect(!paths.contains { $0.hasPrefix(folder + "/Sample.bundle/") })
+  #expect(item.containsOpaquePackages)
+  let payload = folder + "/Sample.bundle/Contents/Resources/r"
+  let original = SHA256.hash(data: try Data(contentsOf: URL(fileURLWithPath: payload)))
   // The link is a leaf: nothing beneath its target is part of the plan.
   #expect(!paths.contains { $0.hasPrefix(folder + "/link-out/") })
   #expect(item.inventory.first { $0.path == folder + "/link-out" }?.identity?.kind == .symbolicLink)
   try ActionGuard(homeDirectory: home).validate(item)
+  let journal = JSONLActionJournal(path: home + "/Journal/actions.jsonl")
+  let moved = try await ActionExecutor(
+    journal: journal, trash: InventoryLocalTrash(directory: home + "/Trash"),
+    guardService: ActionGuard(homeDirectory: home), applicationActivity: FixtureClearApplicationActivity()
+  ).execute(result)
+  #expect(moved.items.first?.outcome == .applied)
+  #expect(try await ActionHistory(journal: journal, homeDirectory: home).undo(planID: result.id).restoredCount == 1)
+  #expect(SHA256.hash(data: try Data(contentsOf: URL(fileURLWithPath: payload))) == original)
+  #expect(try FileManager.default.destinationOfSymbolicLink(atPath: folder + "/link-out") == outside)
 }
 
 @Test func guardComparesTheLinkItselfAndNeverItsTarget() throws {

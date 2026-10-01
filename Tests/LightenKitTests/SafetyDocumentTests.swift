@@ -1,8 +1,27 @@
+import CryptoKit
 import Darwin
 import Foundation
 import Testing
 
 @testable import LightenKit
+
+private struct SafetyClearActivity: ProcessActivitySource {
+  func activity(for rowID: String) async -> ProcessActivity { ProcessActivity(state: .clearObservedCurrentUID) }
+}
+
+private struct SafetyClosedApplications: RunningApplicationSource {
+  func isRunning(bundleID: String) async -> Bool? { false }
+}
+
+private struct SafetyLocalTrash: TrashMoving {
+  let directory: String
+  func moveToTrash(path: String) async throws -> String {
+    try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    let target = directory + "/" + (path as NSString).lastPathComponent
+    try FileManager.default.moveItem(atPath: path, toPath: target)
+    return target
+  }
+}
 
 @Suite("Safety document")
 struct SafetyDocumentTests {
@@ -38,7 +57,15 @@ struct SafetyDocumentTests {
     let selectedID = try #require(snapshot.entries.first { $0.path == candidate }).id
     let trash = try catalog.plan(snapshot: snapshot, selectedIDs: [selectedID], rowID: rowID, kind: .trash)
     #expect(trash.items.count == 1)
-    #expect(trash.items[0].inventory.contains { $0.path == protectedPath })
+    let observedRoot =
+      content == "application"
+      ? candidate + "/LightenQA-product.app"
+      : content == "symbols" ? candidate + "/LightenQA-symbols.dSYM" : protectedPath
+    #expect(trash.items[0].inventory.contains { $0.path == observedRoot })
+    if content != "localization" {
+      #expect(!trash.items[0].inventory.contains { $0.path.hasPrefix(observedRoot + "/") })
+    }
+    let hash = SHA256.hash(data: try Data(contentsOf: URL(fileURLWithPath: protectedPath)))
     #expect(trash.items[0].policy == (content == "symbols" ? .catalogBuildOutput : .catalogTrash))
     #expect(throws: PlanFailure.unsafeSelection) {
       try PlanService(homeDirectory: home).makePlan(
@@ -53,6 +80,15 @@ struct SafetyDocumentTests {
         try catalog.plan(snapshot: snapshot, selectedIDs: [selectedID], rowID: rowID, kind: .catalogDelete)
       }
     }
+    let journal = JSONLActionJournal(path: home + "/Journal/actions.jsonl")
+    let result = try await ActionExecutor(
+      journal: journal, trash: SafetyLocalTrash(directory: home + "/Trash"),
+      guardService: ActionGuard(homeDirectory: home), activity: SafetyClearActivity(), catalog: catalog,
+      runningApplications: SafetyClosedApplications(), applicationActivity: FixtureClearApplicationActivity()
+    ).execute(trash)
+    #expect(result.items.first?.outcome == .applied)
+    #expect(try await ActionHistory(journal: journal, homeDirectory: home).undo(planID: trash.id).restoredCount == 1)
+    #expect(SHA256.hash(data: try Data(contentsOf: URL(fileURLWithPath: protectedPath))) == hash)
   }
 
   @Test("Checked-in safety document matches NeverRule.all")

@@ -17,7 +17,7 @@ private struct AppsFixture {
       throw FileSystemFailure.invalidPath
     }
     defer { free(root) }
-    home = String(cString: root) + "/lighten-apps-" + UUID().uuidString
+    home = String(cString: root) + "/LightenQA-" + UUID().uuidString
     appRoot = home + "/Applications"
     app = appRoot + "/Fixture.app"
     bundleID = "com.example.fixture" + UUID().uuidString.replacingOccurrences(of: "-", with: "")

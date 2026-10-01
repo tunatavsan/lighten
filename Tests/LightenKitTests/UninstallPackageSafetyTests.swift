@@ -210,7 +210,9 @@ struct UninstallPackageSafetyTests {
     #expect(FileManager.default.fileExists(atPath: fixture.cache))
   }
 
-  @Test("A moved package must remain exact during the final related-data window", arguments: ["info", "helper"])
+  @Test(
+    "Moved owner metadata and root identity remain exact during the final related-data window",
+    arguments: ["info", "root"])
   func movedOwnerChangedBeforeData(_ changed: String) async throws {
     let fixture = try UninstallFixture()
     defer { fixture.cleanup() }
@@ -222,8 +224,12 @@ struct UninstallPackageSafetyTests {
       guardService: ActionGuard(homeDirectory: fixture.home),
       beforeMutation: { item in
         if item.sourcePath == fixture.cache, let owner = await trash.target(for: fixture.app) {
-          let suffix = changed == "info" ? "/Contents/Info.plist" : String(fixture.helper.dropFirst(fixture.app.count))
-          try Data("changed metadata".utf8).write(to: URL(fileURLWithPath: owner + suffix))
+          if changed == "info" {
+            try Data("changed metadata".utf8).write(to: URL(fileURLWithPath: owner + "/Contents/Info.plist"))
+          } else {
+            try FileManager.default.moveItem(atPath: owner, toPath: owner + ".original")
+            try FileManager.default.copyItem(atPath: owner + ".original", toPath: owner)
+          }
         }
       }, related: fixture.service, runningApplications: UninstallNotRunning(),
       applicationActivity: FixtureClearApplicationActivity()

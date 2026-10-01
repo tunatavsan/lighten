@@ -74,24 +74,30 @@ public struct ActionGuard: Sendable {
     }
     if policy == .wholeBundle {
       guard item.inventory.first?.identity?.kind == .directory,
-        ExactInventory.isApplicationName(item.sourcePath), item.applicationBundleID != nil
+        ExactInventory.isApplicationName(item.sourcePath)
       else { throw GuardFailure.unsupportedItem }
+      if ApplicationIdentity.bundleIdentifier(ofApplicationAt: item.sourcePath)?
+        .caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame
+      {
+        throw GuardFailure.protectedItem
+      }
     }
     if policy == .catalogTrash || policy == .catalogBuildOutput || relatedPolicy
       || policy == .spaceTrash || policy == .wholeBundle
     {
-      var identifiers: [String] = []
-      for entry in item.inventory
-      where entry.identity?.kind == .directory && ExactInventory.isApplicationName(entry.path) {
-        if entry.id == item.id && (relatedPolicy || policy == .wholeBundle),
-          ApplicationIdentity.bundleIdentifier(ofApplicationAt: entry.path) == nil
-        {
-          continue
+      let identifiers: [String]
+      do {
+        identifiers = try ExactInventory.packageObservations(for: item, homeDirectory: homeDirectory).applicationIDs
+      } catch let rejection {
+        if rejection.reason == .containsProtectedItem || rejection.reason == .protectedItem {
+          throw GuardFailure.protectedItem
         }
-        guard let id = ApplicationIdentity.bundleIdentifier(ofApplicationAt: entry.path) else {
-          throw GuardFailure.unsupportedItem
-        }
-        if entry.id != item.id || policy != .wholeBundle { identifiers.append(id) }
+        throw GuardFailure.changedInventory
+      }
+      guard
+        !identifiers.contains(where: { $0.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) == .orderedSame })
+      else {
+        throw GuardFailure.protectedItem
       }
       guard identifiers.sorted() == (item.nestedApplicationIDs ?? []).sorted() else {
         throw GuardFailure.changedInventory
@@ -108,7 +114,7 @@ public struct ActionGuard: Sendable {
         || (root.identity?.kind == .symbolicLink && (policy == .catalogTrash || policy == .catalogBuildOutput)),
       !PlanService.isBulkRoot(item.sourcePath, homeDirectory: homeDirectory),
       !rootIsPackage || policy != nil,
-      policy != .wholeBundle || (rootIsApplication && item.applicationBundleID != nil),
+      policy != .wholeBundle || rootIsApplication,
       !ScanService.isInsidePackage(item.sourcePath),
       let volumeID = item.volumeID,
       (try? DescriptorFileSystem.volumeID(at: item.sourcePath)) == volumeID
@@ -153,7 +159,9 @@ public struct ActionGuard: Sendable {
     // Protection states follow the inventory's parent chain, one name at a time.
     let automaton = ProtectionAutomaton(homeDirectory: homeDirectory)
     var states: [UUID: ProtectionAutomaton.State] = [:]
+    var opaqueRoots: [String] = []
     for entry in item.inventory {
+      if opaqueRoots.contains(where: { entry.path.hasPrefix($0 + "/") }) { continue }
       let state: ProtectionAutomaton.State
       if let parentID = entry.parentID, entry.id != item.id, let parentState = states[parentID] {
         state = automaton.step(parentState, (entry.path as NSString).lastPathComponent)
@@ -166,9 +174,13 @@ public struct ActionGuard: Sendable {
           entry.path == parent.path + "/" + (entry.path as NSString).lastPathComponent
         else { throw GuardFailure.changedInventory }
       }
-      guard let expected = entry.identity, expected.hasStableTrashProof,
+      guard let expected = entry.identity,
         entry.issues.isEmpty, entry.readable
       else {
+        throw GuardFailure.unsupportedItem
+      }
+      let opaque = ExactInventory.isOpaquePackage(path: entry.path, identity: expected, policy: policy)
+      guard opaque ? expected.hasOpaquePackageProof : expected.hasStableTrashProof else {
         throw GuardFailure.unsupportedItem
       }
       // Case-folded matching covers ProtectionPolicy's exact and alias checks.
@@ -200,8 +212,17 @@ public struct ActionGuard: Sendable {
       }
       let current: FileIdentity
       do { current = try DescriptorFileSystem.identity(at: entry.path) } catch { throw GuardFailure.changedItem }
-      guard current == expected else { throw GuardFailure.changedItem }
-      if expected.kind == .directory {
+      if opaque {
+        guard (try? DescriptorFileSystem.volumeID(at: entry.path)) == volumeID
+        else { throw GuardFailure.changedItem }
+        do { try ExactInventory.validateOpaqueRoot(path: entry.path, expected: expected) } catch {
+          throw GuardFailure.changedItem
+        }
+        opaqueRoots.append(entry.path)
+      } else if current != expected {
+        throw GuardFailure.changedItem
+      }
+      if expected.kind == .directory && !opaque {
         let names: [String]
         do { names = try DescriptorFileSystem.children(at: entry.path, expected: expected) } catch {
           throw GuardFailure.changedInventory

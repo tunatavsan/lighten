@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import Synchronization
@@ -30,6 +31,19 @@ private func spaceApp(_ path: String, id: String) throws {
 private func spaceSelection(_ path: String) throws -> PlanService.Selection {
   let identity = try DescriptorFileSystem.identity(at: path)
   return PlanService.Selection(path: path, device: identity.device, inode: identity.inode)
+}
+
+private struct SpaceClearApplications: ApplicationActivitySource {
+  func activity(applicationPath: String) async -> ApplicationActivity {
+    ApplicationActivity(state: .clearObservedProcesses)
+  }
+}
+
+private struct SpaceActiveApplications: ApplicationActivitySource {
+  let state: ApplicationActivityState
+  func activity(applicationPath: String) async -> ApplicationActivity {
+    ApplicationActivity(state: state, processNames: ["LightenQA helper"])
+  }
 }
 
 private struct SpaceClosedApps: RunningApplicationSource {
@@ -68,6 +82,239 @@ private func spacePlan(_ path: String, home: String) throws -> ActionPlan {
 
 @Suite("Space safety")
 struct SpaceSafetyTests {
+  @Test(
+    "A missing encoded identifier cannot suppress fresh root self or running refusals", arguments: ["self", "running"])
+  func freshRootIdentifier(_ variant: String) async throws {
+    let home = try spaceFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let path = home + "/LightenQA-tool.app"
+    let identifier = variant == "self" ? LightenIdentity.bundleIdentifier : "qa.lighten.root"
+    try spaceApp(path, id: identifier)
+    let identity = try DescriptorFileSystem.identity(at: path)
+    let entry = ScanEntry(parentID: nil, path: path, identity: identity, issues: [], readable: true)
+    let item = PlanItem(
+      id: entry.id, sourcePath: path, volumeID: try DescriptorFileSystem.volumeID(at: path), inventory: [entry],
+      ancestors: try DescriptorFileSystem.ancestorIdentities(of: path), policy: .wholeBundle)
+    #expect(item.applicationBundleID == nil)
+    if variant == "self" {
+      #expect(throws: GuardFailure.protectedItem) { try ActionGuard(homeDirectory: home).validate(item) }
+      do {
+        _ = try ExactInventory(homeDirectory: home).collect(rootPath: path, expected: (identity.device, identity.inode))
+        Issue.record("Fresh Lighten root was accepted")
+      } catch let refusal { #expect(refusal.reason == .lightenItself) }
+    } else {
+      try ActionGuard(homeDirectory: home).validate(item)
+    }
+    let result = try await ActionExecutor(
+      journal: JSONLActionJournal(path: home + "/Journal/actions.jsonl"),
+      trash: SpaceRenameTrash(destination: home + "/Trash"), guardService: ActionGuard(homeDirectory: home),
+      runningApplications: SpaceClosedApps(running: [identifier]), applicationActivity: SpaceClearApplications()
+    ).execute(ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [item]))
+    #expect(result.items.first?.outcome == .skipped)
+    #expect(FileManager.default.fileExists(atPath: path))
+  }
+
+  @Test("Intact nested packages do not require descendant metadata or a related-domain bundle identifier")
+  func opaqueNestedPackages() async throws {
+    let home = try spaceFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let folder = home + "/webdeploy"
+    let outer = folder + "/LightenQA-Fusion.app"
+    let inner = outer + "/Contents/Libraries/CER/dialog/LightenQA-dialog.app"
+    try spaceApp(outer, id: "qa.lighten.fusion")
+    try spaceApp(inner, id: "qa.lighten.cer_dialog")
+    try spacePut(inner + "/Contents/_CodeSignature/CodeResources")
+    try #require(chmod(inner + "/Contents/Resources", 0) == 0)
+    defer { _ = chmod(inner + "/Contents/Resources", 0o700) }
+    let outcome = await PlanService(homeDirectory: home, applicationActivity: SpaceClearApplications())
+      .makeAvailableSpacePlan(
+        selections: [try spaceSelection(folder)], scanRootPath: home, runID: UUID())
+    let plan = try #require(outcome.plan)
+    #expect(outcome.rejections.isEmpty)
+    #expect(plan.items[0].inventory.map(\.path) == [folder, outer])
+    try ActionGuard(homeDirectory: home).validate(plan.items[0])
+    #expect(throws: PlanRejections.self) { try spacePlan(inner, home: home) }
+    let forgedEntry = ScanEntry(
+      parentID: nil, path: inner, identity: try DescriptorFileSystem.identity(at: inner), issues: [], readable: true)
+    let forged = PlanItem(
+      id: forgedEntry.id, sourcePath: inner, volumeID: try DescriptorFileSystem.volumeID(at: inner),
+      inventory: [forgedEntry], ancestors: try DescriptorFileSystem.ancestorIdentities(of: inner), policy: .wholeBundle)
+    #expect(throws: GuardFailure.unsupportedItem) { try ActionGuard(homeDirectory: home).validate(forged) }
+    #expect(throws: PlanRejections.self) { try spacePlan(inner + "/Contents/Info.plist", home: home) }
+  }
+
+  @Test("Opaque packages retain protected directory boundaries and fresh nested application identities")
+  func opaqueSideBoundaries() throws {
+    let home = try spaceFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let app = home + "/LightenQA-tool.app"
+    try spaceApp(app, id: "qa.lighten.tool")
+    let item = try #require(try spacePlan(app, home: home).items.first)
+    try spacePut(app + "/Contents/fixture.photoslibrary/database")
+    #expect(throws: GuardFailure.protectedItem) { try ActionGuard(homeDirectory: home).validate(item) }
+    do {
+      _ = try spacePlan(app, home: home)
+      Issue.record("Protected package boundary was accepted")
+    } catch let failure as PlanRejections { #expect(failure.rejections.first?.ruleID == "photos-library") } catch {
+      throw error
+    }
+    try FileManager.default.removeItem(atPath: app + "/Contents/fixture.photoslibrary")
+    try spaceApp(app + "/Contents/Helpers/LightenQA-agent.app", id: "qa.lighten.agent")
+    #expect(throws: GuardFailure.changedInventory) { try ActionGuard(homeDirectory: home).validate(item) }
+    let refreshed = try #require(try spacePlan(app, home: home).items.first)
+    #expect(refreshed.inventory.map(\.path) == [app])
+    #expect(refreshed.nestedApplicationIDs == ["qa.lighten.agent"])
+  }
+
+  @Test("Opaque packages preserve nested image attachment checks")
+  func opaqueNestedImage() async throws {
+    let home = try spaceFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let app = home + "/LightenQA-tool.app"
+    try spaceApp(app, id: "qa.lighten.tool")
+    let image = app + "/Contents/Images/LightenQA-image.sparsebundle"
+    try spacePut(image + "/bands/payload")
+    let mounts = SpaceObservedMounts()
+    mounts.set(.attached)
+    let outcome = await PlanService(
+      homeDirectory: home, mountedImages: mounts, applicationActivity: SpaceClearApplications()
+    ).makeAvailableSpacePlan(selections: [try spaceSelection(app)], scanRootPath: home, runID: UUID())
+    #expect(outcome.plan == nil)
+    #expect(outcome.rejections.first?.reason == .mountedImage)
+    #expect(outcome.rejections.first?.path == image)
+    let plan = try spacePlan(app, home: home)
+    let result = try await ActionExecutor(
+      journal: JSONLActionJournal(path: home + "/Journal/actions.jsonl"),
+      trash: SpaceRenameTrash(destination: home + "/Trash"), guardService: ActionGuard(homeDirectory: home),
+      runningApplications: SpaceClosedApps(), mountedImages: mounts, applicationActivity: SpaceClearApplications()
+    ).execute(plan)
+    #expect(result.items.first?.outcome == .skipped)
+    #expect(FileManager.default.fileExists(atPath: app))
+  }
+
+  @Test("Opaque package roots reject replacement while accepting intact content changes")
+  func opaqueRootReplacement() throws {
+    let home = try spaceFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let app = home + "/LightenQA-tool.app"
+    try spaceApp(app, id: "qa.lighten.tool")
+    let item = try #require(try spacePlan(app, home: home).items.first)
+    #expect(item.inventory.map(\.path) == [app])
+    try spacePut(app + "/new-resource")
+    try ActionGuard(homeDirectory: home).validate(item)
+    try FileManager.default.moveItem(atPath: app, toPath: home + "/old.app")
+    try spaceApp(app, id: "qa.lighten.tool")
+    #expect(throws: GuardFailure.changedItem) { try ActionGuard(homeDirectory: home).validate(item) }
+  }
+
+  @Test("An unreadable package root names its own path and operating-system reason")
+  func opaqueUnreadableRoot() throws {
+    let home = try spaceFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let path = home + "/LightenQA-tool.bundle"
+    try spacePut(path + "/resource")
+    let selection = try spaceSelection(path)
+    try #require(chmod(path, 0) == 0)
+    defer { _ = chmod(path, 0o700) }
+    do {
+      _ = try PlanService(homeDirectory: home).makeSpacePlan(selections: [selection], scanRootPath: home, runID: UUID())
+      Issue.record("Unreadable package was accepted")
+    } catch let failure {
+      #expect(failure.rejections.first?.path == path)
+      #expect(
+        failure.rejections.first?.reason == .userPermissionDenied
+          || failure.rejections.first?.reason == .unreadableFolder)
+      #expect(failure.rejections.first?.ruleID == "errno:\(EACCES)")
+    }
+  }
+
+  @Test("Opaque packages retain strict generic and permanent boundaries")
+  func opaqueStrictBoundaries() async throws {
+    let home = try spaceFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let path = home + "/LightenQA-tool.app"
+    try spaceApp(path, id: "qa.lighten.tool")
+    let plan = try spacePlan(path, home: home)
+    let item = plan.items[0]
+    let strict = PlanItem(
+      id: item.id, sourcePath: path, volumeID: item.volumeID, inventory: item.inventory, ancestors: item.ancestors)
+    #expect(throws: GuardFailure.self) { try ActionGuard(homeDirectory: home).validate(strict) }
+    let executor = ActionExecutor(
+      journal: JSONLActionJournal(path: home + "/journal.jsonl"), trash: SpaceRenameTrash(destination: home + "/trash"),
+      guardService: ActionGuard(homeDirectory: home))
+    await #expect(throws: ExecutionFailure.invalidPlan) {
+      try await executor.execute(ActionPlan(snapshotRunID: plan.snapshotRunID, kind: .catalogDelete, items: [item]))
+    }
+    try spacePut(home + "/.ssh/id_rsa")
+    #expect(throws: PlanRejections.self) { try spacePlan(home + "/.ssh", home: home) }
+    #expect(FileManager.default.fileExists(atPath: path))
+  }
+
+  @Test(
+    "Native executable observations veto helpers beneath opaque packages",
+    arguments: [ApplicationActivityState.active, .unknown], ["app", "bundle"])
+  func opaqueHelperObservation(_ state: ApplicationActivityState, _ package: String) async throws {
+    let home = try spaceFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let folder = home + "/webdeploy"
+    let app = folder + "/LightenQA-tool.app"
+    if package == "app" {
+      try spaceApp(app, id: "qa.lighten.cer_dialog")
+    } else {
+      try spaceApp(folder + "/LightenQA-tool.bundle/LightenQA-helper.app", id: "qa.lighten.cer_dialog")
+    }
+    let source = SpaceActiveApplications(state: state)
+    let outcome = await PlanService(homeDirectory: home, applicationActivity: source).makeAvailableSpacePlan(
+      selections: [try spaceSelection(folder)], scanRootPath: home, runID: UUID())
+    #expect(outcome.plan == nil)
+    #expect(outcome.rejections.first?.reason == (state == .active ? .applicationRunning : .activityUnavailable))
+    let plan = try spacePlan(folder, home: home)
+    let executor = ActionExecutor(
+      journal: JSONLActionJournal(path: home + "/journal.jsonl"), trash: SpaceRenameTrash(destination: home + "/trash"),
+      guardService: ActionGuard(homeDirectory: home), applicationActivity: source)
+    #expect(try await executor.execute(plan).items.first?.outcome == .skipped)
+    #expect(FileManager.default.fileExists(atPath: folder))
+  }
+
+  @Test("Root-only package Undo restores all bytes and refuses root replacement", arguments: [false, true])
+  func opaquePackageUndo(_ replaced: Bool) async throws {
+    let home = try spaceFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let app = home + "/LightenQA-tool.app"
+    try spaceApp(app, id: "qa.lighten.tool")
+    let payload = app + "/Contents/Libraries/LightenQA-helper.app/Contents/Info.plist"
+    try spacePut(payload, bytes: 1024)
+    let hash = SHA256.hash(data: try Data(contentsOf: URL(fileURLWithPath: payload)))
+    let plan = try spacePlan(app, home: home)
+    let journal = JSONLActionJournal(path: home + "/journal.jsonl")
+    let result = try await ActionExecutor(
+      journal: journal, trash: SpaceRenameTrash(destination: home + "/trash"),
+      guardService: ActionGuard(homeDirectory: home), runningApplications: SpaceClosedApps(),
+      applicationActivity: SpaceClearApplications()
+    ).execute(plan)
+    #expect(result.items.first?.outcome == .applied)
+    if replaced {
+      let moved = home + "/trash/LightenQA-tool.app"
+      try FileManager.default.moveItem(atPath: moved, toPath: moved + ".original")
+      try FileManager.default.copyItem(atPath: moved + ".original", toPath: moved)
+      let history = ActionHistory(journal: journal, homeDirectory: home)
+      let result = try await history.undo(planID: plan.id)
+      #expect(result.restoredCount == 0)
+      #expect(result.items.first?.failure == .changedTrashItem)
+      #expect(!FileManager.default.fileExists(atPath: app))
+      return
+    }
+    try #require(chmod(home + "/trash/LightenQA-tool.app/Contents", 0) == 0)
+    defer {
+      _ = chmod(app + "/Contents", 0o700)
+      _ = chmod(home + "/trash/LightenQA-tool.app/Contents", 0o700)
+    }
+    let history = ActionHistory(journal: journal, homeDirectory: home)
+    #expect(try await history.undo(planID: plan.id).restoredCount == 1)
+    try #require(chmod(app + "/Contents", 0o700) == 0)
+    #expect(SHA256.hash(data: try Data(contentsOf: URL(fileURLWithPath: payload))) == hash)
+  }
+
   @Test("Rule scopes keep generic cleanup protected")
   func ruleScopes() {
     let ids: Set<String> = [
@@ -104,7 +351,7 @@ struct SpaceSafetyTests {
   }
 
   @Test(
-    "Explicit Trash-only roots retain complete exact inventories",
+    "Explicit Trash-only roots retain exact entries with packages as leaves",
     arguments: [
       "Library/Developer/Xcode/Archives/LightenQA-fixture.xcarchive",
       "build/LightenQA-fixture.dSYM", ".m2/repository/LightenQA-fixture",
@@ -122,7 +369,11 @@ struct SpaceSafetyTests {
     let item = try #require(try spacePlan(path, home: home).items.first)
     try ActionGuard(homeDirectory: home).validate(item)
     #expect(ProtectionPolicy.rule(for: path, homeDirectory: home) != nil)
-    #expect(item.inventory.contains { $0.path == (file ? path : path + "/contents/payload") })
+    if ScanService.isPackage(path) && !file {
+      #expect(item.inventory.map(\.path) == [path])
+    } else {
+      #expect(item.inventory.contains { $0.path == (file ? path : path + "/contents/payload") })
+    }
   }
 
   @Test("Permanent and strict plans never gain Space permissions")
@@ -179,7 +430,9 @@ struct SpaceSafetyTests {
     defer { try? FileManager.default.removeItem(atPath: home) }
     try spaceApp(home + "/old-installs/LightenQA-tool.app", id: "qa.lighten.tool")
     try spacePut(home + "/ordinary")
-    let planner = PlanService(homeDirectory: home, runningApplications: SpaceClosedApps(running: ["qa.lighten.tool"]))
+    let planner = PlanService(
+      homeDirectory: home, runningApplications: SpaceClosedApps(running: ["qa.lighten.tool"]),
+      applicationActivity: SpaceClearApplications())
     let result = await planner.makeAvailableSpacePlan(
       selections: [try spaceSelection(home + "/old-installs"), try spaceSelection(home + "/ordinary")],
       scanRootPath: home, runID: UUID())
@@ -220,7 +473,7 @@ struct SpaceSafetyTests {
     let result = try await ActionExecutor(
       journal: journal, trash: SpaceRenameTrash(destination: home + "/trash"),
       guardService: ActionGuard(homeDirectory: home),
-      runningApplications: SpaceClosedApps()
+      runningApplications: SpaceClosedApps(), applicationActivity: SpaceClearApplications()
     ).execute(plan)
     #expect(result.items.first?.outcome == .applied)
     let history = ActionHistory(journal: journal, homeDirectory: home)
@@ -304,7 +557,9 @@ struct SpaceSafetyTests {
     let mounts = SpaceObservedMounts()
     mounts.set(variant == "unknown" ? .unknown : .attached)
     let apps = SpaceClosedApps(running: variant == "vm" ? ["com.utmapp.UTM"] : [])
-    let planner = PlanService(homeDirectory: home, runningApplications: apps, mountedImages: mounts)
+    let planner = PlanService(
+      homeDirectory: home, runningApplications: apps, mountedImages: mounts,
+      applicationActivity: SpaceClearApplications())
     let proposed = await planner.makeAvailableSpacePlan(
       selections: [try spaceSelection(path)], scanRootPath: home, runID: UUID())
     #expect(proposed.plan == nil)
@@ -313,7 +568,8 @@ struct SpaceSafetyTests {
         == (variant == "vm" ? .applicationRunning : variant == "mounted" ? .mountedImage : .imageStateUnavailable))
     let result = try await ActionExecutor(
       journal: JSONLActionJournal(path: home + "/actions.jsonl"), trash: SpaceRenameTrash(destination: home + "/trash"),
-      guardService: ActionGuard(homeDirectory: home), runningApplications: apps, mountedImages: mounts
+      guardService: ActionGuard(homeDirectory: home), runningApplications: apps, mountedImages: mounts,
+      applicationActivity: SpaceClearApplications()
     ).execute(plan)
     #expect(result.items.first?.outcome == .skipped)
   }
@@ -337,7 +593,7 @@ struct SpaceSafetyTests {
         case "activity": activity.set(.active)
         default: mounts.set(.attached)
         }
-      }, spaceActivity: activity, mountedImages: mounts
+      }, spaceActivity: activity, mountedImages: mounts, applicationActivity: SpaceClearApplications()
     ).execute(plan)
     #expect(result.items.first?.outcome == .skipped)
     #expect(FileManager.default.fileExists(atPath: path))

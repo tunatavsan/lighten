@@ -36,10 +36,10 @@ struct MovedApplicationOwner: Sendable {
       proof.appPath == originalPackage.sourcePath, proof.bundleID == originalPackage.applicationBundleID,
       proof.appIdentity == originalPackage.inventory.first?.identity,
       proof.infoIdentity
-        == originalPackage.inventory.first(where: {
-          $0.path == originalPackage.sourcePath + "/Contents/Info.plist"
-        })?.identity,
-      (try? DescriptorFileSystem.identity(at: movedPackage.sourcePath)) == movedIdentity,
+        == (try? DescriptorFileSystem.identity(at: movedPackage.sourcePath + "/Contents/Info.plist")),
+      (try? DescriptorFileSystem.identity(at: movedPackage.sourcePath)).map({
+        movedIdentity.matchesStableTrashIdentity($0)
+      }) == true,
       ApplicationIdentity.bundleIdentifier(ofApplicationAt: movedPackage.sourcePath) == proof.bundleID
     else { throw RelatedFailure.changedItem }
     let mapped = InstalledRelatedProof(

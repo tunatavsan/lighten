@@ -341,7 +341,8 @@ private actor CleanDiscoverySequence {
   let candidate = try #require(store.candidates.first { $0.entry.path == package })
   #expect(candidate.node.partial)
   #expect(candidate.canAct)
-  #expect(candidate.exactLogicalBytes != nil)
+  #expect(candidate.exactLogicalBytes == nil)
+  #expect(candidate.logicalBytes == candidate.node.logical.knownLowerBound)
   #expect(candidate.logicalBytes > 7)
 
   // A Photos library remains protected even when nested in a cache package.
