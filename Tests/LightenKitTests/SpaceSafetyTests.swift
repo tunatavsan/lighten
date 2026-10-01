@@ -520,7 +520,9 @@ struct SpaceSafetyTests {
     }
     let result = try await ActionExecutor(
       journal: JSONLActionJournal(path: home + "/actions.jsonl"), trash: SpaceRenameTrash(destination: home + "/trash"),
-      guardService: ActionGuard(homeDirectory: home), runningApplications: SpaceClosedApps(running: ["qa.lighten.tool"])
+      guardService: ActionGuard(homeDirectory: home),
+      runningApplications: SpaceClosedApps(running: ["qa.lighten.tool"]),
+      applicationActivity: SpaceClearApplications()
     )
     .execute(plan)
     #expect(result.items.first?.outcome == .skipped)
