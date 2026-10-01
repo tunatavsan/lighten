@@ -7,7 +7,7 @@ import Synchronization
 /// Display provenance is deliberately separate from native execution authority.
 public enum RelatedDataProvenanceKind: String, Sendable, Hashable {
   case bundleIdentifier, teamIdentifier, electron, mozilla, installerReceipt, launchService
-  case configuredDirectory, vendorDirectory, liveProcess, explicitUserChoice
+  case configuredDirectory, vendorDirectory, liveProcess, executableName, explicitUserChoice
 }
 
 public struct RelatedDataProvenance: Sendable {
@@ -53,6 +53,12 @@ enum ApplicationOwnedDataEvidence: Sendable {
     case .auxiliary(let value): value.provenance
     }
   }
+  var matchStrength: RelatedMatchStrength {
+    switch self {
+    case .framework: .strong
+    case .auxiliary(let value): value.matchStrength
+    }
+  }
   func validate(relocatedPackagePath: String? = nil) throws {
     switch self {
     case .framework(let value):
@@ -87,12 +93,47 @@ struct ApplicationAuxiliaryEvidence: Sendable {
   fileprivate let nodes: [AuxiliaryNode]
   fileprivate let volumeID: UUID
   fileprivate let dataVolumeID: UUID
+  fileprivate let receiptSources: [ApplicationPathObservation]
+  private let referenceClaim: ApplicationReferenceClaim?
+
+  fileprivate init(
+    packagePath: String, bundleID: String, dataPath: String, provenance: RelatedDataProvenance,
+    nodes: [AuxiliaryNode], volumeID: UUID, dataVolumeID: UUID, receiptSources: [ApplicationPathObservation],
+    referenceClaim: ApplicationReferenceClaim? = nil
+  ) {
+    self.packagePath = packagePath
+    self.bundleID = bundleID
+    self.dataPath = dataPath
+    self.provenance = provenance
+    self.nodes = nodes
+    self.volumeID = volumeID
+    self.dataVolumeID = dataVolumeID
+    self.receiptSources = receiptSources
+    self.referenceClaim = referenceClaim
+  }
+
+  var matchStrength: RelatedMatchStrength { referenceClaim?.matchStrength ?? .strong }
+
+  fileprivate static func reference(app: InstalledApplication, claim: ApplicationReferenceClaim) throws -> Self {
+    try claim.validateBinding(to: app)
+    let package = app.linkTarget ?? app.path
+    guard let packageVolume = try DescriptorFileSystem.volumeID(at: package),
+      let dataVolume = try DescriptorFileSystem.volumeID(at: claim.dataPath)
+    else { throw RelatedFailure.incompleteInventory }
+    let evidence = Self(
+      packagePath: package, bundleID: app.bundleID, dataPath: claim.dataPath,
+      provenance: RelatedDataProvenance(kind: claim.kind, sourcePath: claim.sourcePath, detail: claim.ownerBundleID),
+      nodes: [], volumeID: packageVolume, dataVolumeID: dataVolume, receiptSources: [], referenceClaim: claim)
+    try evidence.validate()
+    return evidence
+  }
 
   func validate(relocatedPackagePath: String? = nil) throws {
     try Task.checkCancellation()
     let package = relocatedPackagePath ?? packagePath
     guard try DescriptorFileSystem.volumeID(at: package) == volumeID else { throw RelatedFailure.changedItem }
     guard try DescriptorFileSystem.volumeID(at: dataPath) == dataVolumeID else { throw RelatedFailure.changedItem }
+    try referenceClaim?.validate(relocatedPackagePath: relocatedPackagePath)
     for node in nodes {
       let path =
         relocatedPackagePath.flatMap { moved in
@@ -204,7 +245,7 @@ final class ApplicationDataEvidenceCache: Sendable {
       let before = try observations(path, home: home, bundleID: app.bundleID)
       let framework = ApplicationFrameworkEvidenceProducer.discover(packagePath: path, homeDirectory: home)
       let installer = receipts.withLock { cached in
-        if let cached { return cached }
+        if let cached, cached.namespaceIsCurrent { return cached }
         let observed = ApplicationInstallerReceipts.observe()
         cached = observed
         return observed
@@ -213,27 +254,40 @@ final class ApplicationDataEvidenceCache: Sendable {
       let auxiliary = ApplicationAuxiliaryEvidenceProducer.discover(
         app: app, homeDirectory: home, receipts: installer, live: processes,
         vendorExclusive: vendorExclusive, frameworkDirectories: framework.evidence.map(\.dataPath))
+      let reference = ApplicationReferenceEvidenceProducer.discover(app: app, homeDirectory: home)
+      var referenceEvidence: [ApplicationAuxiliaryEvidence] = []
+      var referenceIssues = reference.issues
+      for claim in reference.claims {
+        do { referenceEvidence.append(try .reference(app: app, claim: claim)) } catch {
+          referenceIssues.append(
+            ApplicationAuxiliaryIssue(
+              path: claim.dataPath, detail: String(describing: error), bundleID: app.bundleID,
+              provenanceKind: claim.kind))
+        }
+      }
       let sourceObservations =
         framework.evidence.flatMap(\.sourceObservations)
         + auxiliary.evidence.flatMap { evidence in
           evidence.nodes.filter { $0.path != evidence.dataPath }.map {
             ApplicationPathObservation(path: $0.path, identity: $0.identity)
-          }
-        }
+          } + evidence.receiptSources
+        } + reference.sources
       let mutableDataParents = Set(["Application Support", "Caches", "Logs"].map { home + "/Library/" + $0 })
       let result = Discovery(
         evidence: framework.evidence.map(ApplicationOwnedDataEvidence.framework)
-          + auxiliary.evidence.map(ApplicationOwnedDataEvidence.auxiliary),
+          + (auxiliary.evidence + referenceEvidence).map(ApplicationOwnedDataEvidence.auxiliary),
         issues: framework.issues.filter { $0.reason != .unsupportedFramework }.map {
           ApplicationAuxiliaryIssue(path: $0.path, detail: String(describing: $0.reason) + ": " + $0.detail)
-        } + auxiliary.issues,
+        } + auxiliary.issues + referenceIssues,
         sources: before.filter { !mutableDataParents.contains($0.path) } + sourceObservations)
       let after = try observations(path, home: home, bundleID: app.bundleID)
       guard before.count == after.count,
         zip(before, after).allSatisfy({ $0.path == $1.path && $0.identity == $1.identity })
       else { throw RelatedFailure.changedItem }
       entries.withLock {
-        $0[path] = Entry(observations: before + sourceObservations, discovery: result, vendorExclusive: vendorExclusive)
+        $0[path] = Entry(
+          observations: before + sourceObservations + reference.censusSources,
+          discovery: result, vendorExclusive: vendorExclusive)
       }
       return result
     } catch {
@@ -321,13 +375,16 @@ enum ApplicationAuxiliaryEvidenceProducer {
     else { return result }
     let package = app.linkTarget ?? app.path
     let info = package + "/" + metadata.observation.infoRelativePath
-    func add(_ path: String, kind: RelatedDataProvenanceKind, source: String? = nil, references: [String] = []) {
+    func add(
+      _ path: String, kind: RelatedDataProvenanceKind, source: String? = nil, references: [String] = [],
+      sourceContents: Bool = true, receiptSources: [ApplicationPathObservation] = []
+    ) {
       do {
         var nodes = try [
           AuxiliaryNode.observe(package), AuxiliaryNode.observe(info, contents: true),
           AuxiliaryNode.observe(path),
         ]
-        if let source { nodes.append(try AuxiliaryNode.observe(source, contents: true)) }
+        if let source { nodes.append(try AuxiliaryNode.observe(source, contents: sourceContents)) }
         for reference in references { nodes.append(try AuxiliaryNode.observe(reference)) }
         guard let packageVolume = try DescriptorFileSystem.volumeID(at: package),
           let dataVolume = try DescriptorFileSystem.volumeID(at: path)
@@ -335,8 +392,9 @@ enum ApplicationAuxiliaryEvidenceProducer {
         let evidence = ApplicationAuxiliaryEvidence(
           packagePath: package, bundleID: app.bundleID, dataPath: path,
           provenance: RelatedDataProvenance(kind: kind, sourcePath: source ?? info),
-          nodes: nodes, volumeID: packageVolume, dataVolumeID: dataVolume)
+          nodes: nodes, volumeID: packageVolume, dataVolumeID: dataVolume, receiptSources: receiptSources)
         try evidence.validate()
+        for source in receiptSources { try source.validate() }
         result.evidence.append(evidence)
       } catch {
         result.issues.append(ApplicationAuxiliaryIssue(path: path, detail: String(describing: error)))
@@ -436,17 +494,25 @@ enum ApplicationAuxiliaryEvidenceProducer {
       for receipt in receipts.entries(bundleID: app.bundleID) {
         for path in receipt.paths where path != package && !path.hasPrefix(package + "/") {
           guard let identity = try? DescriptorFileSystem.identity(at: path) else { continue }
-          // Directory receipts need an exclusive cross-package census. Until
-          // that proof exists, retain the observation without any authority.
-          if identity.kind == .directory {
+          guard identity.kind == .directory || identity.kind == .regular else { continue }
+          let protected =
+            ExactInventory(homeDirectory: homeDirectory).isBulkRoot(path)
+            || ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory) != nil
+          let issue =
+            protected
+            ? "receipt-protected-location"
+            : identity.kind == .directory
+              ? receipts.directoryIssue(path: path, identifier: receipt.identifier, homeDirectory: homeDirectory) : nil
+          if let issue {
             result.issues.append(
               ApplicationAuxiliaryIssue(
-                path: path, detail: "receipt-directory-ownership-unproven", bundleID: app.bundleID,
-                provenanceKind: .installerReceipt))
+                path: path, detail: issue, bundleID: app.bundleID, provenanceKind: .installerReceipt))
             continue
           }
-          guard identity.kind == .regular else { continue }
-          add(path, kind: .installerReceipt, source: receipt.plistPath, references: [receipt.bomPath])
+          add(
+            path, kind: .installerReceipt, source: receipt.sourcePath, references: [receipt.bomPath],
+            sourceContents: receipt.sourceContents,
+            receiptSources: receipt.sources + (identity.kind == .directory ? receipts.directorySources : []))
         }
       }
       result.issues += receipts.issues(bundleID: app.bundleID).map { original in
@@ -589,86 +655,312 @@ public enum ApplicationLiveDataCensus {
   }
 }
 
-/// The allowed pkgutil queries return leads. Each entry additionally requires
-/// a native receipt with its exact ID and absolute installation prefix.
+/// One scan reuses exact receipt parsing and a lazily built, bounded cross-package census.
 final class ApplicationInstallerReceipts: Sendable {
+  typealias Query = @Sendable ([String], TimeInterval, Int) -> Data?
   struct Entry: Sendable {
+    let identifier: String
     let paths: [String]
     let plistPath: String
     let bomPath: String
+    let sourcePath: String
+    let sourceContents: Bool
+    let sources: [ApplicationPathObservation]
   }
-  private struct Result: Sendable {
-    let entries: [Entry]
-    let issues: [ApplicationAuxiliaryIssue]
+  private struct Record: Sendable {
+    let entry: Entry?
+    let issue: ApplicationAuxiliaryIssue?
+    let sources: [ApplicationPathObservation]
+  }
+  private struct Census: Sendable {
+    var owners: [String: Set<String>] = [:]
+    var sources: [ApplicationPathObservation] = []
+    var complete = true
+  }
+  private struct Budget: Sendable {
+    let deadline: TimeInterval
+    var remainingBytes: Int
+    var remainingPathBytes: Int
   }
   private let identifiers: [String]
   private let complete: Bool
-  private let cache = Mutex<[String: Result]>([:])
+  private let receiptDirectory: String
+  private let namespace: ApplicationPathObservation
+  private let standardRoots = Mutex<[String: [FileIdentity]]>([:])
+  private let runQuery: Query
+  private let records = Mutex<[String: Record]>([:])
+  private let census = Mutex<Census?>(nil)
+  private let budget: Mutex<Budget>
 
-  private init(identifiers: [String], complete: Bool) {
-    self.identifiers = identifiers
-    self.complete = complete
+  init(
+    identifiers: [String], complete: Bool, receiptDirectory: String = "/private/var/db/receipts",
+    timeout: TimeInterval = 20, maximumBytes: Int = 128 * 1024 * 1024,
+    query: @escaping Query = { ApplicationReceiptQuery.run($0, timeout: $1, maximumBytes: $2) }
+  ) {
+    let valid = identifiers.filter(Self.validIdentifier)
+    self.identifiers = Array(Set(valid.prefix(100_000))).sorted()
+    self.complete = complete && valid.count == identifiers.count && valid.count <= 100_000
+    self.receiptDirectory = receiptDirectory
+    self.namespace = ApplicationPathObservation(
+      path: receiptDirectory, identity: try? DescriptorFileSystem.identity(at: receiptDirectory))
+    self.runQuery = query
+    self.budget = Mutex(
+      Budget(
+        deadline: ProcessInfo.processInfo.systemUptime + max(0, timeout), remainingBytes: max(0, maximumBytes),
+        remainingPathBytes: 128 * 1024 * 1024))
   }
 
   static func observe() -> ApplicationInstallerReceipts {
     guard let output = ApplicationReceiptQuery.run(["--pkgs"]),
       let text = String(data: output, encoding: .utf8)
     else { return ApplicationInstallerReceipts(identifiers: [], complete: false) }
-    let ids = text.split(separator: "\n").map(String.init)
-    return ApplicationInstallerReceipts(identifiers: ids, complete: ids.count <= 100_000)
+    return ApplicationInstallerReceipts(identifiers: text.split(separator: "\n").map(String.init), complete: true)
   }
 
-  func entries(bundleID: String) -> [Entry] { result(bundleID).entries }
-  func issues(bundleID: String) -> [ApplicationAuxiliaryIssue] { result(bundleID).issues }
-
-  private func result(_ bundleID: String) -> Result {
-    if let cached = cache.withLock({ $0[bundleID] }) { return cached }
-    var entries: [Entry] = []
-    var issues: [ApplicationAuxiliaryIssue] = []
+  var namespaceIsCurrent: Bool { (try? namespace.validate()) != nil }
+  var directorySources: [ApplicationPathObservation] { directoryCensus().sources }
+  func entries(bundleID: String) -> [Entry] { matching(bundleID).compactMap { record($0).entry } }
+  func issues(bundleID: String) -> [ApplicationAuxiliaryIssue] {
+    var issues = matching(bundleID).compactMap { record($0).issue }
     if !complete {
-      issues.append(ApplicationAuxiliaryIssue(path: "/var/db/receipts", detail: "receipt-enumeration-unavailable"))
+      issues.append(ApplicationAuxiliaryIssue(path: receiptDirectory, detail: "receipt-enumeration-unavailable"))
     }
-    for identifier in identifiers where identifier == bundleID || identifier.hasPrefix(bundleID + ".") {
-      let plist = "/private/var/db/receipts/" + identifier + ".plist"
-      let bom = "/private/var/db/receipts/" + identifier + ".bom"
+    return issues
+  }
+
+  func directoryIssue(path: String, identifier: String, homeDirectory: String) -> String? {
+    let sharedRoots =
+      [
+        "/", "/Applications", homeDirectory + "/Applications", "/usr/local", "/usr/local/bin", "/usr/local/lib",
+        "/usr/local/share", "/opt/homebrew", "/opt/homebrew/bin",
+      ]
+      + ["/Library", homeDirectory + "/Library"].flatMap { library in
+        [
+          "", "/Application Support", "/LaunchAgents", "/LaunchDaemons", "/Caches", "/Logs", "/Preferences", "/Fonts",
+          "/Frameworks", "/Application Scripts", "/Containers", "/Group Containers",
+        ].map { library + $0 }
+      }
+    let locale = Locale(identifier: "en_US_POSIX")
+    if sharedRoots.contains(where: { $0.lowercased(with: locale) == path.lowercased(with: locale) }) {
+      return "receipt-shared-standard-directory"
+    }
+    let roots = standardRoots.withLock { cached in
+      if let roots = cached[homeDirectory] { return roots }
+      let roots = sharedRoots.compactMap { try? DescriptorFileSystem.identity(at: $0) }
+      cached[homeDirectory] = roots
+      return roots
+    }
+    if let selected = try? DescriptorFileSystem.identity(at: path),
+      roots.contains(where: {
+        $0.device == selected.device && $0.inode == selected.inode && $0.kind == selected.kind
+      })
+    {
+      return "receipt-shared-standard-directory"
+    }
+    let observed = directoryCensus()
+    guard observed.complete else { return "receipt-cross-package-census-incomplete" }
+    guard observed.owners[path] == Set([identifier]) else { return "receipt-directory-shared-packages" }
+    return nil
+  }
+
+  private func matching(_ bundleID: String) -> [String] {
+    identifiers.filter { $0 == bundleID || $0.hasPrefix(bundleID + ".") }
+  }
+  private static func validIdentifier(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.count <= 1024 && value != "." && value != ".."
+      && !value.contains("/") && !value.unicodeScalars.contains { $0.value < 33 || $0.value == 127 }
+  }
+  private func query(_ arguments: [String]) -> Data? {
+    budget.withLock { state in
+      let remaining = state.deadline - ProcessInfo.processInfo.systemUptime
+      guard remaining > 0, state.remainingBytes > 0, !Task.isCancelled else { return nil }
+      guard let data = runQuery(arguments, min(3, remaining), min(16 * 1024 * 1024, state.remainingBytes)),
+        data.count <= state.remainingBytes
+      else { return nil }
+      state.remainingBytes -= data.count
+      return data
+    }
+  }
+  private var withinBudget: Bool {
+    budget.withLock { $0.deadline > ProcessInfo.processInfo.systemUptime && $0.remainingBytes > 0 } && !Task.isCancelled
+  }
+
+  private func record(_ identifier: String) -> Record {
+    records.withLock { cached in
+      let plist = receiptDirectory + "/" + identifier + ".plist"
+      let bom = receiptDirectory + "/" + identifier + ".bom"
       do {
-        guard !identifier.contains("/"),
-          let bytes = try SecureMetadataFile.read(path: plist, limit: 1024 * 1024, ownerOnly: false),
-          let dictionary = try PropertyListSerialization.propertyList(from: bytes, format: nil) as? [String: Any],
-          dictionary["PackageIdentifier"] as? String == identifier,
-          let prefix = dictionary["InstallPrefixPath"] as? String,
-          prefix.hasPrefix("/"), (try? DescriptorFileSystem.validatedComponents(prefix)) != nil,
-          (try DescriptorFileSystem.identity(at: bom)).kind == .regular,
-          let output = ApplicationReceiptQuery.run(["--files", identifier]),
-          let text = String(data: output, encoding: .utf8)
+        if let record = cached[identifier] {
+          for source in record.sources { try source.validate() }
+          return record
+        }
+        guard withinBudget, Self.validIdentifier(identifier) else { throw RelatedFailure.incompleteInventory }
+        try namespace.validate()
+        let originalBOM = ApplicationPathObservation(path: bom, identity: try DescriptorFileSystem.identity(at: bom))
+        guard originalBOM.identity?.kind == .regular else { throw RelatedFailure.incompleteInventory }
+        let originalPlist = ApplicationPathObservation(
+          path: plist, identity: try? DescriptorFileSystem.identity(at: plist))
+        var before = [namespace, originalBOM, originalPlist]
+        let bytes = try? SecureMetadataFile.read(path: plist, limit: 1024 * 1024, ownerOnly: false)
+        let prefix: String
+        let source: String
+        let sourceContents: Bool
+        if let bytes {
+          try originalPlist.validate()
+          let dictionary = try Self.dictionary(bytes)
+          guard dictionary["PackageIdentifier"] as? String == identifier,
+            let nativePrefix = dictionary["InstallPrefixPath"] as? String
+          else { throw RelatedFailure.invalidReceipt }
+          prefix = try Self.absolutePrefix(nativePrefix)
+          source = plist
+          sourceContents = true
+        } else {
+          guard let data = query(["--pkg-info-plist", identifier]) else { throw RelatedFailure.incompleteInventory }
+          prefix = try Self.fallbackPrefix(data, identifier: identifier)
+          source = bom
+          sourceContents = false
+        }
+        guard try DescriptorFileSystem.volumeID(at: prefix) != nil
         else { throw RelatedFailure.incompleteInventory }
-        let paths = try text.split(separator: "\n").compactMap { line -> String? in
+        before.append(ApplicationPathObservation(path: prefix, identity: try DescriptorFileSystem.identity(at: prefix)))
+        for source in before { try source.validate() }
+        guard let output = query(["--files", identifier]), let text = String(data: output, encoding: .utf8)
+        else { throw RelatedFailure.incompleteInventory }
+        let lines = text.split(separator: "\n")
+        guard lines.count <= 100_000 else { throw RelatedFailure.incompleteInventory }
+        let paths = try lines.compactMap { line -> String? in
+          guard withinBudget else { throw RelatedFailure.incompleteInventory }
           let relative = String(line)
-          guard relative != "." else { return nil }
-          guard !relative.hasPrefix("/"), !relative.unicodeScalars.contains(where: { $0.value < 32 }) else {
-            throw RelatedFailure.incompleteInventory
-          }
+          if relative == "." { return nil }
+          guard !relative.hasPrefix("/"), !relative.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 })
+          else { throw RelatedFailure.invalidReceipt }
           let stripped = relative.hasPrefix("./") ? String(relative.dropFirst(2)) : relative
           let path = (prefix == "/" ? "" : prefix) + "/" + stripped
           _ = try DescriptorFileSystem.validatedComponents(path)
+          guard
+            budget.withLock({ state in
+              let cost = path.utf8.count + 128
+              guard cost <= state.remainingPathBytes else { return false }
+              state.remainingPathBytes -= cost
+              return true
+            })
+          else { throw RelatedFailure.incompleteInventory }
           return path
         }
-        entries.append(Entry(paths: paths, plistPath: plist, bomPath: bom))
+        for source in before { try source.validate() }
+        let result = Record(
+          entry: Entry(
+            identifier: identifier, paths: paths, plistPath: plist, bomPath: bom, sourcePath: source,
+            sourceContents: sourceContents, sources: before), issue: nil, sources: before)
+        cached[identifier] = result
+        return result
       } catch {
-        issues.append(
-          ApplicationAuxiliaryIssue(
-            path: plist, detail: "receipt-install-prefix-or-files-unproven: " + String(describing: error)))
+        let result = Record(
+          entry: nil,
+          issue: ApplicationAuxiliaryIssue(
+            path: plist, detail: "receipt-install-prefix-or-files-unproven: " + String(describing: error)), sources: [])
+        cached[identifier] = result
+        return result
       }
     }
-    let result = Result(entries: entries, issues: issues)
-    cache.withLock { $0[bundleID] = result }
-    return result
+  }
+
+  static func fallbackPrefix(_ bytes: Data, identifier: String) throws -> String {
+    let dictionary = try dictionary(bytes)
+    guard dictionary["pkgid"] as? String == identifier,
+      dictionary["PackageIdentifier"] == nil || dictionary["PackageIdentifier"] as? String == identifier,
+      let volume = dictionary["volume"] as? String,
+      let location = dictionary["install-location"] as? String, !location.isEmpty
+    else { throw RelatedFailure.invalidReceipt }
+    let root = try absolutePrefix(volume)
+    let suffix = location == "/" ? "" : location.hasPrefix("/") ? String(location.dropFirst()) : location
+    let prefix = suffix.isEmpty ? root : (root == "/" ? "" : root) + "/" + suffix
+    let valid = try absolutePrefix(prefix)
+    if let native = dictionary["InstallPrefixPath"] {
+      guard let native = native as? String, try absolutePrefix(native) == valid else {
+        throw RelatedFailure.invalidReceipt
+      }
+    }
+    return valid
+  }
+  private static func dictionary(_ bytes: Data) throws -> [String: Any] {
+    guard let value = try PropertyListSerialization.propertyList(from: bytes, format: nil) as? [String: Any] else {
+      throw RelatedFailure.invalidReceipt
+    }
+    return value
+  }
+  private static func absolutePrefix(_ path: String) throws -> String {
+    guard path.hasPrefix("/"), !path.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else {
+      throw RelatedFailure.invalidReceipt
+    }
+    if path != "/" {
+      do { _ = try DescriptorFileSystem.validatedComponents(path) } catch { throw RelatedFailure.invalidReceipt }
+    }
+    return path
+  }
+
+  private func directoryCensus() -> Census {
+    census.withLock { cached in
+      if let cached { return cached }
+      var result = Census(complete: complete && namespaceIsCurrent)
+      var bytes = 0
+      var observations: [String: ApplicationPathObservation] = [:]
+      observations[namespace.path] = namespace
+      for identifier in identifiers {
+        guard withinBudget else {
+          result.complete = false
+          break
+        }
+        let observed = record(identifier)
+        guard let entry = observed.entry else {
+          result.complete = false
+          continue
+        }
+        for source in observed.sources { observations[source.path] = source }
+        for path in entry.paths {
+          guard withinBudget else {
+            result.complete = false
+            break
+          }
+          var parent = path
+          while parent != "/" {
+            if !result.owners[parent, default: []].contains(identifier) {
+              bytes += parent.utf8.count + identifier.utf8.count + 128
+              guard bytes <= 128 * 1024 * 1024 else {
+                result.complete = false
+                break
+              }
+              result.owners[parent, default: []].insert(identifier)
+            }
+            parent = (parent as NSString).deletingLastPathComponent
+          }
+          if !result.complete && bytes > 128 * 1024 * 1024 { break }
+        }
+        if bytes > 128 * 1024 * 1024 { break }
+      }
+      result.sources = observations.values.sorted { $0.path < $1.path }
+      if result.complete {
+        for source in result.sources {
+          guard withinBudget, (try? source.validate()) != nil else {
+            result.complete = false
+            break
+          }
+        }
+      }
+      cached = result
+      return result
+    }
   }
 }
 
 private enum ApplicationReceiptQuery {
-  static func run(_ arguments: [String]) -> Data? {
-    guard arguments == ["--pkgs"] || arguments.count == 2 && arguments[0] == "--files" else { return nil }
+  static func run(_ arguments: [String], timeout: TimeInterval = 3, maximumBytes: Int = 16 * 1024 * 1024) -> Data? {
+    guard
+      arguments == ["--pkgs"]
+        || arguments.count == 2 && ["--files", "--pkg-info-plist"].contains(arguments[0])
+          && !arguments[1].isEmpty && !arguments[1].contains("/")
+          && !arguments[1].unicodeScalars.contains(where: { $0.value < 33 || $0.value == 127 })
+    else { return nil }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/sbin/pkgutil")
     process.arguments = arguments
@@ -685,20 +977,21 @@ private enum ApplicationReceiptQuery {
         process.terminate()
         if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
       }
-      process.waitUntilExit()
       try? pipe.fileHandleForReading.close()
     }
-    let deadline = ProcessInfo.processInfo.systemUptime + 3
+    let deadline = ProcessInfo.processInfo.systemUptime + max(0, min(3, timeout))
     var output = Data()
     var buffer = [UInt8](repeating: 0, count: 8192)
     while !Task.isCancelled, ProcessInfo.processInfo.systemUptime < deadline {
       let count = read(fd, &buffer, buffer.count)
       if count > 0 {
-        guard output.count + count <= 16 * 1024 * 1024 else { return nil }
+        guard output.count + count <= max(0, min(16 * 1024 * 1024, maximumBytes)) else { return nil }
         output.append(contentsOf: buffer.prefix(count))
       } else if count == 0 {
-        guard !process.isRunning else { continue }
-        process.waitUntilExit()
+        if process.isRunning {
+          usleep(1000)
+          continue
+        }
         return process.terminationStatus == 0 ? output : nil
       } else if errno != EAGAIN && errno != EINTR {
         return nil

@@ -30,8 +30,40 @@ struct ApplicationContextScope: Sendable, Equatable {
 struct ApplicationPathObservation: Sendable {
   let path: String
   let identity: FileIdentity?
+  private let namespaceOwnerID: uid_t?
+  private let nativeReferenceDirectories: ApplicationReferenceDirectories?
+
+  init(
+    path: String, identity: FileIdentity?, namespaceOwnerID: uid_t? = nil,
+    nativeReferenceDirectories: ApplicationReferenceDirectories? = nil
+  ) {
+    self.path = path
+    self.identity = identity
+    self.namespaceOwnerID = namespaceOwnerID
+    self.nativeReferenceDirectories = nativeReferenceDirectories
+  }
 
   func validate() throws {
+    try nativeReferenceDirectories?.validate()
+    if let namespaceOwnerID {
+      guard let identity, identity.kind == .directory, namespaceOwnerID == geteuid() else {
+        throw RelatedFailure.changedItem
+      }
+      let (parent, name) = try DescriptorFileSystem.openParent(of: path)
+      defer { close(parent) }
+      let fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY | O_NONBLOCK)
+      guard fd >= 0 else { throw RelatedFailure.changedItem }
+      defer { close(fd) }
+      var details = stat()
+      guard fstat(fd, &details) == 0, details.st_uid == namespaceOwnerID,
+        identity.matchesStableTrashIdentity(DescriptorFileSystem.identity(from: details)),
+        identity.matchesStableTrashIdentity(try DescriptorFileSystem.identity(name: name, relativeTo: parent)),
+        fstat(fd, &details) == 0, details.st_uid == namespaceOwnerID,
+        identity.matchesStableTrashIdentity(DescriptorFileSystem.identity(from: details)),
+        identity.matchesStableTrashIdentity(try DescriptorFileSystem.identity(name: name, relativeTo: parent))
+      else { throw RelatedFailure.changedItem }
+      return
+    }
     let current: FileIdentity?
     do { current = try DescriptorFileSystem.identity(at: path) } catch FileSystemFailure.systemCall(_, let code)
       where code == ENOENT || code == ENOTDIR

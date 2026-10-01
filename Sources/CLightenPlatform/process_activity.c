@@ -133,12 +133,15 @@ static int executable_mapping_snapshot(pid_t pid, uint32_t region_limit, uint64_
   return -1;
 }
 
-int lighten_application_mapping_activity(int32_t pid, const char *root, uint32_t region_limit) {
+static int application_mapping_activity_until(int32_t pid, const char *root, uint32_t region_limit,
+                                              uint64_t census_deadline) {
   if (pid <= 0 || !root || !lighten_path_is_under_root(root, root) ||
       region_limit == 0 || region_limit > 4096) return -1;
   uint64_t started = activity_milliseconds();
   if (!started) return -1;
   uint64_t deadline = started + 250;
+  if (census_deadline && census_deadline < deadline) deadline = census_deadline;
+  if (started >= deadline) return -1;
   struct kinfo_proc before, after;
   if (!read_process_identity(pid, &before) || before.kp_proc.p_stat == SZOMB) return -1;
   MappedExecutable *records = NULL;
@@ -169,7 +172,11 @@ int lighten_application_mapping_activity(int32_t pid, const char *root, uint32_t
   return result;
 }
 
-static int pid_executes_root(pid_t pid, const char *root) {
+int lighten_application_mapping_activity(int32_t pid, const char *root, uint32_t region_limit) {
+  return application_mapping_activity_until(pid, root, region_limit, 0);
+}
+
+static int pid_executes_root_until(pid_t pid, const char *root, uint64_t deadline) {
   char path[PROC_PIDPATHINFO_MAXSIZE];
   memset(path, 0, sizeof(path));
   errno = 0;
@@ -192,7 +199,7 @@ static int pid_executes_root(pid_t pid, const char *root) {
     // An updater may unlink an executable while its process remains alive.
     // Recover bounded mapped-vnode evidence instead of ignoring the missing
     // path or making unrelated selections globally unavailable.
-    int mapped = lighten_application_mapping_activity(pid, root, 4096);
+    int mapped = application_mapping_activity_until(pid, root, 4096, deadline);
     if (mapped >= 0) {
       char after_path[PROC_PIDPATHINFO_MAXSIZE] = {0};
       errno = 0;
@@ -208,6 +215,10 @@ static int pid_executes_root(pid_t pid, const char *root) {
   // A live process with an unavailable executable path cannot prove inactivity.
   errno = path_error;
   return -1;
+}
+
+static int pid_executes_root(pid_t pid, const char *root) {
+  return pid_executes_root_until(pid, root, 0);
 }
 
 static void describe_unknown_process(char *process_name, size_t name_capacity,
@@ -386,17 +397,14 @@ static int capture_application_process(pid_t pid, LightenApplicationProcess *rec
   return 0;
 }
 
-int lighten_copy_application_processes(const char *root, LightenApplicationProcess **records, uint32_t *count) {
-  if (!root || root[0] != '/' || !records || !count) return -1;
-  *records = NULL;
-  *count = 0;
-  uint64_t started = activity_milliseconds();
-  if (!started) return -1;
-  uint64_t deadline = started + 3000;
+static int copy_application_process_census(const char *root, LightenApplicationProcess **records,
+                                          uint32_t *count, uint64_t deadline) {
   int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};
   struct kinfo_proc *list = NULL;
   size_t actual = 0;
   for (int attempt = 0; attempt < 3; attempt++) {
+    uint64_t observed = activity_milliseconds();
+    if (!observed || observed >= deadline) return -1;
     size_t bytes = 0;
     if (sysctl(mib, 3, NULL, &bytes, NULL, 0) != 0 || bytes > 16 * 1024 * 1024) return -1;
     bytes += 64 * sizeof(struct kinfo_proc);
@@ -413,10 +421,11 @@ int lighten_copy_application_processes(const char *root, LightenApplicationProce
   size_t capacity = 0;
   int result = 0;
   for (size_t index = 0; index < actual / sizeof(*list); index++) {
-    if (activity_milliseconds() >= deadline) { result = -1; break; }
+    uint64_t observed = activity_milliseconds();
+    if (!observed || observed >= deadline) { result = -1; break; }
     pid_t pid = list[index].kp_proc.p_pid;
     if (pid <= 0 || list[index].kp_proc.p_stat == SZOMB) continue;
-    int under = pid_executes_root(pid, root);
+    int under = pid_executes_root_until(pid, root, deadline);
     if (under < 0) { result = -1; continue; }
     if (!under) continue;
     LightenApplicationProcess captured;
@@ -432,7 +441,32 @@ int lighten_copy_application_processes(const char *root, LightenApplicationProce
     (*records)[(*count)++] = captured;
   }
   free(list);
+  uint64_t finished = activity_milliseconds();
+  if (!finished || finished >= deadline) return -1;
   return result;
+}
+
+int lighten_copy_application_processes(const char *root, LightenApplicationProcess **records, uint32_t *count) {
+  if (!root || root[0] != '/' || !records || !count) return -1;
+  *records = NULL;
+  *count = 0;
+  uint64_t started = activity_milliseconds();
+  if (!started) return -1;
+  uint64_t deadline = started + 3000;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    // A process can exit or replace its image during enumeration. Only a new
+    // complete census can recover from that race; partial records never merge.
+    if (copy_application_process_census(root, records, count, deadline) == 0) return 0;
+    free(*records);
+    *records = NULL;
+    *count = 0;
+    uint64_t observed = activity_milliseconds();
+    if (!observed || observed >= deadline || attempt == 2) break;
+    uint64_t pause = deadline - observed < 25 ? deadline - observed : 25;
+    struct timespec delay = { .tv_sec = 0, .tv_nsec = (long)pause * 1000000 };
+    nanosleep(&delay, NULL);
+  }
+  return -1;
 }
 
 void lighten_free_application_processes(LightenApplicationProcess *records) { free(records); }

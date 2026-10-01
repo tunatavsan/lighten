@@ -37,6 +37,14 @@ private struct UserSelectionFixture {
   func cleanup() { try? FileManager.default.removeItem(atPath: home) }
 }
 
+private func nativeCaptureFailureActivity(selectedRoot: String, unrelatedRoot: String) async -> String {
+  let source = NativeApplicationActivitySource()
+  let selected = await source.activity(applicationPath: selectedRoot)
+  let unrelated = await source.activity(applicationPath: unrelatedRoot)
+  return "selected root activity: \(selected.state), processes: \(selected.processNames); "
+    + "unrelated root activity: \(unrelated.state), processes: \(unrelated.processNames)"
+}
+
 private struct UserSelectionTrash: TrashMoving {
   let directory: String
   func moveToTrash(path: String) async throws -> String {
@@ -364,7 +372,15 @@ struct UserSelectionTests {
     var count: UInt32 = 0
     let status = app.withCString { lighten_copy_application_processes($0, &pointer, &count) }
     defer { lighten_free_application_processes(pointer) }
-    #expect(status == 0)
+    var diagnostic = ""
+    if status != 0 {
+      let unrelated = fixture.home + "/LightenQA-unrelated-observation"
+      try fixture.directory(unrelated)
+      diagnostic =
+        "capture status: \(status), count: \(count); "
+        + (await nativeCaptureFailureActivity(selectedRoot: app, unrelatedRoot: unrelated))
+    }
+    #expect(status == 0, "\(diagnostic)")
     let records = Array(UnsafeBufferPointer(start: pointer, count: Int(count)))
     #expect(Set(records.map(\.pid)) == Set(processes.map(\.processIdentifier)))
     var changedStart = try #require(records.first)
@@ -418,12 +434,26 @@ struct UserSelectionTests {
     var count: UInt32 = 0
     let captured = app.withCString { lighten_copy_application_processes($0, &pointer, &count) }
     defer { lighten_free_application_processes(pointer) }
-    try #require(captured == 0 && count == 1)
+    var diagnostic = ""
+    if captured != 0 || count != 1 {
+      diagnostic =
+        "capture status: \(captured), count: \(count); "
+        + (await nativeCaptureFailureActivity(selectedRoot: app, unrelatedRoot: unrelated))
+    }
+    try #require(captured == 0 && count == 1, "\(diagnostic)")
     var original = try #require(pointer?.pointee)
     try #require(original.pid == process.processIdentifier)
     // Removing this exact owned leaf reproduces an updater's detached image.
     try FileManager.default.removeItem(atPath: path)
     #expect(!FileManager.default.fileExists(atPath: path))
+    var incompletePointer: UnsafeMutablePointer<LightenApplicationProcess>?
+    var incompleteCount: UInt32 = 0
+    let incomplete = app.withCString {
+      lighten_copy_application_processes($0, &incompletePointer, &incompleteCount)
+    }
+    defer { lighten_free_application_processes(incompletePointer) }
+    #expect(incomplete == -1)
+    #expect(incompletePointer == nil && incompleteCount == 0)
     #expect(app.withCString { lighten_application_mapping_activity(process.processIdentifier, $0, 4096) } == 1)
     #expect(unrelated.withCString { lighten_application_mapping_activity(process.processIdentifier, $0, 4096) } == 0)
     #expect(unrelated.withCString { lighten_application_mapping_activity(process.processIdentifier, $0, 1) } == -1)

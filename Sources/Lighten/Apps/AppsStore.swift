@@ -878,6 +878,8 @@ final class AppsStore {
     case .configuredDirectory: String(localized: "Evidence: directory named in this app’s settings")
     case .vendorDirectory: String(localized: "Evidence: app vendor data folder")
     case .liveProcess: String(localized: "Evidence: this app’s open files or working directory")
+    case .executableName:
+      String(localized: "Only the name resembles the app; ownership is unproven. Select it only if you recognize it.")
     case .explicitUserChoice: String(localized: "Your explicit choice · ownership remains unproven")
     }
   }

@@ -112,7 +112,7 @@ public struct RelatedDataCandidate: Sendable, Identifiable {
   public var automaticSelectionAllowed: Bool {
     guard canSelect else { return false }
     let kinds = evidenceKinds.isEmpty ? provenance.map { [$0.kind] } ?? [] : evidenceKinds
-    return kinds.isEmpty || kinds.contains { $0 != .liveProcess && $0 != .vendorDirectory }
+    return kinds.isEmpty || kinds.contains { $0 != .liveProcess && $0 != .vendorDirectory && $0 != .executableName }
   }
 }
 
@@ -1532,10 +1532,16 @@ public struct RelatedDataService: Sendable {
         liveSharingFailed = false
         liveSharingOwners = []
       }
-      let strength: RelatedMatchStrength =
-        location == .groupContainers || !exactOwners.isEmpty || !claims.isEmpty
+      let claimStrength: RelatedMatchStrength =
+        claims.contains { $0.matchStrength == .strong }
         ? .strong
-        : !prefixOwners.isEmpty ? .medium : !weakOwners.isEmpty ? .weak : .strong
+        : claims.contains { $0.matchStrength == .medium } ? .medium : .weak
+      let strength: RelatedMatchStrength =
+        location == .groupContainers || !exactOwners.isEmpty
+        ? .strong
+        : !claims.isEmpty
+          ? claimStrength
+          : !prefixOwners.isEmpty ? .medium : !weakOwners.isEmpty ? .weak : .strong
       let focusedOwner = app.flatMap { selected in
         owners.contains(where: { $0.path == selected.path }) ? selected.bundleID : nil
       }

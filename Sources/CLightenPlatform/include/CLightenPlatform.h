@@ -52,6 +52,8 @@ typedef struct {
 // Bounded executable-location census including helpers. Every record binds a
 // current-UID PID/start time to the executable's native mapped vnode. A missing
 // executable observation is unavailable, never permission to signal a PID.
+// At most three fresh complete censuses share one three-second deadline.
+// Failure discards all partial records and returns NULL/zero outputs.
 int lighten_copy_application_processes(const char *root, LightenApplicationProcess **records, uint32_t *count);
 void lighten_free_application_processes(LightenApplicationProcess *records);
 // Revalidates the full native record before sending only SIGTERM or SIGKILL.
