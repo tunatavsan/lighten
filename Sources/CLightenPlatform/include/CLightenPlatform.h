@@ -48,6 +48,11 @@ enum {
   LIGHTEN_HAS_LINK_COUNT = 1u << 4,
   LIGHTEN_HAS_LOGICAL = 1u << 5,
   LIGHTEN_HAS_ALLOCATED = 1u << 6,
+  LIGHTEN_HAS_BIRTH_TIME = 1u << 7,
+  LIGHTEN_HAS_MOD_TIME = 1u << 8,
+  LIGHTEN_HAS_CHANGE_TIME = 1u << 9,
+  LIGHTEN_HAS_ADDED_TIME = 1u << 10,
+  LIGHTEN_HAS_DATA_LOGICAL = 1u << 11,
 };
 
 // One directory entry parsed from a getattrlistbulk buffer. The name bytes stay
@@ -56,6 +61,15 @@ typedef struct {
   uint64_t file_id;
   int64_t logical;
   int64_t allocated;
+  int64_t birth_seconds;
+  int64_t birth_nanoseconds;
+  int64_t mod_seconds;
+  int64_t mod_nanoseconds;
+  int64_t change_seconds;
+  int64_t change_nanoseconds;
+  int64_t added_seconds;
+  int64_t added_nanoseconds;
+  int64_t data_logical;
   uint32_t device;
   uint32_t flags;
   uint32_t link_count;
@@ -68,6 +82,8 @@ typedef struct {
 
 // Metadata only; never opens entries. >0: parsed entries, 0: end, -1: errno.
 int lighten_bulk_read(int dirfd, void *buffer, size_t size, LightenDirEntry *out, int capacity);
+// Same bulk walk, with precise birth, modification, change and added times.
+int lighten_bulk_read_metadata(int dirfd, void *buffer, size_t size, LightenDirEntry *out, int capacity);
 // Space used by the volume containing path (APFS reports per-volume usage).
 int lighten_volume_space_used(const char *path, int64_t *used_bytes);
 

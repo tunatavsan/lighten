@@ -141,15 +141,23 @@ final class ParallelWalker: Sendable {
   let homeDirectory: String
   let firmlinks: Set<String>?
   let fileRuleSuffixes: [String]
+  let fileSink: FileSink?
+  let sinkRootAllowed: Bool
+  let directEntries: (@Sendable (RawEntry) -> Void)?
   private let hardLinks = Mutex(Set<HardLinkKey>())
   private let remainingWorkers: Atomic<Int>
   private let onFinish: @Sendable () -> Void
 
   init(
     tree: ScanTree, counters: ScanCounters, automaton: ProtectionAutomaton, boundaryDevice: UInt64,
-    homeDirectory: String, firmlinks: Set<String>?, workers: Int, onFinish: @escaping @Sendable () -> Void
+    homeDirectory: String, firmlinks: Set<String>?, workers: Int, fileSink: FileSink? = nil,
+    sinkRootAllowed: Bool = true, directEntries: (@Sendable (RawEntry) -> Void)? = nil,
+    onFinish: @escaping @Sendable () -> Void
   ) {
     self.firmlinks = firmlinks
+    self.fileSink = fileSink
+    self.sinkRootAllowed = sinkRootAllowed
+    self.directEntries = directEntries
     self.tree = tree
     self.counters = counters
     self.automaton = automaton
@@ -168,7 +176,8 @@ final class ParallelWalker: Sendable {
     queue.push([root], tree: tree)
     for index in 0..<max(1, workers) {
       let thread = Thread { [self] in
-        let reader = DirectoryReader(counters: counters)
+        let reader = DirectoryReader(
+          counters: counters, includeFileMetadata: fileSink != nil)
         while let job = queue.next() {
           let children = process(job, reader: reader)
           queue.finished(children, tree: tree)
@@ -212,7 +221,12 @@ final class ParallelWalker: Sendable {
     let isCancelled = { [queue] in queue.cancelled.load(ordering: .relaxed) }
 
     do {
-      try reader.read(path: job.path, expected: (job.device, job.inode), isCancelled: isCancelled) { entry in
+      try reader.read(
+        path: job.path, expected: (job.device, job.inode),
+        includeFileMetadata: fileSink != nil || (job.depth == 0 && directEntries != nil),
+        isCancelled: isCancelled
+      ) { entry in
+        if job.depth == 0 { directEntries?(entry) }
         if entry.error != 0 {
           entryErrors = true
           return
@@ -236,6 +250,7 @@ final class ParallelWalker: Sendable {
           childDirectories.append(classify(entry, parent: job))
           return
         }
+        emit(entry, in: job)
         // Regular files, symlinks (never followed) and special files are leaves.
         if entry.linkCount > 1 && entry.kind == .regular {
           let first = hardLinks.withLock { $0.insert(HardLinkKey(device: entry.device, inode: entry.inode)).inserted }
@@ -312,6 +327,59 @@ final class ParallelWalker: Sendable {
           depth: job.depth + 1, protection: child.protection))
     }
     return jobs
+  }
+
+  func emit(_ entry: RawEntry, in job: WalkJob) {
+    guard let fileSink, sinkRootAllowed, job.mode == .node, entry.kind == .regular, entry.error == 0,
+      entry.device == boundaryDevice, entry.flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0,
+      !PackageNames.isPackage(entry.name),
+      !queue.cancelled.load(ordering: .relaxed)
+    else { return }
+    let path = job.path == "/" ? "/" + entry.name : job.path + "/" + entry.name
+    if let state = job.protection,
+      !automaton.matches(automaton.step(state, entry.name), path: path, homeDirectory: homeDirectory).isEmpty
+    {
+      return
+    }
+    guard let logical = entry.identityLogicalBytes else {
+      counters.sinkMetadataUnavailable.add(1, ordering: .relaxed)
+      counters.sinkOmittedFiles.add(1, ordering: .relaxed)
+      return
+    }
+    guard logical >= fileSink.minLogicalBytes else { return }
+    if let cutoff = fileSink.olderThan {
+      guard let modified = entry.modificationTime?.date else {
+        counters.sinkMetadataUnavailable.add(1, ordering: .relaxed)
+        counters.sinkOmittedFiles.add(1, ordering: .relaxed)
+        return
+      }
+      guard modified < cutoff else { return }
+    }
+    guard let identity = entry.identity else {
+      counters.sinkMetadataUnavailable.add(1, ordering: .relaxed)
+      counters.sinkOmittedFiles.add(1, ordering: .relaxed)
+      return
+    }
+    // Added time is optional. Birth and modification time are required by
+    // duplicate identity checks; retain their absence and expose uncertainty.
+    if entry.birthTime == nil || entry.modificationTime == nil {
+      counters.sinkMetadataUnavailable.add(1, ordering: .relaxed)
+    }
+    // At the disk root and below it, expose the same visible paths as the tree.
+    let visiblePath: String
+    if firmlinks != nil, job.path.hasPrefix("/System/Volumes/Data/") {
+      let relative = String(path.dropFirst("/System/Volumes/Data/".count))
+      let first = relative.split(separator: "/").first.map(String.init)
+      visiblePath = first.map { firmlinks?.contains($0) == true } == true ? "/" + relative : path
+    } else if firmlinks != nil, job.depth == 0 {
+      visiblePath = firmlinks?.contains(entry.name) == true ? "/" + entry.name : path
+    } else {
+      visiblePath = path
+    }
+    fileSink.receive(
+      FileFact(
+        path: visiblePath, identity: identity, modTime: entry.modificationTime?.date,
+        addedTime: entry.addedTime?.date))
   }
 
   /// Case-insensitive ASCII suffix test without allocating a folded copy.

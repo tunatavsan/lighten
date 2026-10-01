@@ -7,14 +7,16 @@ public struct ScanConfiguration: Sendable {
   public var workers: Int
   public var homeDirectory: String
   public var publishInterval: Duration
+  public var fileSink: FileSink?
 
   public init(
     workers: Int = ScanConfiguration.defaultWorkers, homeDirectory: String = NSHomeDirectory(),
-    publishInterval: Duration = .milliseconds(125)
+    publishInterval: Duration = .milliseconds(125), fileSink: FileSink? = nil
   ) {
     self.workers = workers
     self.homeDirectory = homeDirectory
     self.publishInterval = publishInterval
+    self.fileSink = fileSink
   }
 
   /// Knee of the measured worker sweep on this class of hardware.
@@ -110,6 +112,12 @@ public struct ScanEngine: Sendable {
   }
 
   public func start(root requestedRoot: String) throws(ScanStartFailure) -> ScanRun {
+    try start(root: requestedRoot, directEntries: nil)
+  }
+
+  func start(
+    root requestedRoot: String, directEntries: (@Sendable (RawEntry) -> Void)?
+  ) throws(ScanStartFailure) -> ScanRun {
     let root =
       requestedRoot.count > 1 && requestedRoot.hasSuffix("/") ? String(requestedRoot.dropLast()) : requestedRoot
     // "/" walks the Data volume once through its firmlinked names; the sealed
@@ -138,7 +146,11 @@ public struct ScanEngine: Sendable {
     let walker = ParallelWalker(
       tree: tree, counters: counters, automaton: automaton, boundaryDevice: device,
       homeDirectory: configuration.homeDirectory, firmlinks: firmlinks, workers: configuration.workers,
-      onFinish: { finish.signal() })
+      fileSink: configuration.fileSink,
+      sinkRootAllowed: details.st_flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0
+        && ProtectionPolicy.rule(for: root, homeDirectory: configuration.homeDirectory) == nil
+        && !root.split(separator: "/").contains(where: { PackageNames.isPackage(String($0)) }),
+      directEntries: directEntries, onFinish: { finish.signal() })
     let run = ScanRun(
       tree: tree, counters: counters, walker: walker, progress: stream, finish: finish, replayBaseline: baseline)
     let interval = configuration.publishInterval

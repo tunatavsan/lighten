@@ -6,15 +6,19 @@
 #include <unistd.h>
 
 // Attribute order in each packed record: length, returned set, error, name,
-// devid, objtype, flags, fileid, then file attributes linkcount, totalsize,
-// allocsize. Fields are only 4-byte aligned, so every read goes through memcpy.
-static struct attrlist lighten_bulk_attributes(void) {
+// devid, objtype, optional times, flags, fileid, optional added time, then
+// file attributes linkcount, totalsize, allocsize and optional data length. Fields are only 4-byte aligned, so every read goes through memcpy.
+static struct attrlist lighten_bulk_attributes(int metadata) {
   struct attrlist list;
   memset(&list, 0, sizeof(list));
   list.bitmapcount = ATTR_BIT_MAP_COUNT;
   list.commonattr = ATTR_CMN_RETURNED_ATTRS | ATTR_CMN_NAME | ATTR_CMN_ERROR | ATTR_CMN_DEVID |
                     ATTR_CMN_OBJTYPE | ATTR_CMN_FLAGS | ATTR_CMN_FILEID;
+  if (metadata) {
+    list.commonattr |= ATTR_CMN_CRTIME | ATTR_CMN_MODTIME | ATTR_CMN_CHGTIME | ATTR_CMN_ADDEDTIME;
+  }
   list.fileattr = ATTR_FILE_LINKCOUNT | ATTR_FILE_TOTALSIZE | ATTR_FILE_ALLOCSIZE;
+  if (metadata) list.fileattr |= ATTR_FILE_DATALENGTH;
   return list;
 }
 
@@ -27,13 +31,14 @@ static uint32_t lighten_kind(fsobj_type_t type) {
   }
 }
 
-int lighten_bulk_read(int dirfd, void *buffer, size_t size, LightenDirEntry *out, int capacity) {
+static int lighten_bulk_read_impl(int dirfd, void *buffer, size_t size, LightenDirEntry *out,
+                                  int capacity, int metadata) {
   if (!buffer || !out || capacity <= 0 || size < 1024) {
     errno = EINVAL;
     return -1;
   }
-  struct attrlist list = lighten_bulk_attributes();
-  int count = getattrlistbulk(dirfd, &list, buffer, size, 0);
+  struct attrlist list = lighten_bulk_attributes(metadata);
+  int count = getattrlistbulk(dirfd, &list, buffer, size, metadata ? FSOPT_ATTR_CMN_EXTENDED : 0);
   if (count <= 0) return count;
   if (count > capacity) {
     errno = ENOBUFS;
@@ -96,6 +101,27 @@ int lighten_bulk_read(int dirfd, void *buffer, size_t size, LightenDirEntry *out
       entry->kind = lighten_kind(type);
       entry->returned |= LIGHTEN_HAS_KIND;
     }
+    if (returned.commonattr & ATTR_CMN_CRTIME) {
+      struct timespec time;
+      LIGHTEN_TAKE(time);
+      entry->birth_seconds = (int64_t)time.tv_sec;
+      entry->birth_nanoseconds = (int64_t)time.tv_nsec;
+      entry->returned |= LIGHTEN_HAS_BIRTH_TIME;
+    }
+    if (returned.commonattr & ATTR_CMN_MODTIME) {
+      struct timespec time;
+      LIGHTEN_TAKE(time);
+      entry->mod_seconds = (int64_t)time.tv_sec;
+      entry->mod_nanoseconds = (int64_t)time.tv_nsec;
+      entry->returned |= LIGHTEN_HAS_MOD_TIME;
+    }
+    if (returned.commonattr & ATTR_CMN_CHGTIME) {
+      struct timespec time;
+      LIGHTEN_TAKE(time);
+      entry->change_seconds = (int64_t)time.tv_sec;
+      entry->change_nanoseconds = (int64_t)time.tv_nsec;
+      entry->returned |= LIGHTEN_HAS_CHANGE_TIME;
+    }
     if (returned.commonattr & ATTR_CMN_FLAGS) {
       uint32_t flags = 0;
       LIGHTEN_TAKE(flags);
@@ -107,6 +133,13 @@ int lighten_bulk_read(int dirfd, void *buffer, size_t size, LightenDirEntry *out
       LIGHTEN_TAKE(file_id);
       entry->file_id = file_id;
       entry->returned |= LIGHTEN_HAS_FILE_ID;
+    }
+    if (returned.commonattr & ATTR_CMN_ADDEDTIME) {
+      struct timespec time;
+      LIGHTEN_TAKE(time);
+      entry->added_seconds = (int64_t)time.tv_sec;
+      entry->added_nanoseconds = (int64_t)time.tv_nsec;
+      entry->returned |= LIGHTEN_HAS_ADDED_TIME;
     }
     if (returned.fileattr & ATTR_FILE_LINKCOUNT) {
       uint32_t links = 0;
@@ -126,6 +159,12 @@ int lighten_bulk_read(int dirfd, void *buffer, size_t size, LightenDirEntry *out
       entry->allocated = (int64_t)allocated;
       entry->returned |= LIGHTEN_HAS_ALLOCATED;
     }
+    if (returned.fileattr & ATTR_FILE_DATALENGTH) {
+      off_t logical = 0;
+      LIGHTEN_TAKE(logical);
+      entry->data_logical = (int64_t)logical;
+      entry->returned |= LIGHTEN_HAS_DATA_LOGICAL;
+    }
 #undef LIGHTEN_TAKE
     cursor = record_end;
   }
@@ -134,6 +173,14 @@ int lighten_bulk_read(int dirfd, void *buffer, size_t size, LightenDirEntry *out
 malformed:
   errno = EBADMSG;
   return -1;
+}
+
+int lighten_bulk_read(int dirfd, void *buffer, size_t size, LightenDirEntry *out, int capacity) {
+  return lighten_bulk_read_impl(dirfd, buffer, size, out, capacity, 0);
+}
+
+int lighten_bulk_read_metadata(int dirfd, void *buffer, size_t size, LightenDirEntry *out, int capacity) {
+  return lighten_bulk_read_impl(dirfd, buffer, size, out, capacity, 1);
 }
 
 int lighten_volume_space_used(const char *path, int64_t *used_bytes) {

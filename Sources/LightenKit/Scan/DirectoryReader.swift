@@ -10,6 +10,10 @@ public final class ScanCounters: Sendable {
   let fallbackStats = Atomic<Int>(0)
   let directories = Atomic<Int>(0)
   let entries = Atomic<Int>(0)
+  /// Eligible sink records with unavailable identity or required dates.
+  let sinkMetadataUnavailable = Atomic<Int>(0)
+  /// Unavailable records that could not be emitted, a subset of the above.
+  let sinkOmittedFiles = Atomic<Int>(0)
 
   public init() {}
 
@@ -18,6 +22,8 @@ public final class ScanCounters: Sendable {
       "opens": opens.load(ordering: .relaxed), "bulkCalls": bulkCalls.load(ordering: .relaxed),
       "fallbackStats": fallbackStats.load(ordering: .relaxed),
       "directories": directories.load(ordering: .relaxed), "entries": entries.load(ordering: .relaxed),
+      "sinkMetadataUnavailable": sinkMetadataUnavailable.load(ordering: .relaxed),
+      "sinkOmittedFiles": sinkOmittedFiles.load(ordering: .relaxed),
     ]
   }
 }
@@ -34,6 +40,24 @@ public struct RawEntry: Sendable {
   public var allocated: Int64
   /// Nonzero when the filesystem reported a per-entry attribute error.
   public var error: Int32
+  public var birthTime: FileTimestamp? = nil
+  public var modificationTime: FileTimestamp? = nil
+  public var changeTime: FileTimestamp? = nil
+  public var addedTime: FileTimestamp? = nil
+  public var identityLogicalBytes: Int64? = nil
+
+  /// Missing ctime cannot be represented by FileIdentity; never invent one.
+  public var identity: FileIdentity? {
+    guard error == 0, let changeTime else { return nil }
+    guard kind != .regular || identityLogicalBytes != nil else { return nil }
+    return FileIdentity(
+      device: device, inode: inode, changeSeconds: changeTime.seconds,
+      changeNanoseconds: changeTime.nanoseconds, logicalBytes: identityLogicalBytes ?? logical,
+      allocatedBytes: allocated,
+      linkCount: UInt64(linkCount), flags: flags, kind: kind,
+      birthSeconds: birthTime?.seconds, birthNanoseconds: birthTime?.nanoseconds,
+      modificationSeconds: modificationTime?.seconds, modificationNanoseconds: modificationTime?.nanoseconds)
+  }
 }
 
 public enum DirectoryReadFailure: Error, Sendable, Equatable {
@@ -51,11 +75,13 @@ public final class DirectoryReader {
   private let entries: UnsafeMutablePointer<LightenDirEntry>
   private let capacity: Int
   private let counters: ScanCounters
+  private let includeFileMetadata: Bool
 
   /// 64 KB keeps one bulk call short even in very large folders, so cancellation
   /// and progress stay responsive.
-  public init(counters: ScanCounters, bufferSize: Int = 64 * 1024) {
+  public init(counters: ScanCounters, bufferSize: Int = 64 * 1024, includeFileMetadata: Bool = false) {
     self.counters = counters
+    self.includeFileMetadata = includeFileMetadata
     self.bufferSize = bufferSize
     self.buffer = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 16)
     self.capacity = bufferSize / 32
@@ -69,9 +95,10 @@ public final class DirectoryReader {
 
   /// `expected` guards against a directory replaced after its parent listed it.
   public func read(
-    path: String, expected: (device: UInt64, inode: UInt64)?,
+    path: String, expected: (device: UInt64, inode: UInt64)?, includeFileMetadata: Bool? = nil,
     isCancelled: () -> Bool, visit: (RawEntry) -> Void
   ) throws(DirectoryReadFailure) {
+    let metadata = includeFileMetadata ?? self.includeFileMetadata
     let fd = Self.openDirectory(path)
     counters.opens.add(1, ordering: .relaxed)
     guard fd >= 0 else { throw .open(errno) }
@@ -85,7 +112,10 @@ public final class DirectoryReader {
     var batches = 0
     while true {
       if isCancelled() { throw .cancelled }
-      let count = lighten_bulk_read(fd, buffer, bufferSize, entries, Int32(capacity))
+      let count =
+        metadata
+        ? lighten_bulk_read_metadata(fd, buffer, bufferSize, entries, Int32(capacity))
+        : lighten_bulk_read(fd, buffer, bufferSize, entries, Int32(capacity))
       counters.bulkCalls.add(1, ordering: .relaxed)
       if count == 0 { return }
       if count < 0 {
@@ -100,6 +130,7 @@ public final class DirectoryReader {
       batches += 1
       counters.entries.add(Int(count), ordering: .relaxed)
       for index in 0..<Int(count) {
+        if isCancelled() { throw .cancelled }
         let raw = entries[index]
         let name = String(
           decoding: UnsafeRawBufferPointer(
@@ -117,7 +148,20 @@ public final class DirectoryReader {
           RawEntry(
             name: name, kind: Self.kind(raw.kind), device: UInt64(raw.device), inode: raw.file_id,
             flags: raw.flags, linkCount: raw.link_count, logical: raw.logical, allocated: raw.allocated,
-            error: raw.error != 0 ? raw.error : complete ? 0 : EIO))
+            error: raw.error != 0 ? raw.error : complete ? 0 : EIO,
+            birthTime: Self.timestamp(
+              raw, bit: LIGHTEN_HAS_BIRTH_TIME, seconds: raw.birth_seconds,
+              nanoseconds: raw.birth_nanoseconds, positive: true),
+            modificationTime: Self.timestamp(
+              raw, bit: LIGHTEN_HAS_MOD_TIME, seconds: raw.mod_seconds,
+              nanoseconds: raw.mod_nanoseconds),
+            changeTime: Self.timestamp(
+              raw, bit: LIGHTEN_HAS_CHANGE_TIME, seconds: raw.change_seconds,
+              nanoseconds: raw.change_nanoseconds),
+            addedTime: Self.timestamp(
+              raw, bit: LIGHTEN_HAS_ADDED_TIME, seconds: raw.added_seconds,
+              nanoseconds: raw.added_nanoseconds, positive: true),
+            identityLogicalBytes: raw.returned & UInt32(LIGHTEN_HAS_DATA_LOGICAL) != 0 ? raw.data_logical : nil))
       }
     }
   }
@@ -161,7 +205,15 @@ public final class DirectoryReader {
           name: name, kind: identity.kind, device: identity.device, inode: identity.inode,
           flags: identity.flags, linkCount: UInt32(clamping: identity.linkCount),
           logical: identity.kind == .directory ? 0 : identity.logicalBytes,
-          allocated: identity.allocatedBytes, error: 0))
+          allocated: identity.allocatedBytes, error: 0,
+          birthTime: identity.birthSeconds.flatMap { seconds in
+            identity.birthNanoseconds.map { FileTimestamp(seconds: seconds, nanoseconds: $0) }
+          },
+          modificationTime: FileTimestamp(
+            seconds: Int64(details.st_mtimespec.tv_sec),
+            nanoseconds: Int64(details.st_mtimespec.tv_nsec)),
+          changeTime: FileTimestamp(seconds: identity.changeSeconds, nanoseconds: identity.changeNanoseconds),
+          identityLogicalBytes: identity.logicalBytes))
     }
   }
 
@@ -183,6 +235,15 @@ public final class DirectoryReader {
       fd = next
     }
     return fd
+  }
+
+  private static func timestamp(
+    _ entry: LightenDirEntry, bit: Int, seconds: Int64, nanoseconds: Int64, positive: Bool = false
+  ) -> FileTimestamp? {
+    guard entry.returned & UInt32(bit) != 0, (0..<1_000_000_000).contains(nanoseconds),
+      !positive || seconds > 0
+    else { return nil }
+    return FileTimestamp(seconds: seconds, nanoseconds: nanoseconds)
   }
 
   private static func kind(_ value: UInt32) -> EntryKind {
