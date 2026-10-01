@@ -46,6 +46,27 @@ private struct SpaceActiveApplications: ApplicationActivitySource {
   }
 }
 
+private final class SpaceRecordedApplications: ApplicationActivitySource {
+  private struct Observation: Sendable {
+    var activity = ApplicationActivity(state: .clearObservedProcesses)
+    var paths: [String] = []
+  }
+  private let observation = Mutex(Observation())
+
+  func activity(applicationPath: String) async -> ApplicationActivity {
+    observation.withLock {
+      $0.paths.append(applicationPath)
+      return $0.activity
+    }
+  }
+
+  var paths: [String] { observation.withLock { $0.paths } }
+
+  func set(_ state: ApplicationActivityState, processNames: [String]) {
+    observation.withLock { $0.activity = ApplicationActivity(state: state, processNames: processNames) }
+  }
+}
+
 private struct SpaceClosedApps: RunningApplicationSource {
   var running: Set<String> = []
   func isRunning(bundleID: String) async -> Bool? { running.contains(bundleID) }
@@ -292,13 +313,80 @@ struct SpaceSafetyTests {
     let outcome = await PlanService(homeDirectory: home, applicationActivity: source).makeAvailableSpacePlan(
       selections: [try spaceSelection(folder)], scanRootPath: home, runID: UUID())
     #expect(outcome.plan == nil)
-    #expect(outcome.rejections.first?.reason == (state == .active ? .applicationRunning : .activityUnavailable))
+    #expect(outcome.rejections.first?.reason == (state == .active ? .processActive : .activityUnavailable))
+    #expect(outcome.rejections.first?.path == folder)
+    #expect(outcome.rejections.first?.ruleID == "LightenQA helper")
     let plan = try spacePlan(folder, home: home)
     let executor = ActionExecutor(
       journal: JSONLActionJournal(path: home + "/journal.jsonl"), trash: SpaceRenameTrash(destination: home + "/trash"),
       guardService: ActionGuard(homeDirectory: home), applicationActivity: source)
     #expect(try await executor.execute(plan).items.first?.outcome == .skipped)
     #expect(FileManager.default.fileExists(atPath: folder))
+  }
+
+  @Test(
+    "Many opaque packages share one root observation and recheck after the final hook",
+    arguments: [ApplicationActivityState.clearObservedProcesses, .active, .unknown])
+  func opaquePackagesShareFreshRootObservation(_ finalState: ApplicationActivityState) async throws {
+    let home = try spaceFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let folder = home + "/DeviceSupport"
+    for index in 0..<32 {
+      try spacePut(folder + "/Symbols/Frameworks/LightenQA-\(index).framework/payload")
+    }
+    try spaceApp(folder + "/LightenQA-tools.bundle/Helpers/LightenQA-helper.app", id: "qa.lighten.nested")
+    let applications = SpaceRecordedApplications()
+    let proposed = await PlanService(
+      homeDirectory: home, runningApplications: SpaceClosedApps(), spaceActivity: SpaceObservedActivity(),
+      applicationActivity: applications
+    ).makeAvailableSpacePlan(selections: [try spaceSelection(folder)], scanRootPath: home, runID: UUID())
+    let plan = try #require(proposed.plan)
+    #expect(proposed.rejections.isEmpty)
+    #expect(plan.items[0].inventory.filter { ScanService.isPackage($0.path) }.count == 33)
+    #expect(applications.paths == [folder])
+    let evidence = "LightenQA helper (pid 123, uid 502): executable path unavailable; errno:13"
+    let result = try await ActionExecutor(
+      journal: JSONLActionJournal(path: home + "/journal.jsonl"), trash: SpaceRenameTrash(destination: home + "/trash"),
+      guardService: ActionGuard(homeDirectory: home),
+      beforeMutation: { _ in
+        #expect(applications.paths == [folder, folder, folder])
+        applications.set(finalState, processNames: [evidence])
+      }, runningApplications: SpaceClosedApps(), spaceActivity: SpaceObservedActivity(),
+      applicationActivity: applications
+    ).execute(plan)
+    #expect(applications.paths == [folder, folder, folder, folder])
+    if finalState == .clearObservedProcesses {
+      #expect(result.items.first?.outcome == .applied)
+      #expect(!FileManager.default.fileExists(atPath: folder))
+    } else {
+      #expect(result.items.first?.outcome == .skipped)
+      #expect(FileManager.default.fileExists(atPath: folder))
+      let prefix = finalState == .active ? "processActive:" : "processActivityUnavailable:"
+      #expect(result.items.first?.detail == prefix + evidence)
+    }
+  }
+
+  @Test("Executable observations stay separate for disjoint selections")
+  func opaqueSelectionsRemainIndependent() async throws {
+    let home = try spaceFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let folders = [home + "/first", home + "/second"]
+    for folder in folders { try spacePut(folder + "/LightenQA-fixture.framework/payload") }
+    let applications = SpaceRecordedApplications()
+    let planner = PlanService(
+      homeDirectory: home, runningApplications: SpaceClosedApps(), spaceActivity: SpaceObservedActivity(),
+      applicationActivity: applications)
+    let selections = try folders.map(spaceSelection)
+    let initial = await planner.makeAvailableSpacePlan(selections: selections, scanRootPath: home, runID: UUID())
+    #expect(initial.plan?.items.map(\.sourcePath) == folders)
+    #expect(applications.paths == folders)
+    let evidence = "LightenQA helper (pid 123, uid 502): executable path unavailable; errno:13"
+    applications.set(.unknown, processNames: [evidence])
+    let current = await planner.makeAvailableSpacePlan(selections: selections, scanRootPath: home, runID: UUID())
+    #expect(current.plan == nil)
+    #expect(current.rejections.map(\.path) == folders)
+    #expect(current.rejections.allSatisfy { $0.reason == .activityUnavailable && $0.ruleID == evidence })
+    #expect(applications.paths == folders + folders)
   }
 
   @Test("Root-only package Undo restores all bytes and refuses root replacement", arguments: [false, true])

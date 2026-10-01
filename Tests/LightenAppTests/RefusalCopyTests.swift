@@ -97,6 +97,53 @@ import Testing
 }
 
 @Test(
+  "Unknown native process diagnostics survive confirmation and execution failure copy",
+  arguments: [
+    "WindowServer (pid 123, uid 88): executable path unavailable; errno:1",
+    "Fixture Helper (pid 456, uid 501): process identity unavailable; errno:13",
+    "Fixture Helper (pid 456, uid 501): process identity changed during observation",
+  ])
+@MainActor func unknownNativeProcessFailureContext(details: String) throws {
+  let path = "/fixture/Applications/Owned.app"
+  let observation = ApplicationActivity(state: .unknown, processNames: [details])
+  let rejection = PlanRejection(.activityUnavailable, path: path, ruleID: observation.processNames[0])
+  let presentation = ActionPresentation(
+    plan: ActionPlan(snapshotRunID: UUID(), kind: .trash, items: []), items: [], rejectedItems: [rejection])
+  let refusal = try #require(presentation.rejectedItems.first)
+  #expect(observation.state == .unknown && refusal.reason == .activityUnavailable)
+  #expect(presentation.plan.items.isEmpty && refusal.ruleID == details)
+  for turkish in [false, true] {
+    let confirmation = FailureText.describe(refusal, turkish: turkish)
+    #expect(confirmation.contains(turkish ? "kontrol edilemedi" : "could not be checked"))
+    #expect(confirmation.contains(turkish ? "Etkinlik Monitörü" : "Activity Monitor"))
+    #expect(confirmation.contains(details) && confirmation.hasSuffix(path))
+    let execution = FailureText.describe("processActivityUnavailable:" + details, turkish: turkish)
+    #expect(execution.contains(turkish ? "denetlenemedi" : "could not be checked"))
+    #expect(execution.contains(turkish ? "Etkinlik Monitörü" : "Activity Monitor"))
+    #expect(execution.contains(details))
+    #expect(!execution.contains(turkish ? "neden başarısız" : "could not determine why"))
+    for copy in [confirmation, execution] {
+      #expect(!copy.localizedCaseInsensitiveContains(turkish ? "tarayın" : "scan"))
+      #expect(!copy.localizedCaseInsensitiveContains(turkish ? "kapatın" : "quit"))
+      #expect(!copy.localizedCaseInsensitiveContains("processActivityUnavailable"))
+    }
+  }
+}
+
+@Test("An empty process diagnostic stays unknown without inventing a name or errno")
+@MainActor func emptyNativeProcessFailureContext() {
+  for turkish in [false, true] {
+    let bare = FailureText.describe("processActivityUnavailable", turkish: turkish)
+    #expect(FailureText.describe("processActivityUnavailable:", turkish: turkish) == bare)
+    let refusal = SpaceText.rejection(
+      PlanRejection(.activityUnavailable, path: "/fixture/unknown"), turkish: turkish)
+    #expect(refusal.hasSuffix("/fixture/unknown"))
+    #expect(!refusal.contains("errno:") && !bare.contains("errno:"))
+    #expect(!refusal.contains("pid ") && !bare.contains("pid "))
+  }
+}
+
+@Test(
   "Catalog refusals explain their specific reason and next step in both languages",
   arguments: ["apple-system-cache", "minimum-age", "age-unavailable"])
 @MainActor func cleanCatalogRefusalTranslations(ruleID: String) {

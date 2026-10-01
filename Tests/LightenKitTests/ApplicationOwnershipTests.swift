@@ -238,16 +238,18 @@ struct ApplicationOwnershipTests {
           domain: groupID, homeDirectory: home), inventory: inventory) == .relatedGroupContainer)
   }
 
-  @Test("Launch plist executable leads include code outside the enumerated roots")
-  func launchProgramLeadAddsOwner() throws {
+  @Test("Launch plist executable leads include physical code outside the enumerated roots", arguments: [false, true])
+  func launchProgramLeadAddsOwner(linked: Bool) throws {
     let home = try ownerFixture()
     defer { try? FileManager.default.removeItem(atPath: home) }
     let agents = home + "/Library/LaunchAgents"
     try FileManager.default.createDirectory(atPath: agents, withIntermediateDirectories: true)
     let program = home + "/LightenQA-helper"
     try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: program)
+    let lead = linked ? home + "/LightenQA-linked-helper" : program
+    if linked { #expect(symlink(program, lead) == 0) }
     try PropertyListSerialization.data(
-      fromPropertyList: ["ProgramArguments": [program, "1"]], format: .xml, options: 0
+      fromPropertyList: ["ProgramArguments": [lead, "1"]], format: .xml, options: 0
     )
     .write(to: URL(fileURLWithPath: agents + "/qa.lighten.helper.plist"))
     let inventory = ApplicationOwnershipInventory.collect(roots: [agents], applications: [])

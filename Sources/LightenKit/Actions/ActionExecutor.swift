@@ -421,17 +421,19 @@ public actor ActionExecutor {
   }
 
   private func validateApplication(_ item: PlanItem) async throws {
-    if item.policy != nil {
-      for entry in item.inventory
-      where entry.identity.map({ ExactInventory.isOpaquePackage(path: entry.path, identity: $0, policy: item.policy) })
+    if item.inventory.contains(where: { entry in
+      entry.identity.map { ExactInventory.isOpaquePackage(path: entry.path, identity: $0, policy: item.policy) }
         == true
-      {
-        let observation = await applicationActivity.activity(applicationPath: entry.path)
-        switch observation.state {
-        case .clearObservedProcesses: break
-        case .active: throw ProcessActivityFailure.active(processNames: observation.processNames)
-        case .unknown: throw ProcessActivityFailure.unavailable
-        }
+    }) {
+      // Each validation gets a fresh census covering all package executables.
+      let observation = await applicationActivity.activity(applicationPath: item.sourcePath)
+      switch observation.state {
+      case .clearObservedProcesses: break
+      case .active: throw ProcessActivityFailure.active(processNames: observation.processNames)
+      case .unknown:
+        guard !observation.processNames.isEmpty else { throw ProcessActivityFailure.unavailable }
+        throw SpaceValidationFailure(
+          detail: "processActivityUnavailable:" + observation.processNames.joined(separator: ", "))
       }
     }
     if item.policy == .spaceTrash || item.policy == .catalogTrash || item.policy == .catalogBuildOutput

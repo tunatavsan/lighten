@@ -228,19 +228,24 @@ public struct PlanService: Sendable {
         refusal = PlanRejection(.applicationRunning, path: item.sourcePath, ruleID: id)
         break
       }
-      if refusal == nil {
-        for entry in item.inventory
-        where entry.identity.map({ ExactInventory.isOpaquePackage(path: entry.path, identity: $0, policy: item.policy) }
-        ) == true {
-          let observation = await applicationActivity.activity(applicationPath: entry.path)
-          switch observation.state {
-          case .clearObservedProcesses: break
-          case .active:
-            refusal = PlanRejection(
-              .applicationRunning, path: entry.path, ruleID: observation.processNames.joined(separator: ", "))
-          case .unknown: refusal = PlanRejection(.activityUnavailable, path: entry.path)
-          }
-          if refusal != nil { break }
+      if refusal == nil,
+        item.inventory.contains(where: { entry in
+          entry.identity.map { ExactInventory.isOpaquePackage(path: entry.path, identity: $0, policy: item.policy) }
+            == true
+        })
+      {
+        // Executable paths under the selected root include every opaque package
+        // and its helpers. Observe once per selection, rather than per package.
+        let observation = await applicationActivity.activity(applicationPath: item.sourcePath)
+        switch observation.state {
+        case .clearObservedProcesses: break
+        case .active:
+          refusal = PlanRejection(
+            .processActive, path: item.sourcePath, ruleID: observation.processNames.joined(separator: ", "))
+        case .unknown:
+          refusal = PlanRejection(
+            .activityUnavailable, path: item.sourcePath,
+            ruleID: observation.processNames.isEmpty ? nil : observation.processNames.joined(separator: ", "))
         }
       }
       if refusal == nil {

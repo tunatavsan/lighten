@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <libproc.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/proc_info.h>
@@ -67,9 +68,11 @@ static int read_process_identity(pid_t pid, struct kinfo_proc *details) {
 static int pid_executes_root(pid_t pid, const char *root) {
   char path[PROC_PIDPATHINFO_MAXSIZE];
   memset(path, 0, sizeof(path));
+  errno = 0;
   if (proc_pidpath(pid, path, sizeof(path)) > 0) {
     return lighten_path_is_under_root(path, root);
   }
+  int path_error = errno;
   struct kinfo_proc details;
   if (read_process_identity(pid, &details)) {
     if (details.kp_proc.p_stat == SZOMB) return 0;
@@ -77,7 +80,24 @@ static int pid_executes_root(pid_t pid, const char *root) {
     return 0;
   }
   // A live process with an unavailable executable path cannot prove inactivity.
+  errno = path_error;
   return -1;
+}
+
+static void describe_unknown_process(char *process_name, size_t name_capacity,
+                                     const struct kinfo_proc *details,
+                                     const char *reason, int observed_error) {
+  if (process_name[0] != '\0') return;
+  if (observed_error < 0) {
+    snprintf(process_name, name_capacity, "%s (pid %d, uid %u): %s",
+             details->kp_proc.p_comm[0] ? details->kp_proc.p_comm : "unnamed process",
+             details->kp_proc.p_pid, details->kp_eproc.e_ucred.cr_uid, reason);
+    return;
+  }
+  snprintf(process_name, name_capacity, "%s (pid %d, uid %u): %s; errno:%d",
+           details->kp_proc.p_comm[0] ? details->kp_proc.p_comm : "unnamed process",
+           details->kp_proc.p_pid, details->kp_eproc.e_ucred.cr_uid,
+           reason, observed_error);
 }
 
 static int observe_process_activity(const char *root, char *process_name, size_t name_capacity,
@@ -109,19 +129,33 @@ static int observe_process_activity(const char *root, char *process_name, size_t
         struct kinfo_proc before = list[i];
         if (before.kp_proc.p_stat == SZOMB) continue;
         int evidence = uses_root(pid, root);
+        int evidence_error = errno;
         if (evidence == 0) continue;
         struct kinfo_proc after;
+        errno = 0;
         if (!read_process_identity(pid, &after)) {
-          if (kill(pid, 0) == 0 || errno == EPERM) unknown = 1;
+          int identity_error = errno;
+          if (kill(pid, 0) == 0 || errno == EPERM) {
+            unknown = 1;
+            describe_unknown_process(process_name, name_capacity, &before,
+                                     "process identity unavailable", identity_error);
+          }
           continue;
         }
         if (after.kp_eproc.e_ucred.cr_uid != before.kp_eproc.e_ucred.cr_uid ||
             after.kp_proc.p_starttime.tv_sec != before.kp_proc.p_starttime.tv_sec ||
             after.kp_proc.p_starttime.tv_usec != before.kp_proc.p_starttime.tv_usec) {
           unknown = 1;
+          describe_unknown_process(process_name, name_capacity, &before,
+                                   "process identity changed during observation", -1);
           continue;
         }
-        if (evidence < 0) { unknown = 1; continue; }
+        if (evidence < 0) {
+          unknown = 1;
+          describe_unknown_process(process_name, name_capacity, &after,
+                                   "executable path unavailable", evidence_error);
+          continue;
+        }
         if (proc_name(pid, process_name, (uint32_t)name_capacity) <= 0) {
           strncpy(process_name, after.kp_proc.p_comm, name_capacity - 1);
         }

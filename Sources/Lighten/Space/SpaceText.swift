@@ -270,6 +270,7 @@ enum SpaceText {
     }
     let process =
       rejection.reason == .processActive || rejection.reason == .applicationRunning
+        || rejection.reason == .activityUnavailable
       ? rejection.ruleID.map { " (" + $0 + ")" } ?? "" : ""
     return "\(text)\(process)\(rule.map { " \($0)" } ?? "")\(osDetails) — \(rejection.path)"
   }

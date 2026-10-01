@@ -116,6 +116,33 @@ private actor SignatureLeaseSpy: ActionJournal {
 
 @Suite("Application signature identity cache")
 struct ApplicationSignatureCacheTests {
+  @Test("Exact-ID private ownership does not require an executable or a signature", arguments: [false, true])
+  func exactIDAuthorityUsesOnlyCurrentOwnerMetadata(missingExecutable: Bool) async throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    if missingExecutable { try FileManager.default.removeItem(atPath: fixture.executable) }
+    let reads = Mutex(0)
+    let service = fixture.service { _ in
+      reads.withLock { $0 += 1 }
+      return nil
+    }
+    let app = try #require(service.application(at: fixture.app))
+    let candidate = try #require(
+      (await service.initialReview(for: app, progress: nil)).candidates.first {
+        $0.path == fixture.cache
+      })
+    let context = service.makeStandardContext(app: app, listing: service.installedListing())
+    let available = await service.makeAvailableUninstallPlan(
+      app: app, selectedRelated: [candidate], includePackage: false, context: context)
+    let plan = try #require(available.plan)
+    #expect(available.rejections.isEmpty)
+    let prepared = service.prepareInstalledOwners(plan: plan)
+    #expect(prepared.failures.isEmpty && prepared.owners.count == 1)
+    #expect(reads.withLock { $0 } == 0)
+    try rewriteRestoringModification(fixture.app + "/Contents/Info.plist")
+    #expect(!service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+  }
+
   @Test("One unchanged observation reads each signer once, including unsuccessful reads", arguments: [false, true])
   func unchangedSignerIsReadOnce(success: Bool) async throws {
     let fixture = try SignatureFixture()

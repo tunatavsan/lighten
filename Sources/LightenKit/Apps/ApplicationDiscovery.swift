@@ -159,7 +159,7 @@ public struct ApplicationDiscovery: Sendable {
     guard !Task.isCancelled else { return }
     reports = reports.map { report in
       var enriched = report
-      enriched.related = candidates.filter { $0.bundleID == report.bundleID }
+      enriched.related = report.bundleID.map { id in candidates.filter { $0.bundleID == id } } ?? []
       return enriched
     }
     reports.sort {

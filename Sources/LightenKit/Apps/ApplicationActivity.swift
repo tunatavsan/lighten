@@ -18,6 +18,7 @@ public struct ApplicationActivity: Sendable, Equatable {
 }
 
 public protocol ApplicationActivitySource: Sendable {
+  /// Observes executable paths under this root, including nested packages and helpers.
   func activity(applicationPath: String) async -> ApplicationActivity
 }
 

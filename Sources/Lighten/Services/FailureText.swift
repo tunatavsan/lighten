@@ -42,6 +42,15 @@ enum FailureText {
   static func describe(_ raw: String) -> String { describe(raw, turkish: nil) }
 
   static func describe(_ raw: String, turkish: Bool?) -> String {
+    if raw == "processActivityUnavailable" || raw.hasPrefix("processActivityUnavailable:") {
+      let details =
+        raw.hasPrefix("processActivityUnavailable:")
+        ? String(raw.dropFirst("processActivityUnavailable:".count)) : ""
+      return text(
+        "Process activity could not be checked. Check Activity Monitor.",
+        "Süreç etkinliği denetlenemedi. Etkinlik Monitörü’nü kontrol edin.", turkish: turkish)
+        + (details.isEmpty ? "" : " " + details)
+    }
     if raw.hasPrefix("processActive:") {
       let names = String(raw.dropFirst("processActive:".count))
       return text(

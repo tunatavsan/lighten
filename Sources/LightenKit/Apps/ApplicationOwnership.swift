@@ -1,6 +1,10 @@
 import Darwin
 import Foundation
 
+private enum ApplicationOwnershipFailure: Error {
+  case traversalLimitExceeded
+}
+
 /// A signed code location and the installed package to which it belongs.
 /// Nested helpers belong to their containing package, rather than becoming a
 /// second independent owner of that package's application-group data.
@@ -32,10 +36,13 @@ struct ApplicationOwnershipInventory {
   let issues: [ApplicationOwnershipIssue]
   let roots: [String: FileIdentity]
   let directories: [String: FileIdentity]
-  var thirdPartyComplete: Bool { issues.allSatisfy(\.systemScope) }
+  var metadataIssues: [ApplicationMetadataIssue] = []
+  var thirdPartyComplete: Bool {
+    issues.allSatisfy(\.systemScope) && metadataIssues.allSatisfy { $0.path.hasPrefix("/System/") }
+  }
 
   static func collect(
-    roots: [String], applications: [InstalledApplication],
+    roots: [String], applications: [InstalledApplication], additionalCodePaths: [String] = [],
     onNativeRead: (@Sendable (String) -> Void)? = nil
   ) -> Self {
     var candidates: [ApplicationOwnerCandidate] = []
@@ -43,12 +50,18 @@ struct ApplicationOwnershipInventory {
     var visitedDirectories: Set<String> = []
     var complete = true
     var issues: [ApplicationOwnershipIssue] = []
+    var metadataIssues: [ApplicationMetadataIssue] = []
     var rootIdentities: [String: FileIdentity] = [:]
     var directoryIdentities: [String: FileIdentity] = [:]
-    func unavailable(_ path: String, _ code: Int32 = EIO) {
+    func unavailable(_ path: String, _ code: Int32) {
       complete = false
       let issue = ApplicationOwnershipIssue(path: path, code: code)
       if !issues.contains(issue) { issues.append(issue) }
+    }
+    func uncertain(_ path: String, _ error: any Error) {
+      complete = false
+      let issue = ApplicationMetadataIssue(path: path, error: error)
+      if !metadataIssues.contains(issue) { metadataIssues.append(issue) }
     }
     var visited = 0
     let limit = 2_000_000
@@ -64,11 +77,11 @@ struct ApplicationOwnershipInventory {
     ) {
       guard visitedDirectories.insert(path).inserted else { return }
       guard !Task.isCancelled else {
-        unavailable(path, ECANCELED)
+        uncertain(path, CancellationError())
         return
       }
       guard depth <= 128, visited < limit else {
-        unavailable(path, EOVERFLOW)
+        uncertain(path, ApplicationOwnershipFailure.traversalLimitExceeded)
         return
       }
       let parent: Int32
@@ -83,12 +96,16 @@ struct ApplicationOwnershipInventory {
         entryName = "."
         ownsParent = true
         guard parent >= 0 else {
-          unavailable(path, errno == 0 ? EIO : errno)
+          unavailable(path, errno)
           return
         }
       } else {
-        guard let opened = try? DescriptorFileSystem.openParent(of: path) else {
-          unavailable(path, errno == 0 ? EIO : errno)
+        let opened: (Int32, String)
+        do { opened = try DescriptorFileSystem.openParent(of: path) } catch FileSystemFailure.systemCall(_, let code) {
+          unavailable(path, code)
+          return
+        } catch {
+          uncertain(path, error)
           return
         }
         (parent, entryName) = opened
@@ -97,13 +114,13 @@ struct ApplicationOwnershipInventory {
       defer { if ownsParent { close(parent) } }
       let directoryFD = openat(parent, entryName, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY)
       guard directoryFD >= 0 else {
-        unavailable(path, errno == 0 ? EIO : errno)
+        unavailable(path, errno)
         return
       }
       defer { close(directoryFD) }
       var opened = stat()
       guard fstat(directoryFD, &opened) == 0 else {
-        unavailable(path, errno == 0 ? EIO : errno)
+        unavailable(path, errno)
         return
       }
       let identity = DescriptorFileSystem.identity(from: opened)
@@ -111,7 +128,7 @@ struct ApplicationOwnershipInventory {
         identity.flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0,
         (try? DescriptorFileSystem.identity(name: entryName, relativeTo: parent)) == identity
       else {
-        unavailable(path, ESTALE)
+        uncertain(path, FileSystemFailure.changedDuringInspection)
         return
       }
       let children: [String]
@@ -119,13 +136,13 @@ struct ApplicationOwnershipInventory {
         unavailable(path, code)
         return
       } catch {
-        unavailable(path, EIO)
+        uncertain(path, error)
         return
       }
       directoryIdentities[path] = identity
       visited += children.count
       guard visited <= limit else {
-        unavailable(path, EOVERFLOW)
+        uncertain(path, ApplicationOwnershipFailure.traversalLimitExceeded)
         return
       }
       let folded = (path as NSString).lastPathComponent.lowercased(with: Locale(identifier: "en_US_POSIX"))
@@ -138,7 +155,7 @@ struct ApplicationOwnershipInventory {
       }
       for name in children {
         if Task.isCancelled {
-          unavailable(path, ECANCELED)
+          uncertain(path, CancellationError())
           break
         }
         let childPath = path + "/" + name
@@ -151,7 +168,7 @@ struct ApplicationOwnershipInventory {
         guard child.device == identity.device,
           child.flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0
         else {
-          unavailable(childPath, child.device != identity.device ? EXDEV : EACCES)
+          uncertain(childPath, RelatedFailure.unsupportedInstalledData)
           continue
         }
         switch child.kind {
@@ -167,8 +184,14 @@ struct ApplicationOwnershipInventory {
           }
           let target = String(cString: resolved)
           free(resolved)
-          guard let targetIdentity = try? DescriptorFileSystem.identity(at: target) else {
-            unavailable(childPath, errno == 0 ? EIO : errno)
+          let targetIdentity: FileIdentity
+          do { targetIdentity = try DescriptorFileSystem.identity(at: target) } catch FileSystemFailure.systemCall(
+            _, let code)
+          {
+            unavailable(childPath, code)
+            continue
+          } catch {
+            uncertain(childPath, error)
             continue
           }
           if targetIdentity.kind == .directory {
@@ -178,25 +201,22 @@ struct ApplicationOwnershipInventory {
               target, package: target.hasPrefix((owningPackage ?? "") + "/") ? owningPackage : target,
               mainExecutable: nil, depth: depth + 1, expected: targetIdentity)
           } else if targetIdentity.kind == .regular {
-            guard let (targetParent, targetName) = try? DescriptorFileSystem.openParent(of: target) else {
-              unavailable(target, errno == 0 ? EIO : errno)
-              continue
-            }
-            let native = isNativeExecutable(
-              name: targetName, relativeTo: targetParent, expected: targetIdentity,
-              onRead: { onNativeRead?(target) })
-            close(targetParent)
-            if let native {
+            do {
+              let (targetParent, targetName) = try DescriptorFileSystem.openParent(of: target)
+              defer { close(targetParent) }
+              let native = try isNativeExecutable(
+                name: targetName, relativeTo: targetParent, expected: targetIdentity,
+                onRead: { onNativeRead?(target) })
               if native {
                 let owner = target.hasPrefix((owningPackage ?? "") + "/") ? owningPackage : nil
                 add(target, package: owner ?? target)
               }
-            } else {
-              unavailable(childPath, errno == 0 ? EIO : errno)
+            } catch FileSystemFailure.systemCall(_, let code) { unavailable(childPath, code) } catch {
+              uncertain(childPath, error)
             }
           }
           if (try? DescriptorFileSystem.identity(name: name, relativeTo: directoryFD)) != child {
-            unavailable(childPath, errno == 0 ? EIO : errno)
+            uncertain(childPath, FileSystemFailure.changedDuringInspection)
           }
         case .regular:
           if name.hasSuffix(".plist"), path.hasSuffix("/LaunchAgents") || path.hasSuffix("/LaunchDaemons") {
@@ -204,73 +224,85 @@ struct ApplicationOwnershipInventory {
               guard let data = try SecureMetadataFile.read(path: childPath, limit: 1024 * 1024, ownerOnly: false),
                 let value = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
               else {
-                unavailable(childPath, EIO)
+                uncertain(childPath, ApplicationMetadataFailure.invalidInfoPlist)
                 continue
               }
               if let program = (value["Program"] as? String) ?? (value["ProgramArguments"] as? [String])?.first {
                 guard program.hasPrefix("/"), (try? DescriptorFileSystem.validatedComponents(program)) != nil else {
-                  unavailable(childPath, EINVAL)
+                  uncertain(childPath, FileSystemFailure.invalidPath)
                   continue
                 }
-                let target = try DescriptorFileSystem.identity(at: program)
-                guard target.kind == .regular else {
-                  unavailable(program, EINVAL)
+                // A launch record is a read-only lead. Inspect the physical
+                // code behind executable links; action paths never follow it.
+                guard let resolved = realpath(program, nil) else {
+                  if errno != ENOENT { unavailable(program, errno) }
                   continue
                 }
-                let (targetParent, targetName) = try DescriptorFileSystem.openParent(of: program)
-                let native = isNativeExecutable(
+                let physical = String(cString: resolved)
+                free(resolved)
+                let target = try DescriptorFileSystem.identity(at: physical)
+                guard target.kind == .regular else { continue }
+                let (targetParent, targetName) = try DescriptorFileSystem.openParent(of: physical)
+                defer { close(targetParent) }
+                let native = try isNativeExecutable(
                   name: targetName, relativeTo: targetParent, expected: target,
-                  onRead: { onNativeRead?(program) })
-                close(targetParent)
-                if native == true {
-                  let app = applications.first { program.hasPrefix(($0.linkTarget ?? $0.path) + "/") }
-                  add(program, package: app?.path ?? program)
-                } else if native == nil {
-                  unavailable(program, errno == 0 ? EIO : errno)
+                  onRead: { onNativeRead?(physical) })
+                guard let checked = realpath(program, nil) else {
+                  unavailable(program, errno)
+                  continue
+                }
+                let currentPhysical = String(cString: checked)
+                free(checked)
+                guard currentPhysical == physical else { throw FileSystemFailure.changedDuringInspection }
+                if native {
+                  let app = applications.first { physical.hasPrefix(($0.linkTarget ?? $0.path) + "/") }
+                  add(physical, package: app?.path ?? physical)
                 }
               }
               if (try? DescriptorFileSystem.identity(name: name, relativeTo: directoryFD)) != child {
-                unavailable(childPath, ESTALE)
+                uncertain(childPath, FileSystemFailure.changedDuringInspection)
               }
             } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT {
               // A removed executable cannot own a current application group.
               continue
             } catch FileSystemFailure.systemCall(_, let code) { unavailable(childPath, code) } catch {
-              unavailable(childPath, EIO)
+              uncertain(childPath, error)
             }
           }
           if childPath != executable {
-            if let native = isNativeExecutable(
-              name: name, relativeTo: directoryFD, expected: child, mode: childDetails.st_mode,
-              onRead: { onNativeRead?(childPath) })
-            {
+            do {
+              let native = try isNativeExecutable(
+                name: name, relativeTo: directoryFD, expected: child, mode: childDetails.st_mode,
+                onRead: { onNativeRead?(childPath) })
               if native { add(childPath, package: owningPackage ?? childPath) }
-            } else {
-              unavailable(childPath, errno == 0 ? EIO : errno)
+            } catch FileSystemFailure.systemCall(_, let code) { unavailable(childPath, code) } catch {
+              uncertain(childPath, error)
             }
           }
         case .other: break
         }
       }
       var finished = stat()
-      if fstat(directoryFD, &finished) != 0 || DescriptorFileSystem.identity(from: finished) != identity
+      if fstat(directoryFD, &finished) != 0 {
+        unavailable(path, errno)
+      } else if DescriptorFileSystem.identity(from: finished) != identity
         || (try? DescriptorFileSystem.identity(name: entryName, relativeTo: parent)) != identity
       {
-        unavailable(path, errno == 0 ? EIO : errno)
+        uncertain(path, FileSystemFailure.changedDuringInspection)
       }
     }
     for root in roots {
       do {
         let identity = try DescriptorFileSystem.identity(at: root)
         guard identity.kind == .directory else {
-          unavailable(root, ENOTDIR)
+          uncertain(root, RelatedFailure.unsupportedInstalledData)
           continue
         }
         rootIdentities[root] = identity
         visit(root, package: nil, mainExecutable: nil, depth: 0, expected: identity)
       } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT {
         continue
-      } catch FileSystemFailure.systemCall(_, let code) { unavailable(root, code) } catch { unavailable(root) }
+      } catch FileSystemFailure.systemCall(_, let code) { unavailable(root, code) } catch { uncertain(root, error) }
     }
     for app in applications {
       let physical = app.linkTarget ?? app.path
@@ -281,9 +313,12 @@ struct ApplicationOwnershipInventory {
         }
       }
     }
+    for path in additionalCodePaths where !seen.contains(path) {
+      visit(path, package: path, mainExecutable: nil, depth: 0)
+    }
     return Self(
       candidates: candidates.sorted { $0.path < $1.path }, complete: complete,
-      issues: issues, roots: rootIdentities, directories: directoryIdentities)
+      issues: issues, roots: rootIdentities, directories: directoryIdentities, metadataIssues: metadataIssues)
   }
 
   private static func names(relativeTo fd: Int32) throws -> [String] {
@@ -313,34 +348,39 @@ struct ApplicationOwnershipInventory {
   private static func isNativeExecutable(
     name: String, relativeTo parent: Int32, expected: FileIdentity, mode suppliedMode: mode_t? = nil,
     onRead: () -> Void
-  ) -> Bool? {
+  ) throws -> Bool {
     let mode: mode_t
     if let suppliedMode {
       mode = suppliedMode
     } else {
       var details = stat()
-      guard fstatat(parent, name, &details, AT_SYMLINK_NOFOLLOW_ANY) == 0,
-        DescriptorFileSystem.identity(from: details) == expected
-      else { return nil }
+      guard fstatat(parent, name, &details, AT_SYMLINK_NOFOLLOW_ANY) == 0 else {
+        throw FileSystemFailure.systemCall("fstatat", errno)
+      }
+      guard DescriptorFileSystem.identity(from: details) == expected else {
+        throw FileSystemFailure.changedDuringInspection
+      }
       mode = details.st_mode
     }
-    guard mode & S_IFMT == S_IFREG else { return nil }
+    guard mode & S_IFMT == S_IFREG else { throw FileSystemFailure.changedDuringInspection }
     guard mode & (S_IXUSR | S_IXGRP | S_IXOTH) != 0 else { return false }
     let fd = openat(parent, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW_ANY)
-    guard fd >= 0 else { return nil }
+    guard fd >= 0 else { throw FileSystemFailure.systemCall("openat", errno) }
     defer { close(fd) }
     var details = stat()
-    guard fstat(fd, &details) == 0, DescriptorFileSystem.identity(from: details) == expected,
+    guard fstat(fd, &details) == 0 else { throw FileSystemFailure.systemCall("fstat", errno) }
+    guard DescriptorFileSystem.identity(from: details) == expected,
       details.st_mode & S_IFMT == S_IFREG
-    else { return nil }
+    else { throw FileSystemFailure.changedDuringInspection }
     onRead()
     var magic: UInt32 = 0
     let count = read(fd, &magic, MemoryLayout<UInt32>.size)
-    guard count >= 0 else { return nil }
+    guard count >= 0 else { throw FileSystemFailure.systemCall("read", errno) }
     var finished = stat()
-    guard fstat(fd, &finished) == 0, DescriptorFileSystem.identity(from: finished) == expected,
+    guard fstat(fd, &finished) == 0 else { throw FileSystemFailure.systemCall("fstat", errno) }
+    guard DescriptorFileSystem.identity(from: finished) == expected,
       (try? DescriptorFileSystem.identity(name: name, relativeTo: parent)) == expected
-    else { return nil }
+    else { throw FileSystemFailure.changedDuringInspection }
     return details.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH) != 0
       && count == MemoryLayout<UInt32>.size
       && [0xfeed_face, 0xfeed_facf, 0xcefa_edfe, 0xcffa_edfe, 0xcafe_babe, 0xbeba_feca, 0xcafe_babf, 0xbfba_feca]

@@ -30,6 +30,9 @@ private final class ShellExit: Sendable {
 }
 
 private enum ShellFixtureFailure: Error { case notReady }
+private enum ExecutableFixtureFailure: Error {
+  case exitedBeforeObservation(status: Int32, diagnostic: String)
+}
 
 /// The shell holds its descriptor or cwd until the test sends its finish line.
 private func withShell<Result>(
@@ -58,6 +61,52 @@ private func withShell<Result>(
     await finish(process, input, exit)
     throw error
   }
+}
+
+@Test("A selected folder observes a native helper inside nested opaque packages")
+func applicationActivityUsesSelectedRootForNestedHelper() async throws {
+  let home = try activityFixture()
+  defer { try? FileManager.default.removeItem(atPath: home) }
+  let root = home + "/DeviceSupport"
+  let helper = root + "/LightenQA-framework.framework/Helpers/LightenQA-nested.app/Contents/MacOS/LightenQA-helper"
+  try FileManager.default.createDirectory(
+    atPath: (helper as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+  try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: helper)
+  let process = Process()
+  let input = Pipe()
+  let errors = Pipe()
+  let exit = ShellExit()
+  process.executableURL = URL(fileURLWithPath: helper)
+  process.arguments = ["30"]
+  process.currentDirectoryURL = URL(fileURLWithPath: home)
+  process.environment = ["LC_ALL": "C", "LANG": "C", "PATH": "/usr/bin:/bin"]
+  process.standardInput = input
+  process.standardOutput = FileHandle.nullDevice
+  process.standardError = errors
+  process.terminationHandler = { _ in exit.observed.withLock { $0 = true } }
+  try process.run()
+  do {
+    let source = NativeApplicationActivitySource()
+    var observed = ApplicationActivity(state: .unknown)
+    let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+    repeat {
+      observed = await source.activity(applicationPath: root)
+      if observed.state == .active { break }
+      if !process.isRunning {
+        let data = errors.fileHandleForReading.readDataToEndOfFile()
+        throw ExecutableFixtureFailure.exitedBeforeObservation(
+          status: process.terminationStatus, diagnostic: String(decoding: data, as: UTF8.self))
+      }
+      try await Task.sleep(for: .milliseconds(10))
+    } while ContinuousClock.now < deadline
+    #expect(observed.state == .active)
+    #expect(observed.processNames == ["LightenQA-helper"])
+    #expect(await source.activity(applicationPath: root + "-sibling").state != .active)
+  } catch {
+    await finish(process, input, exit)
+    throw error
+  }
+  await finish(process, input, exit)
 }
 
 private func requireReady(_ output: FileHandle) async throws {

@@ -37,6 +37,7 @@ final class RealUseSurvey {
   private var completedFolderRoots = 0
   private var listingComplete = false
   private var ownershipComplete = false
+  private var metadataIssueCount = 0
   private var foldersComplete = true
   private var foldersFinished = false
   private var discoveryComplete = false
@@ -175,7 +176,7 @@ final class RealUseSurvey {
       let checking = outcome.plan == nil ? nil : elapsed(checkedAt)
       validationSeconds += checking ?? 0
       activeValidationStarted = nil
-      result(
+      await result(
         path: item.path, scope: "space", owner: nil, rejections: outcome.rejections + validation,
         planned: outcome.plan?.items.contains { $0.sourcePath == item.path } == true,
         planning: planning, validation: checking)
@@ -211,6 +212,12 @@ final class RealUseSurvey {
             "systemScope": issue.systemScope,
           ])
         }
+        metadataIssueCount = inventory.metadataIssues.count
+        for issue in inventory.metadataIssues {
+          line([
+            "type": "applicationMetadataIssue", "path": issue.path, "reason": issue.reason,
+          ])
+        }
       case .measured(let current):
         reports = current
         registerReports(current)
@@ -242,12 +249,12 @@ final class RealUseSurvey {
       stage = "application-planning"
       progress(path: report.path)
       guard let app = applications.first(where: { $0.path == report.path }) else {
-        result(
+        await result(
           path: report.path, scope: "application", owner: report.path,
           rejections: [.init(.missingMetadata, path: report.path, ruleID: "unidentified-application")],
           planned: false, planning: nil, validation: nil)
         for candidate in report.related {
-          result(
+          await result(
             path: candidate.path, scope: "installedRelated", owner: report.path,
             rejections: [.init(.missingMetadata, path: report.path, ruleID: "unidentified-application")],
             planned: false, planning: nil, validation: nil)
@@ -275,13 +282,13 @@ final class RealUseSurvey {
         !roots.contains { Self.covers(root: $0, path: rejection.path) }
       }
       let packageRefusals = rejections.filter { Self.covers(root: report.path, path: $0.path) } + unassigned
-      result(
+      await result(
         path: report.path, scope: "application", owner: report.path, rejections: packageRefusals,
         planned: outcome.plan?.items.contains { $0.sourcePath == report.path } == true,
         planning: planning, validation: checking)
       for candidate in report.related {
         let refusals = rejections.filter { Self.covers(root: candidate.path, path: $0.path) }
-        result(
+        await result(
           path: candidate.path, scope: "installedRelated", owner: report.path,
           rejections: packageRefusals.isEmpty ? refusals : packageRefusals + refusals,
           planned: outcome.plan?.items.contains { $0.sourcePath == candidate.path } == true,
@@ -308,7 +315,7 @@ final class RealUseSurvey {
       let checking = outcome.plan == nil ? nil : elapsed(checkedAt)
       validationSeconds += checking ?? 0
       activeValidationStarted = nil
-      result(
+      await result(
         path: candidate.path, scope: kind, owner: nil,
         rejections: outcome.rejections + validation,
         planned: outcome.plan?.items.contains { $0.sourcePath == candidate.path } == true,
@@ -375,7 +382,10 @@ final class RealUseSurvey {
         refusals.append(
           .init(.processActive, path: item.sourcePath, ruleID: observation.processNames.joined(separator: ", ")))
       } else if observation.state == .unknown {
-        refusals.append(.init(.activityUnavailable, path: item.sourcePath))
+        refusals.append(
+          .init(
+            .activityUnavailable, path: item.sourcePath,
+            ruleID: observation.processNames.isEmpty ? nil : observation.processNames.joined(separator: ", ")))
       }
       if item.containsOpaquePackages {
         let activity = await NativeApplicationActivitySource().activity(applicationPath: item.sourcePath)
@@ -383,7 +393,10 @@ final class RealUseSurvey {
           refusals.append(
             .init(.processActive, path: item.sourcePath, ruleID: activity.processNames.joined(separator: ", ")))
         } else if activity.state == .unknown {
-          refusals.append(.init(.activityUnavailable, path: item.sourcePath))
+          refusals.append(
+            .init(
+              .activityUnavailable, path: item.sourcePath,
+              ruleID: activity.processNames.isEmpty ? nil : activity.processNames.joined(separator: ", ")))
         }
       }
     }
@@ -412,9 +425,10 @@ final class RealUseSurvey {
   private func result(
     path: String, scope: String, owner: String?, rejections: [PlanRejection],
     planned: Bool, planning: Double?, validation: Double?
-  ) {
+  ) async {
     let id = scope + ":" + (owner ?? "") + ":" + path
-    let refusalRows = rejections.map(refusal)
+    var refusalRows: [[String: Any]] = []
+    for rejection in rejections { refusalRows.append(await refusal(rejection)) }
     let outcome: String
     if rejections.isEmpty && planned {
       outcome = "actionable"
@@ -436,7 +450,7 @@ final class RealUseSurvey {
     ])
   }
 
-  private func refusal(_ rejection: PlanRejection) -> [String: Any] {
+  private func refusal(_ rejection: PlanRejection) async -> [String: Any] {
     let named = rejection.ruleID ?? ""
     let code = named.hasPrefix("errno:") ? Int32(named.dropFirst(6)) : nil
     var info = stat()
@@ -450,12 +464,34 @@ final class RealUseSurvey {
           .matches(rejection.path.lowercased(with: locale))
     }
     var names: [String] = []
+    var processEvidenceSource: String?
+    var nativeExecutableState: String?
+    var currentUserDescriptorState: String?
     if rejection.reason == .processActive {
-      names = named.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+      // A native executable observation includes helpers and other users' processes.
+      // A bundle ID lookup cannot corroborate those process names.
+      let executable = await NativeApplicationActivitySource().activity(applicationPath: rejection.path)
+      nativeExecutableState = String(describing: executable.state)
+      if executable.state == .active, !named.isEmpty,
+        executable.processNames.joined(separator: ", ") == named
+      {
+        names = executable.processNames
+        processEvidenceSource = "nativeExecutablePath"
+      } else {
+        let descriptors = await NativeSpaceActivitySource().activity(rootPath: rejection.path)
+        currentUserDescriptorState = String(describing: descriptors.state)
+        if descriptors.state == .active, !named.isEmpty,
+          descriptors.processNames.joined(separator: ", ") == named
+        {
+          names = descriptors.processNames
+          processEvidenceSource = "nativeCurrentUserDescriptors"
+        }
+      }
     } else if rejection.reason == .applicationRunning {
       names = NSWorkspace.shared.runningApplications.filter {
         $0.bundleIdentifier?.caseInsensitiveCompare(named) == .orderedSame
       }.compactMap(\.localizedName)
+      if !names.isEmpty { processEvidenceSource = "workspaceBundleIdentifier" }
     }
     let legit: Bool
     switch rejection.reason {
@@ -464,7 +500,7 @@ final class RealUseSurvey {
     case .processActive, .applicationRunning: legit = !names.isEmpty
     case .needsAdministrator: legit = owner.map { $0 != geteuid() } ?? false
     case .unreadableFolder, .userPermissionDenied:
-      legit = code != nil && code != 0
+      legit = code.map { $0 > 0 } ?? false
     default: legit = false
     }
     return [
@@ -473,6 +509,9 @@ final class RealUseSurvey {
       "ruleID": rejection.reason == .lightenItself
         ? LightenIdentity.bundleIdentifier as Any : neverRule?.id as Any? ?? NSNull(),
       "processNames": names, "errno": code as Any? ?? NSNull(),
+      "processEvidenceSource": processEvidenceSource as Any? ?? NSNull(),
+      "nativeExecutableState": nativeExecutableState as Any? ?? NSNull(),
+      "currentUserDescriptorState": currentUserDescriptorState as Any? ?? NSNull(),
       "observedStatErrno": observedErrno as Any? ?? NSNull(), "ownerUID": owner as Any? ?? NSNull(),
       "classification": legit ? "legitimate" : "ERROR",
       "appleSystemPath": rejection.path.hasPrefix("/System/"),
@@ -519,6 +558,7 @@ final class RealUseSurvey {
     }
     line([
       "type": "summary", "schema": 1, "completed": completed,
+      "metadataIssueCount": metadataIssueCount,
       "timedOut": timedOut, "truncated": !completed, "coverageComplete": coverage, "stage": stage,
       "elapsedSeconds": elapsed(started),
       "folderScanSeconds": folderScanStarted.map(elapsed) ?? folderScanSeconds,
