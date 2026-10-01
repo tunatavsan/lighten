@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 
 @testable import LightenKit
@@ -125,7 +126,7 @@ struct ApplicationOwnershipTests {
     #expect(candidate.classification == .shared && !candidate.canSelect && !candidate.defaultSelected)
     #expect(throws: RelatedFailure.self) { try service.planInstalled(app: app, candidate: candidate) }
   }
-  @Test("Descriptor traversal retains raw native helpers and linked owners, and refuses unresolved links")
+  @Test("Descriptor traversal retains native and linked owners while ignoring only dangling links")
   func descriptorTraversalRetainsCoverage() throws {
     let home = try ownerFixture()
     defer { try? FileManager.default.removeItem(atPath: home) }
@@ -154,7 +155,116 @@ struct ApplicationOwnershipTests {
           ApplicationOwnerCandidate(path: otherHelper, packagePath: other),
         ].sorted { $0.path < $1.path })
     #expect(symlink(home + "/missing", helpers + "/LightenQA-unresolved") == 0)
-    #expect(!ApplicationOwnershipInventory.collect(roots: [apps], applications: []).complete)
+    #expect(ApplicationOwnershipInventory.collect(roots: [apps], applications: []).complete)
+    let loop = helpers + "/LightenQA-loop"
+    #expect(symlink(loop, loop) == 0)
+    let unresolved = ApplicationOwnershipInventory.collect(roots: [apps], applications: [])
+    #expect(!unresolved.complete)
+    #expect(unresolved.issues.contains { $0.path == loop && $0.code == ELOOP })
+  }
+
+  @Test("Non-executable resources never receive a native-header read")
+  func nativeHeaderReadsOnlyExecutableFiles() throws {
+    let home = try ownerFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let app = home + "/Applications/LightenQA-selected.app"
+    try ownerApp(app, id: "qa.lighten.selected")
+    let native = app + "/Contents/LightenQA-native"
+    let resource = app + "/Contents/LightenQA-resource"
+    let magic = Data([0xcf, 0xfa, 0xed, 0xfe])
+    try magic.write(to: URL(fileURLWithPath: native))
+    try magic.write(to: URL(fileURLWithPath: resource))
+    #expect(chmod(native, 0o755) == 0 && chmod(resource, 0o644) == 0)
+    let reads = Mutex<[String]>([])
+    let owners = ApplicationOwnershipInventory.collect(
+      roots: [home + "/Applications"], applications: [],
+      onNativeRead: { path in reads.withLock { $0.append(path) } })
+    #expect(owners.complete)
+    #expect(reads.withLock { $0 } == [native])
+    #expect(owners.candidates.contains { $0.path == native })
+    #expect(!owners.candidates.contains { $0.path == resource })
+  }
+
+  @Test("A real unreadable third-party directory preserves its scoped errno without blocking exact-ID data")
+  func unreadableOwnershipIsScoped() async throws {
+    let home = try ownerFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let apps = home + "/Applications"
+    let appPath = apps + "/LightenQA-selected.app"
+    try ownerApp(appPath, id: "qa.lighten.selected")
+    let unreadable = home + "/Library/Helpers/LightenQA-unreadable"
+    try FileManager.default.createDirectory(atPath: unreadable, withIntermediateDirectories: true)
+    #expect(chmod(unreadable, 0) == 0)
+    defer { _ = chmod(unreadable, 0o700) }
+    let cache = RelatedLocation.caches.path(domain: "qa.lighten.selected", homeDirectory: home)
+    try FileManager.default.createDirectory(atPath: cache, withIntermediateDirectories: true)
+    let service = RelatedDataService(
+      homeDirectory: home, applicationRoots: [apps], ownershipApplicationRoots: [apps, unreadable],
+      writeVerifiedReceipts: false, signingMetadata: { _ in nil },
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
+    let inventory = service.inventory()
+    #expect(inventory.complete && !inventory.ownershipComplete)
+    #expect(inventory.ownershipIssues.contains { $0.path == unreadable && $0.code == EACCES && !$0.systemScope })
+    let app = try #require(service.application(at: appPath))
+    let candidate = try #require((await service.discover(for: app)).first { $0.path == cache })
+    #expect(candidate.defaultSelected)
+    #expect(try service.planInstalled(app: app, candidate: candidate).items.count == 1)
+  }
+
+  @Test("System uncertainty does not poison third-party group ownership")
+  func systemFailureIsSeparateFromThirdParty() throws {
+    let home = try ownerFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let chosen = home + "/Applications/LightenQA-selected.app"
+    try ownerApp(chosen, id: "qa.lighten.selected")
+    let groupID = "group.qa.lighten.owned"
+    let service = RelatedDataService(
+      homeDirectory: home, applicationRoots: [home + "/Applications"], writeVerifiedReceipts: false,
+      signingMetadata: { _ in ApplicationSigningMetadata(teamID: nil, groupIdentifiers: [groupID]) })
+    let app = try #require(service.application(at: chosen))
+    let owners = ApplicationOwnershipInventory(
+      candidates: [ApplicationOwnerCandidate(path: chosen, packagePath: chosen)], complete: false,
+      issues: [ApplicationOwnershipIssue(path: "/System/Library/CoreServices/unreadable", code: EACCES)], roots: [:],
+      directories: [:])
+    #expect(owners.thirdPartyComplete)
+    let inventory = BundleInventory(
+      applications: [app], unidentifiedPaths: [], complete: true, observedAt: Date(),
+      ownershipCandidates: owners.candidates, ownershipComplete: owners.thirdPartyComplete,
+      ownershipIssues: owners.issues)
+    #expect(
+      service.installedPolicy(
+        app: app,
+        relatedPath: RelatedLocation.groupContainers.path(
+          domain: groupID, homeDirectory: home), inventory: inventory) == .relatedGroupContainer)
+  }
+
+  @Test("Launch plist executable leads include code outside the enumerated roots")
+  func launchProgramLeadAddsOwner() throws {
+    let home = try ownerFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let agents = home + "/Library/LaunchAgents"
+    try FileManager.default.createDirectory(atPath: agents, withIntermediateDirectories: true)
+    let program = home + "/LightenQA-helper"
+    try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: program)
+    try PropertyListSerialization.data(
+      fromPropertyList: ["ProgramArguments": [program, "1"]], format: .xml, options: 0
+    )
+    .write(to: URL(fileURLWithPath: agents + "/qa.lighten.helper.plist"))
+    let inventory = ApplicationOwnershipInventory.collect(roots: [agents], applications: [])
+    #expect(inventory.complete)
+    #expect(inventory.candidates == [ApplicationOwnerCandidate(path: program, packagePath: program)])
+  }
+
+  @Test(
+    "Actual System code-owner traversal ignores stock dangling links",
+    .enabled(
+      if: ProcessInfo.processInfo.environment["CI"] == nil,
+      "The local acceptance gate reads this Mac's real System tree; CI has a different immutable image."))
+  func actualSystemDanglingLinksReadOnly() {
+    let inventory = ApplicationOwnershipInventory.collect(roots: ["/System/Library/CoreServices"], applications: [])
+    #expect(inventory.complete)
+    #expect(!inventory.candidates.isEmpty)
+    #expect(!inventory.issues.contains { $0.code == ENOENT })
   }
 
 }

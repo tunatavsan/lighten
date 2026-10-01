@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 
 @testable import LightenKit
@@ -97,6 +98,7 @@ func inventoryPrecedesMeasurement() async throws {
     case .completed(let inventory, let reports):
       #expect(inventory.complete)
       finished = reports
+    case .session, .related, .ownershipReady: break
     }
   }
   #expect(sawInventory)
@@ -278,7 +280,7 @@ func appOtherDataUsesRelatedProof() async throws {
   }
 }
 
-@Test("Linked apps resolve read-only; an unresolvable link keeps the inventory incomplete")
+@Test("Linked apps resolve read-only; hidden app folders remain incomplete and dangling links contain no owner")
 func linkedApplicationsResolveReadOnly() throws {
   let fixture = try AppsFixture()
   defer { fixture.remove() }
@@ -302,7 +304,7 @@ func linkedApplicationsResolveReadOnly() throws {
   #expect(!fixture.service.inventory().complete)
   #expect(unlink(fixture.appRoot + "/More Apps") == 0)
   #expect(symlink(fixture.home + "/missing.app", fixture.appRoot + "/Broken.app") == 0)
-  #expect(!fixture.service.inventory().complete)
+  #expect(fixture.service.inventory().complete)
 }
 
 @Test("An app known elsewhere keeps its data from being called a leftover")
@@ -389,4 +391,303 @@ func wholeApplicationMovesWhenClosed() async throws {
   let item = try #require(try await history.reconcile().items.first { $0.planID == second.id })
   try await history.undo(planID: item.planID, itemID: item.itemID)
   #expect(FileManager.default.fileExists(atPath: fixture.app + "/Contents/Info.plist"))
+}
+
+@Test("A discovery session shares one owner inventory across discovery, reviews, plan and preparation")
+func oneInventoryAcrossSession() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let walks = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil },
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    ownershipCollected: { walks.withLock { $0 += 1 } })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  var completed: [ApplicationReport] = []
+  var sawSession = false
+  for await event in await session.events() {
+    if case .session(let emitted) = event { sawSession = emitted.id == session.id }
+    if case .completed(_, let reports) = event { completed = reports }
+  }
+  #expect(sawSession)
+  #expect(walks.withLock { $0 } == 1)
+  let app = try #require(service.application(at: fixture.app))
+  let candidate = try #require(completed.first { $0.path == fixture.app }?.related.first { $0.path == fixture.cache })
+  for _ in 0..<2 {
+    let review = try await session.relatedReview(path: app.path)
+    #expect(review?.application == app)
+    #expect(review?.candidates.first { $0.path == fixture.cache }?.defaultSelected == true)
+  }
+  let available = await session.makeAvailableUninstallPlan(app: app, selectedRelated: [candidate])
+  let plan = try #require(available.plan)
+  #expect(available.rejections.isEmpty)
+  #expect(await session.validatePlan(plan).isEmpty)
+  let prepared = service.prepareInstalledOwners(plan: plan)
+  #expect(prepared.failures.isEmpty && prepared.owners.count == 1)
+  #expect(walks.withLock { $0 } == 1)
+  await session.cancel()
+  // Cancelling a scan invalidates future requests, not a concrete plan which
+  // retains its exact proof and fresh validation requirements.
+  #expect(service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+  #expect(walks.withLock { $0 } == 1)
+  #expect((await session.makeAvailableUninstallPlan(app: app, selectedRelated: [])).plan == nil)
+}
+
+@Test("Unsigned package-only preparation never builds an owner inventory")
+func packageOnlyNeedsNoOwnershipWalk() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let walks = Mutex(0)
+  let signatures = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in
+      signatures.withLock { $0 += 1 }
+      return nil
+    },
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    ownershipCollected: { walks.withLock { $0 += 1 } })
+  let app = try #require(service.application(at: fixture.app))
+  let session = ApplicationDiscovery(related: service).scanSession()
+  let available = await session.makeAvailableUninstallPlan(app: app, selectedRelated: [])
+  let plan = try #require(available.plan)
+  #expect(available.rejections.isEmpty && plan.items.map(\.sourcePath) == [fixture.app])
+  #expect(service.prepareInstalledOwners(plan: plan).owners.isEmpty)
+  #expect(await session.validatePlan(plan).isEmpty)
+  #expect(try service.planUninstall(app: app, selectedRelated: []).items.count == 1)
+  #expect(walks.withLock { $0 } == 0 && signatures.withLock { $0 } == 0)
+  await session.cancel()
+}
+
+private func ownershipWalkStarted(_ signal: DispatchSemaphore) -> Bool {
+  signal.wait(timeout: .now() + 2) == .success
+}
+
+@Test("Selected standard data is published while the background owner walk is stalled")
+func selectedReviewPrecedesOwnership() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let started = DispatchSemaphore(value: 0)
+  let release = DispatchSemaphore(value: 0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil },
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    ownershipCollected: {
+      started.signal()
+      _ = release.wait(timeout: .now() + 5)
+    })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  let observed = Task { for await _ in await session.events() {} }
+  // The semaphore is a test-only stall; no elapsed-time product claim is made.
+  let didStart = await Task.detached { ownershipWalkStarted(started) }.value
+  #expect(didStart)
+  defer { release.signal() }
+  let callbacks = Mutex<[ApplicationRelatedReview]>([])
+  let review = try await session.relatedReview(path: fixture.app) { value in
+    callbacks.withLock { $0.append(value) }
+  }
+  #expect(review?.ownershipPending == true)
+  #expect(review?.candidates.first { $0.path == fixture.cache }?.defaultSelected == true)
+  #expect(callbacks.withLock { !$0.isEmpty && $0.allSatisfy(\.ownershipPending) })
+  let app = try #require(service.application(at: fixture.app))
+  let candidate = try #require(review?.candidates.first { $0.path == fixture.cache })
+  let available = await session.makeAvailableUninstallPlan(app: app, selectedRelated: [candidate])
+  let plan = try #require(available.plan)
+  #expect(available.rejections.isEmpty)
+  #expect(await session.validatePlan(plan).isEmpty)
+  release.signal()
+  await observed.value
+  await session.cancel()
+}
+
+@Test(
+  "Current owner metadata, installation roots and registered lineage invalidate a session",
+  arguments: ["info", "install", "registration"])
+func sessionRefusesChangedOwnerUniverse(_ change: String) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let external = fixture.home + "/External/LightenQA-registered.app"
+  try FileManager.default.createDirectory(
+    atPath: (external as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+  try FileManager.default.copyItem(atPath: fixture.app, toPath: external)
+  let registered = Mutex<[String]>([])
+  let walks = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil },
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    registration: { ApplicationRegistrationObservation(paths: registered.withLock { $0 }, complete: true) },
+    ownershipCollected: { walks.withLock { $0 += 1 } })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  var candidate: RelatedDataCandidate?
+  for await event in await session.events() {
+    if case .completed(_, let reports) = event {
+      candidate = reports.first { $0.path == fixture.app }?.related.first { $0.path == fixture.cache }
+    }
+  }
+  let app = try #require(service.application(at: fixture.app))
+  let chosen = try #require(candidate)
+  switch change {
+  case "info": try fixture.writeInfo()
+  case "install": try FileManager.default.copyItem(atPath: fixture.app, toPath: fixture.appRoot + "/LightenQA-new.app")
+  default: registered.withLock { $0 = [external] }
+  }
+  let available = await session.makeAvailableUninstallPlan(app: app, selectedRelated: [chosen], includePackage: false)
+  #expect(available.plan == nil && !available.rejections.isEmpty)
+  #expect(walks.withLock { $0 } == 1)
+  await session.cancel()
+}
+
+@Test("Registry leads require current no-follow bundle metadata and extend installed listing")
+func registrationLeadsHaveFreshMetadata() throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let external = fixture.home + "/External/LightenQA-registered.app"
+  try FileManager.default.createDirectory(
+    atPath: (external as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+  try FileManager.default.copyItem(atPath: fixture.app, toPath: external)
+  let link = fixture.home + "/LightenQA-unsafe.app"
+  #expect(symlink(external, link) == 0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    registration: {
+      ApplicationRegistrationObservation(
+        paths: [external, link, fixture.home + "/LightenQA-missing.app"], complete: true)
+    })
+  let inventory = service.inventory()
+  #expect(inventory.applications.contains { $0.path == external && $0.bundleID == fixture.bundleID })
+  #expect(!inventory.applications.contains { $0.path == link })
+  #expect(inventory.complete)
+  #expect(inventory.ownershipCandidates.contains { $0.path == external && $0.packagePath == external })
+  let parsed = ApplicationRegistration.parseDump("bundle: 1\n  path: " + external + "\n  path: " + external + "\n")
+  #expect(parsed.complete && parsed.paths == [external])
+  #expect(!ApplicationRegistration.parseDump("path: relative/Unsafe.app\n").complete)
+  #expect(!ApplicationRegistration.parseDump("no recognized records\n").complete)
+}
+
+@Test("Registry dump annotations preserve spaces and app-name parentheses while folding helpers into their package")
+func registryDumpUsesActualPathGrammar() {
+  let path = "/Applications/LightenQA Example (GPU).app"
+  let nested = path + "/Contents/Frameworks/LightenQA Helper (GPU).app"
+  let observation = ApplicationRegistration.parseDump(
+    "path: " + path + " (0x2970)\npath: " + nested + " (0xA9f0)\n")
+  #expect(observation.complete && observation.paths == [path])
+  #expect(!ApplicationRegistration.parseDump("path: " + path + " (0xZZ)\n").complete)
+  #expect(!ApplicationRegistration.parseDump("path: " + path + " (0x)\n").complete)
+  #expect(!ApplicationRegistration.parseDump("path: " + path + " (0x123\n").complete)
+  #expect(
+    ApplicationRegistration.parseDump("path: /Applications/LightenQA (0x123).app (0xf)\n").paths
+      == ["/Applications/LightenQA (0x123).app"])
+  #expect(
+    ApplicationRegistration.parseDump("path: " + NSHomeDirectory() + "/.Trash/LightenQA.app (0x1)\n").paths.isEmpty)
+  #expect(
+    ApplicationRegistration.parseDump(
+      "path: /System/Volumes/Data" + NSHomeDirectory() + "/.Trash/LightenQA.app (0x1)\n"
+    ).paths.isEmpty)
+}
+
+@Test("A session retains uncertain unmatched rows without a second related discovery")
+func allRelatedRowsKeepUncertainDenominator() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let unmatched = fixture.home + "/Library/Caches/com.apple.LightenQA-" + UUID().uuidString
+  try FileManager.default.createDirectory(atPath: unmatched, withIntermediateDirectories: true)
+  let walks = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    ownershipCollected: { walks.withLock { $0 += 1 } })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  var orphanPaths: [String] = []
+  for await event in await session.events() {
+    if case .orphans(let rows) = event { orphanPaths = rows.map(\.path) }
+  }
+  let all = await session.observedRelatedCandidates()
+  #expect(all.contains { $0.path == unmatched && $0.classification == .uncertain })
+  #expect(!orphanPaths.contains(unmatched))
+  #expect((await session.observedRelatedCandidates()).map(\.path) == all.map(\.path))
+  #expect(walks.withLock { $0 } == 1)
+  await session.cancel()
+}
+
+@Test("Dry validation rechecks native activity and refuses unrelated plan scope without an owner walk")
+func dryValidationUsesFreshActivityAndScope() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let activity = Mutex(ApplicationActivity(state: .clearObservedProcesses))
+  let walks = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    packageActivity: { _ in activity.withLock { $0 } },
+    ownershipCollected: { walks.withLock { $0 += 1 } })
+  let app = try #require(service.application(at: fixture.app))
+  let session = ApplicationDiscovery(related: service).scanSession()
+  let available = await session.makeAvailableUninstallPlan(app: app, selectedRelated: [])
+  let plan = try #require(available.plan)
+  activity.withLock { $0 = ApplicationActivity(state: .active, processNames: ["LightenQA-helper"]) }
+  let refusals = await session.validatePlan(plan)
+  #expect(
+    refusals.contains { $0.path == fixture.app && $0.reason == .processActive && $0.ruleID == "LightenQA-helper" })
+  activity.withLock { $0 = ApplicationActivity(state: .clearObservedProcesses) }
+  let original = try #require(plan.items.first)
+  let foreign = PlanItem(
+    id: original.id, sourcePath: fixture.cache, volumeID: original.volumeID,
+    inventory: original.inventory, ancestors: original.ancestors, policy: .spaceTrash)
+  let unrelated = ActionPlan(snapshotRunID: plan.snapshotRunID, kind: .trash, items: [foreign])
+  #expect((await session.validatePlan(unrelated)).contains { $0.path == fixture.cache && $0.ruleID == "invalid-scope" })
+  #expect(walks.withLock { $0 } == 0)
+  await session.cancel()
+}
+
+@Test("A fresh registered second owner vetoes an exact-ID standard plan before any ownership walk")
+func scopedStandardChecksRegisteredSecondOwner() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let second = fixture.home + "/External/LightenQA-second.app"
+  try FileManager.default.createDirectory(
+    atPath: (second as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+  try FileManager.default.copyItem(atPath: fixture.app, toPath: second)
+  let walks = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    registeredByID: { _ in ApplicationRegistrationObservation(paths: [second], complete: true) },
+    ownershipCollected: { walks.withLock { $0 += 1 } })
+  let app = try #require(service.application(at: fixture.app))
+  let review = await service.initialReview(for: app, progress: nil)
+  let candidate = try #require(review.candidates.first { $0.path == fixture.cache })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  let available = await session.makeAvailableUninstallPlan(
+    app: app, selectedRelated: [candidate], includePackage: false)
+  #expect(available.plan == nil && !available.rejections.isEmpty)
+  #expect(walks.withLock { $0 } == 0)
+  await session.cancel()
+}
+
+@Test("A private standard scope cannot authorize a forged group or team-prefixed selection")
+func scopedStandardCannotGrantMixedAuthority() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: ["group.qa.lighten.fake"]) },
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
+  let app = try #require(service.application(at: fixture.app))
+  let review = await service.initialReview(for: app, progress: nil)
+  let candidate = try #require(review.candidates.first { $0.path == fixture.cache })
+  let context = service.makeStandardContext(app: app, listing: service.installedListing())
+  #expect(!context.inventory.ownershipComplete)
+  for location in [RelatedLocation.caches, .groupContainers] {
+    let path = location.path(
+      domain: location == .caches ? "TEAM." + app.bundleID : "group.qa.lighten.fake", homeDirectory: fixture.home)
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+    let forged = RelatedDataCandidate(
+      id: path, path: path, classification: .installed, reason: .installed,
+      snapshot: candidate.snapshot, receipt: nil, bundleID: app.bundleID)
+    let outcome = await service.makeAvailableUninstallPlan(
+      app: app, selectedRelated: [candidate, forged], includePackage: false, context: context)
+    #expect(!outcome.rejections.isEmpty)
+    #expect(outcome.plan?.items.allSatisfy { $0.sourcePath == candidate.path } != false)
+  }
 }

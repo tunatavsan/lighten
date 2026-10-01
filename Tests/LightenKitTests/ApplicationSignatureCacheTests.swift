@@ -236,4 +236,79 @@ struct ApplicationSignatureCacheTests {
     #expect(leaseCalls.withLock { $0 } == 0)
   }
 
+  @Test("Injected services cannot reuse another reader's private plan authority")
+  func injectedPlanContextsAreIsolated() async throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    let trusted = fixture.service { _ in
+      ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [fixture.groupID])
+    }
+    let app = try #require(trusted.application(at: fixture.app))
+    let candidate = try #require((await trusted.discover(for: app)).first { $0.path == fixture.group })
+    let plan = try trusted.planInstalled(app: app, candidate: candidate)
+    #expect(trusted.prepareInstalledOwners(plan: plan).failures.isEmpty)
+    let unverified = fixture.service { _ in nil }
+    let other = unverified.prepareInstalledOwners(plan: plan)
+    #expect(other.owners.isEmpty && other.failures.count == 1)
+  }
+
+  @Test("Changing a complete plan binding requires one fresh universe for the whole plan")
+  func planBindingRequiresFullEquality() async throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    let walks = Mutex(0)
+    let service = RelatedDataService(
+      homeDirectory: fixture.home, applicationRoots: [fixture.home + "/Applications"], writeVerifiedReceipts: false,
+      signingMetadata: { _ in ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [fixture.groupID]) },
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+      ownershipCollected: { walks.withLock { $0 += 1 } })
+    let session = ApplicationDiscovery(related: service).scanSession()
+    var chosen: [RelatedDataCandidate] = []
+    for await event in await session.events() {
+      if case .completed(_, let reports) = event { chosen = reports.first { $0.path == fixture.app }?.related ?? [] }
+    }
+    let app = try #require(service.application(at: fixture.app))
+    let available = await session.makeAvailableUninstallPlan(
+      app: app,
+      selectedRelated: chosen.filter { $0.path == fixture.group || $0.path == fixture.cache })
+    let plan = try #require(available.plan)
+    #expect(available.rejections.isEmpty && walks.withLock { $0 } == 1)
+    let changed = ActionPlan(
+      id: plan.id, snapshotRunID: plan.snapshotRunID, kind: plan.kind,
+      createdAt: plan.createdAt.addingTimeInterval(1), items: plan.items)
+    let prepared = service.prepareInstalledOwners(plan: changed)
+    #expect(prepared.failures.isEmpty && prepared.owners.count == 2)
+    #expect(walks.withLock { $0 } == 2)
+    #expect(service.prepareInstalledOwners(plan: changed).failures.isEmpty)
+    #expect(walks.withLock { $0 } == 2)
+    await session.cancel()
+  }
+
+  @Test("A cached owner signature change before planning invalidates group authority without re-reading the signer")
+  func changedSignatureInvalidatesSessionPlan() async throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    let reads = Mutex(0)
+    let service = fixture.service { _ in
+      reads.withLock { $0 += 1 }
+      return ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [fixture.groupID])
+    }
+    let session = ApplicationDiscovery(related: service).scanSession()
+    var candidate: RelatedDataCandidate?
+    for await event in await session.events() {
+      if case .completed(_, let reports) = event {
+        candidate = reports.first { $0.path == fixture.app }?.related.first { $0.path == fixture.group }
+      }
+    }
+    let app = try #require(service.application(at: fixture.app))
+    let selected = try #require(candidate)
+    #expect(selected.canSelect && reads.withLock { $0 } == 1)
+    try rewriteRestoringModification(fixture.resources)
+    let available = await session.makeAvailableUninstallPlan(
+      app: app, selectedRelated: [selected], includePackage: false)
+    #expect(available.plan == nil && !available.rejections.isEmpty)
+    #expect(reads.withLock { $0 } == 1)
+    await session.cancel()
+  }
+
 }

@@ -3009,22 +3009,6 @@
         }
       }
     },
-    "Review is available after the scan": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Review is available after the scan"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İnceleme taramadan sonra açılır"
-          }
-        }
-      }
-    },
     "Review removal": {
       "localizations": {
         "en": {
@@ -3521,6 +3505,22 @@
         }
       }
     },
+    "Selected app data is being reviewed. Package review is available independently.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected app data is being reviewed. Package review is available independently."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen uygulamanın verileri inceleniyor. Uygulama paketi ayrıca incelenebilir."
+          }
+        }
+      }
+    },
     "Selected app data. Preferences and support files may contain personal settings or documents.": {
       "localizations": {
         "en": {
@@ -3629,6 +3629,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Paylaşılan · yalnızca rapor"
+          }
+        }
+      }
+    },
+    "Shared-container ownership is still being checked. Other choices remain available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared-container ownership is still being checked. Other choices remain available."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paylaşılan kapsayıcı sahipliği denetleniyor. Diğer seçenekler kullanılabilir."
           }
         }
       }

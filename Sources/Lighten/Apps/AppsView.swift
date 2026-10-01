@@ -324,8 +324,8 @@ struct AppsView: View {
     Text(
       store.needsRescan
         ? String(localized: "Scan again to review data")
-        : store.busy
-          ? String(localized: "Review is available after the scan")
+        : store.selectedReviewPending
+          ? String(localized: "Selected app data is being reviewed. Package review is available independently.")
           : String(localized: "Select the app, its data, or both")
     )
     .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
@@ -337,7 +337,7 @@ struct AppsView: View {
     }
     .buttonStyle(.borderedProminent)
     .disabled(
-      (store.selectedDataPaths.isEmpty && !store.packageSelected) || store.busy || store.preparing
+      (store.selectedDataPaths.isEmpty && !store.packageSelected) || store.preparing
         || store.needsRescan || actions.busy)
   }
 
@@ -505,9 +505,16 @@ struct AppsView: View {
         Text(
           store.needsRescan
             ? String(localized: "Scan again to review related data")
-            : store.busy
+            : store.selectedReviewPending
               ? String(localized: "Related data is being reviewed")
               : String(localized: "No matching standard data locations found")
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      }
+      if store.ownershipPendingPaths.contains(app.path) {
+        Label(
+          String(localized: "Shared-container ownership is still being checked. Other choices remain available."),
+          systemImage: "clock"
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       }

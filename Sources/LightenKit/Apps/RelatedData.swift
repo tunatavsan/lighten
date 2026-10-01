@@ -16,6 +16,9 @@ public struct BundleInventory: Sendable {
   public let complete: Bool
   public let observedAt: Date
   public var ownershipCandidates: [ApplicationOwnerCandidate] = []
+  public var ownershipComplete: Bool = true
+  public var ownershipIssues: [ApplicationOwnershipIssue] = []
+  var observedDirectories: [ApplicationPathObservation] = []
 
   public func contains(_ bundleID: String) -> Bool {
     applications.contains { foldedAppID($0.bundleID) == foldedAppID(bundleID) }
@@ -120,6 +123,14 @@ public struct RelatedDataService: Sendable {
   private let installedElsewhere: @Sendable (String) -> Bool
   private let packageActivity: @Sendable (String) -> ApplicationActivity
   private let signatureCache: ApplicationSignatureCache
+  private let registration: @Sendable () -> ApplicationRegistrationObservation
+  private let registeredByID: @Sendable (String) -> ApplicationRegistrationObservation
+  private let planContexts: ApplicationPlanContexts
+  private let ownershipCollected: @Sendable () -> Void
+  private let nativeRead: (@Sendable (String) -> Void)?
+  private var contextScope: ApplicationContextScope {
+    ApplicationContextScope(home: homeDirectory, applicationRoots: applicationRoots, ownershipRoots: ownershipRoots)
+  }
   private func signingMetadata(_ path: String) -> ApplicationSigningMetadata? {
     signatureCache.metadata(at: path)
   }
@@ -133,11 +144,26 @@ public struct RelatedDataService: Sendable {
   ) {
     self.homeDirectory = homeDirectory
     self.applicationRoots = ["/Applications", homeDirectory + "/Applications"]
-    self.ownershipRoots = self.applicationRoots + ["/System/Applications", "/System/Library/CoreServices"]
+    self.ownershipRoots =
+      self.applicationRoots + [
+        "/System/Applications", "/System/Library/CoreServices", "/Library/Application Support",
+        homeDirectory + "/Library/Application Support", "/Library/PrivilegedHelperTools", "/Library/LaunchAgents",
+        "/Library/LaunchDaemons", homeDirectory + "/Library/LaunchAgents",
+      ]
     self.writeVerifiedReceipts = writeVerifiedReceipts
     self.installedElsewhere = installedElsewhere ?? ApplicationRegistration.isInstalled
     self.signatureCache = .native
     self.packageActivity = NativeApplicationActivitySource.observe
+    self.registration = { ApplicationRegistration.observe() }
+    self.registeredByID = { id in
+      guard let paths = ApplicationRegistration.registeredPaths(bundleID: id) else {
+        return ApplicationRegistrationObservation(paths: [], complete: false)
+      }
+      return ApplicationRegistrationObservation(paths: paths, complete: true)
+    }
+    self.planContexts = .native
+    self.ownershipCollected = {}
+    self.nativeRead = nil
   }
 
   init(
@@ -145,7 +171,13 @@ public struct RelatedDataService: Sendable {
     writeVerifiedReceipts: Bool = true,
     installedElsewhere: @escaping @Sendable (String) -> Bool = { _ in false },
     signingMetadata: @escaping @Sendable (String) -> ApplicationSigningMetadata? = ApplicationSigningMetadata.read,
-    packageActivity: @escaping @Sendable (String) -> ApplicationActivity = NativeApplicationActivitySource.observe
+    packageActivity: @escaping @Sendable (String) -> ApplicationActivity = NativeApplicationActivitySource.observe,
+    registration: @escaping @Sendable () -> ApplicationRegistrationObservation = {
+      ApplicationRegistrationObservation(paths: [], complete: true)
+    },
+    registeredByID: (@Sendable (String) -> ApplicationRegistrationObservation)? = nil,
+    ownershipCollected: @escaping @Sendable () -> Void = {},
+    nativeRead: (@Sendable (String) -> Void)? = nil
   ) {
     self.homeDirectory = homeDirectory
     self.applicationRoots = applicationRoots
@@ -154,13 +186,22 @@ public struct RelatedDataService: Sendable {
     self.installedElsewhere = installedElsewhere
     self.signatureCache = ApplicationSignatureCache(reader: signingMetadata)
     self.packageActivity = packageActivity
+    self.registration = registration
+    self.registeredByID = registeredByID ?? { _ in registration() }
+    self.planContexts = ApplicationPlanContexts()
+    self.ownershipCollected = ownershipCollected
+    self.nativeRead = nativeRead
   }
 
-  public func inventory() -> BundleInventory {
+  public func inventory() -> BundleInventory { makeContext().inventory }
+
+  /// Initial installed metadata has no code-owner or signature walk.
+  func installedListing() -> BundleInventory {
     var apps: [InstalledApplication] = []
     var unidentifiedPaths: [String] = []
     var complete = true
     var visited = 0
+    var directories: [ApplicationPathObservation] = []
 
     func visit(_ root: String, depth: Int, volumeID: UUID?) {
       guard depth <= 4, visited < 10_000,
@@ -173,6 +214,7 @@ public struct RelatedDataService: Sendable {
         complete = false
         return
       }
+      directories.append(ApplicationPathObservation(path: root, identity: identity))
       let names: [String]
       do { names = try DescriptorFileSystem.children(at: root, expected: identity) } catch {
         complete = false
@@ -197,7 +239,15 @@ public struct RelatedDataService: Sendable {
           // Resolve read-only: the link's target identifies an app, never an action path.
           if let linked = Self.resolveLinkedApplication(at: path) {
             apps.append(linked)
-          } else if !Self.linksToPlainFile(path) {
+            directories.append(ApplicationPathObservation(path: path, identity: child))
+            if let info = try? DescriptorFileSystem.identity(
+              at: Self.infoPlistPath(ofBundleAt: linked.linkTarget ?? path))
+            {
+              directories.append(
+                ApplicationPathObservation(
+                  path: Self.infoPlistPath(ofBundleAt: linked.linkTarget ?? path), identity: info))
+            }
+          } else if !Self.linksToPlainFile(path) && !Self.isDanglingLink(path) {
             // A link to a folder may hide apps that are never followed.
             complete = false
           }
@@ -235,6 +285,12 @@ public struct RelatedDataService: Sendable {
             (dict["CFBundleShortVersionString"] as? String)
             ?? (dict["CFBundleVersion"] as? String)
           apps.append(InstalledApplication(bundleID: bundleID, path: path, version: version))
+          directories.append(ApplicationPathObservation(path: path, identity: child))
+          if let info = try? DescriptorFileSystem.identity(at: metadataPath) {
+            directories.append(ApplicationPathObservation(path: metadataPath, identity: info))
+          } else {
+            complete = false
+          }
         } else if !ScanService.isPackage(path) {
           visit(path, depth: depth + 1, volumeID: volumeID)
         }
@@ -258,10 +314,218 @@ public struct RelatedDataService: Sendable {
       }
       visit(root, depth: 0, volumeID: volumeID)
     }
-    let owners = ApplicationOwnershipInventory.collect(roots: ownershipRoots, applications: apps)
     return BundleInventory(
-      applications: apps, unidentifiedPaths: unidentifiedPaths,
-      complete: complete && owners.complete, observedAt: Date(), ownershipCandidates: owners.candidates)
+      applications: apps.sorted { $0.path < $1.path }, unidentifiedPaths: unidentifiedPaths,
+      complete: complete, observedAt: Date(), observedDirectories: directories)
+  }
+
+  static func isDanglingLink(_ path: String) -> Bool {
+    if let resolved = realpath(path, nil) {
+      free(resolved)
+      return false
+    }
+    return errno == ENOENT
+  }
+
+  func makeContext(base: BundleInventory? = nil, including selected: [InstalledApplication] = [])
+    -> AuthenticApplicationContext
+  {
+    let listing = base ?? installedListing()
+    let registered = registration()
+    var apps = listing.applications
+    var issues: [ApplicationOwnershipIssue] = []
+    var complete = listing.complete && registered.complete
+    var lineage = listing.observedDirectories
+    for path in registered.paths {
+      if ApplicationRegistration.isTrash(path) { continue }
+      do {
+        let identity = try DescriptorFileSystem.identity(at: path)
+        let observed =
+          identity.kind == .symbolicLink
+          ? Self.resolveLinkedApplication(at: path) : readApplication(at: path, allowProtected: true)
+        guard let app = observed else {
+          if identity.kind == .symbolicLink, Self.isDanglingLink(path) { continue }
+          issues.append(ApplicationOwnershipIssue(path: path, code: EIO))
+          if !path.hasPrefix("/System/") { complete = false }
+          continue
+        }
+        if !apps.contains(where: { ($0.linkTarget ?? $0.path) == (app.linkTarget ?? app.path) }) { apps.append(app) }
+        lineage.append(ApplicationPathObservation(path: path, identity: identity))
+        let metadataPath = Self.infoPlistPath(ofBundleAt: app.linkTarget ?? app.path)
+        lineage.append(
+          ApplicationPathObservation(
+            path: metadataPath,
+            identity: try DescriptorFileSystem.identity(at: metadataPath)))
+      } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT {
+        continue
+      } catch FileSystemFailure.systemCall(_, let code) {
+        issues.append(ApplicationOwnershipIssue(path: path, code: code))
+        if !path.hasPrefix("/System/") { complete = false }
+      } catch {
+        issues.append(ApplicationOwnershipIssue(path: path, code: EIO))
+        if !path.hasPrefix("/System/") { complete = false }
+      }
+    }
+    for app in selected where !apps.contains(where: { $0.path == app.path }) {
+      if readApplication(at: app.path, allowProtected: false) == app { apps.append(app) }
+    }
+    for app in apps {
+      let path = app.linkTarget ?? app.path
+      for metadataPath in [path, Self.infoPlistPath(ofBundleAt: path)] {
+        if let identity = try? DescriptorFileSystem.identity(at: metadataPath) {
+          lineage.append(ApplicationPathObservation(path: metadataPath, identity: identity))
+        } else if !path.hasPrefix("/System/") {
+          complete = false
+        }
+      }
+      if readApplication(at: path, allowProtected: true)?.bundleID != app.bundleID,
+        !path.hasPrefix("/System/")
+      {
+        complete = false
+      }
+    }
+    ownershipCollected()
+    let owners = ApplicationOwnershipInventory.collect(
+      roots: ownershipRoots, applications: apps, onNativeRead: nativeRead)
+    for root in ownershipRoots {
+      if let identity = owners.roots[root] {
+        lineage.append(ApplicationPathObservation(path: root, identity: identity))
+      } else {
+        do {
+          lineage.append(ApplicationPathObservation(path: root, identity: try DescriptorFileSystem.identity(at: root)))
+        } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT {
+          lineage.append(ApplicationPathObservation(path: root, identity: nil))
+        } catch {
+          // Unreadable ownership roots already retain their scoped issue.
+        }
+      }
+    }
+    for (path, identity) in owners.directories {
+      lineage.append(ApplicationPathObservation(path: path, identity: identity))
+    }
+    // New code-bearing locations in installation folders invalidate a saved
+    // owner universe. No recursive walk is needed for these fresh checks.
+    for owner in owners.candidates {
+      if let identity = try? DescriptorFileSystem.identity(at: owner.path) {
+        lineage.append(ApplicationPathObservation(path: owner.path, identity: identity))
+      }
+    }
+    let inventory = BundleInventory(
+      applications: apps.sorted { $0.path < $1.path }, unidentifiedPaths: listing.unidentifiedPaths,
+      complete: complete, observedAt: listing.observedAt, ownershipCandidates: owners.candidates,
+      ownershipComplete: owners.thirdPartyComplete && registered.complete
+        && issues.allSatisfy(\.systemScope), ownershipIssues: owners.issues + issues,
+      observedDirectories: listing.observedDirectories)
+    return AuthenticApplicationContext(
+      scope: contextScope, inventory: inventory, lineage: lineage, registeredPaths: registered.paths)
+  }
+
+  func isExactStandardSelection(app: InstalledApplication, candidates: [RelatedDataCandidate]) -> Bool {
+    !candidates.isEmpty
+      && candidates.allSatisfy {
+        guard let (location, domain) = RelatedLocation.matching(path: $0.path, homeDirectory: homeDirectory) else {
+          return false
+        }
+        return location != .groupContainers && domain == app.bundleID
+      }
+  }
+
+  /// Exact bundle-ID data needs a current, unique installed owner, not the
+  /// global code/signature universe. This scope cannot authorize group or
+  /// team-prefixed data and does not claim full ownership completeness.
+  func makeStandardContext(app: InstalledApplication, listing: BundleInventory) -> AuthenticApplicationContext {
+    let registered = registeredByID(app.bundleID)
+    var apps = listing.applications
+    var complete = listing.complete && registered.complete
+    var lineage = listing.observedDirectories
+    for observed in listing.applications {
+      let physical = observed.linkTarget ?? observed.path
+      let current = readApplication(at: physical, allowProtected: true)
+      if current?.bundleID != observed.bundleID { complete = false }
+      for path in [observed.path, physical, Self.infoPlistPath(ofBundleAt: physical)] {
+        if let identity = try? DescriptorFileSystem.identity(at: path) {
+          lineage.append(ApplicationPathObservation(path: path, identity: identity))
+        } else {
+          complete = false
+        }
+      }
+    }
+    for path in registered.paths where !ApplicationRegistration.isTrash(path) {
+      do {
+        let identity = try DescriptorFileSystem.identity(at: path)
+        let current =
+          identity.kind == .symbolicLink
+          ? Self.resolveLinkedApplication(at: path) : readApplication(at: path, allowProtected: true)
+        guard let current else {
+          if identity.kind == .symbolicLink && Self.isDanglingLink(path) { continue }
+          complete = false
+          continue
+        }
+        lineage.append(ApplicationPathObservation(path: path, identity: identity))
+        let info = Self.infoPlistPath(ofBundleAt: current.linkTarget ?? current.path)
+        lineage.append(ApplicationPathObservation(path: info, identity: try DescriptorFileSystem.identity(at: info)))
+        if foldedAppID(current.bundleID) == foldedAppID(app.bundleID),
+          !apps.contains(where: { ($0.linkTarget ?? $0.path) == (current.linkTarget ?? current.path) })
+        {
+          apps.append(current)
+        }
+      } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT { continue } catch { complete = false }
+    }
+    if !apps.contains(where: { $0.path == app.path }), application(at: app.path) == app {
+      apps.append(app)
+      for path in [app.path, app.path + "/Contents/Info.plist", (app.path as NSString).deletingLastPathComponent] {
+        if let identity = try? DescriptorFileSystem.identity(at: path) {
+          lineage.append(ApplicationPathObservation(path: path, identity: identity))
+        } else {
+          complete = false
+        }
+      }
+    }
+    return AuthenticApplicationContext(
+      scope: contextScope,
+      inventory: BundleInventory(
+        applications: apps.sorted { $0.path < $1.path }, unidentifiedPaths: listing.unidentifiedPaths,
+        complete: complete, observedAt: Date(), ownershipComplete: false), lineage: lineage,
+      registeredPaths: registered.paths, standardBundleID: app.bundleID)
+  }
+
+  func validateContext(_ context: AuthenticApplicationContext, groups: Bool) throws {
+    guard context.scope == contextScope else { throw RelatedFailure.changedItem }
+    for observation in context.lineage {
+      // System failures do not invalidate a third-party ownership decision.
+      if observation.path.hasPrefix("/System/") { continue }
+      try observation.validate()
+    }
+    if context.standardBundleID != nil, groups { throw RelatedFailure.unsupportedInstalledData }
+    let current = context.standardBundleID.map { registeredByID($0) } ?? registration()
+    guard current.complete, current.paths == context.registeredPaths else { throw RelatedFailure.incompleteInventory }
+    if groups { try context.validateSignatures() }
+  }
+
+  private func context(for plan: ActionPlan) throws -> AuthenticApplicationContext {
+    if let context = planContexts.context(for: plan, scope: contextScope) { return context }
+    // Eviction or a separately constructed legacy plan requires one fresh
+    // validation universe for the whole plan, never one inventory per item.
+    let selected = plan.items.compactMap { item -> InstalledApplication? in
+      guard let proof = item.installedRelatedProof else { return nil }
+      return readApplication(at: proof.appPath, allowProtected: false)
+    }
+    let context: AuthenticApplicationContext
+    if let app = selected.first, selected.allSatisfy({ $0.bundleID == app.bundleID && $0.path == app.path }),
+      plan.items.filter({ $0.installedRelatedProof != nil }).allSatisfy({ item in
+        guard let (location, domain) = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory)
+        else {
+          return false
+        }
+        return location != .groupContainers && domain == app.bundleID
+      })
+    {
+      context = makeStandardContext(app: app, listing: installedListing())
+    } else {
+      context = makeContext(including: selected)
+    }
+    planContexts.bind(plan, context: context)
+    return context
   }
 
   /// A link resolving to a regular file (a document or script) cannot be an app.
@@ -305,7 +569,10 @@ public struct RelatedDataService: Sendable {
   }
 
   public func discover() async -> [RelatedDataCandidate] {
-    await discover(inventory: inventory(), only: nil)
+    let context = makeContext()
+    return await discover(
+      inventory: context.inventory, only: nil,
+      signatures: signatures(inventory: context.inventory, context: context))
   }
 
   /// A focused observation for a dropped or selected application.
@@ -316,38 +583,23 @@ public struct RelatedDataService: Sendable {
   func focusedObservation(for app: InstalledApplication) async
     -> (candidates: [RelatedDataCandidate], signerTeamID: String?)
   {
-    let apps = inventory(including: app)
-    var signatures: [String: ApplicationSigningMetadata] = [:]
-    let selected = signingMetadata(app.linkTarget ?? app.path)
-    signatures[app.path] = selected
-    signatures[app.linkTarget ?? app.path] = selected
-    for owner in apps.ownershipCandidates
-    where owner.packagePath == app.path && owner.path != (app.linkTarget ?? app.path) {
-      signatures[owner.path] = signingMetadata(owner.path)
-    }
-    // Other signers are relevant only when a selected entitlement names a
-    // present group container whose exclusive ownership must be checked.
-    let hasGroupData =
-      signatures.values.flatMap(\.groupIdentifiers).contains { domain in
-        (try? DescriptorFileSystem.identity(
-          at: RelatedLocation.groupContainers.path(domain: domain, homeDirectory: homeDirectory))) != nil
-      }
-    if hasGroupData {
-      for owner in apps.ownershipCandidates where owner.path != (app.linkTarget ?? app.path) {
-        signatures[owner.path] = signingMetadata(owner.path)
-      }
-    }
+    let context = makeContext(including: [app])
+    let signatures = signatures(inventory: context.inventory, context: context, selected: app)
     return (
-      await discover(inventory: apps, only: app, signatures: signatures),
-      selected?.teamID
+      await discover(inventory: context.inventory, only: app, signatures: signatures, allowReceipts: false),
+      signatures[app.linkTarget ?? app.path]?.teamID
     )
   }
 
   /// Reads one explicitly selected application without walking installed roots.
   /// Returned metadata is an observation; action plans still revalidate it.
   public func application(at path: String) -> InstalledApplication? {
-    guard ExactInventory.isApplicationName(path),
-      ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory) == nil,
+    readApplication(at: path, allowProtected: false)
+  }
+
+  private func readApplication(at path: String, allowProtected: Bool) -> InstalledApplication? {
+    guard ApplicationRegistration.hasApplicationSuffix(path),
+      allowProtected || ProtectionPolicy.rule(for: path, homeDirectory: homeDirectory) == nil,
       let identity = try? DescriptorFileSystem.identity(at: path), identity.kind == .directory
     else { return nil }
     let infoPath = Self.infoPlistPath(ofBundleAt: path)
@@ -364,25 +616,93 @@ public struct RelatedDataService: Sendable {
       version: (dictionary["CFBundleShortVersionString"] as? String) ?? (dictionary["CFBundleVersion"] as? String))
   }
 
-  private func inventory(including app: InstalledApplication, base: BundleInventory? = nil) -> BundleInventory {
-    let current = base ?? inventory()
-    guard !current.applications.contains(where: { $0.path == app.path }),
-      app.linkTarget == nil, ExactInventory.isApplicationName(app.path),
-      (try? DescriptorFileSystem.identity(at: app.path))?.kind == .directory,
-      ProtectionPolicy.rule(for: app.path, homeDirectory: homeDirectory) == nil,
-      Self.bundleID(at: app.path) == app.bundleID
-    else { return current }
-    let owners = ApplicationOwnershipInventory.collect(
-      roots: ownershipRoots, applications: current.applications + [app])
-    return BundleInventory(
+  private func selectedContext(
+    app: InstalledApplication, base: AuthenticApplicationContext
+  ) throws -> AuthenticApplicationContext {
+    if base.inventory.applications.contains(where: { $0.path == app.path }) { return base }
+    guard application(at: app.path) == app else { throw RelatedFailure.changedItem }
+    let current = base.inventory
+    let listing = BundleInventory(
       applications: current.applications + [app], unidentifiedPaths: current.unidentifiedPaths,
-      complete: current.complete && owners.complete, observedAt: current.observedAt,
-      ownershipCandidates: owners.candidates)
+      complete: current.complete, observedAt: current.observedAt, ownershipCandidates: current.ownershipCandidates,
+      ownershipComplete: false, ownershipIssues: current.ownershipIssues)
+    let paths = [app.path, app.path + "/Contents/Info.plist", (app.path as NSString).deletingLastPathComponent]
+    return AuthenticApplicationContext(
+      scope: base.scope, inventory: listing,
+      lineage: base.lineage
+        + (try paths.map {
+          ApplicationPathObservation(
+            path: $0, identity: try DescriptorFileSystem.identity(at: $0))
+        }),
+      registeredPaths: base.registeredPaths, standardBundleID: base.standardBundleID)
+  }
+
+  private func signingMetadata(_ path: String, context: AuthenticApplicationContext?) -> ApplicationSigningMetadata? {
+    if let context { return context.signature(at: path, cache: signatureCache)?.metadata }
+    return signingMetadata(path)
+  }
+
+  private func signatures(
+    inventory: BundleInventory, context: AuthenticApplicationContext, selected: InstalledApplication? = nil
+  ) -> [String: ApplicationSigningMetadata] {
+    var result: [String: ApplicationSigningMetadata] = [:]
+    let owners = inventory.ownershipCandidates.filter { !$0.path.hasPrefix("/System/") }
+    if let selected {
+      let physical = selected.linkTarget ?? selected.path
+      result[physical] = signingMetadata(physical, context: context)
+      result[selected.path] = result[physical]
+      for owner in owners where owner.packagePath == selected.path {
+        result[owner.path] = signingMetadata(owner.path, context: context)
+      }
+      let hasGroupData = result.values.flatMap(\.groupIdentifiers).contains {
+        (try? DescriptorFileSystem.identity(
+          at: RelatedLocation.groupContainers.path(domain: $0, homeDirectory: homeDirectory))) != nil
+      }
+      if !hasGroupData { return result }
+    }
+    for owner in owners { result[owner.path] = signingMetadata(owner.path, context: context) }
+    return result
+  }
+
+  func initialReview(
+    for app: InstalledApplication, progress: (@Sendable (ApplicationRelatedReview) -> Void)?
+  ) async -> ApplicationRelatedReview {
+    let listing = BundleInventory(applications: [app], unidentifiedPaths: [], complete: false, observedAt: Date())
+    let candidates = await discover(inventory: listing, only: app, signatures: [:], allowReceipts: false) { partial in
+      progress?(ApplicationRelatedReview(application: app, candidates: partial))
+    }
+    return ApplicationRelatedReview(application: app, candidates: candidates)
+  }
+
+  func review(for app: InstalledApplication, context: AuthenticApplicationContext) async -> ApplicationRelatedReview {
+    var inventory = context.inventory
+    let inUniverse = inventory.applications.contains { $0.path == app.path && $0.bundleID == app.bundleID }
+    if !inUniverse, application(at: app.path) == app {
+      inventory = BundleInventory(
+        applications: inventory.applications + [app], unidentifiedPaths: inventory.unidentifiedPaths,
+        complete: inventory.complete, observedAt: inventory.observedAt,
+        ownershipCandidates: inventory.ownershipCandidates, ownershipComplete: false,
+        ownershipIssues: inventory.ownershipIssues)
+    }
+    let signatures = signatures(inventory: inventory, context: context, selected: app)
+    return ApplicationRelatedReview(
+      application: app,
+      candidates: await discover(inventory: inventory, only: app, signatures: signatures, allowReceipts: false),
+      signerTeamID: signatures[app.linkTarget ?? app.path]?.teamID,
+      ownershipPending: !inUniverse || !inventory.ownershipComplete)
+  }
+
+  func discover(context: AuthenticApplicationContext) async -> [RelatedDataCandidate] {
+    await discover(
+      inventory: context.inventory, only: nil,
+      signatures: signatures(inventory: context.inventory, context: context), allowReceipts: false)
   }
 
   private func discover(
     inventory apps: BundleInventory, only app: InstalledApplication?,
-    signatures suppliedSignatures: [String: ApplicationSigningMetadata]? = nil
+    signatures suppliedSignatures: [String: ApplicationSigningMetadata]? = nil,
+    allowReceipts: Bool = true,
+    progress: (@Sendable ([RelatedDataCandidate]) -> Void)? = nil
   ) async
     -> [RelatedDataCandidate]
   {
@@ -456,7 +776,10 @@ public struct RelatedDataService: Sendable {
           signatures[$0.path]?.groupIdentifiers.contains(domain) == true
         }.map(\.packagePath))
       let groupOwners = apps.applications.filter { claimingPackages.contains($0.path) }
-      let ownershipVerified = apps.complete && apps.ownershipCandidates.allSatisfy { signatures[$0.path] != nil }
+      let ownershipVerified =
+        apps.ownershipComplete
+        && apps.ownershipCandidates
+          .filter { !$0.path.hasPrefix("/System/") }.allSatisfy { signatures[$0.path] != nil }
       let exactOwners = apps.applications.filter { foldedAppID($0.bundleID) == foldedAppID(domain) }
       let prefixOwners = apps.applications.filter { owner in
         guard let team = signatures[owner.path]?.teamID else { return false }
@@ -554,7 +877,10 @@ public struct RelatedDataService: Sendable {
             logical: measurement.logical, allocated: measurement.allocated,
             knownItemCount: measurement.count, partial: measurement.partial)
           // A metadata-only compatibility snapshot is an observation, never an inventory grant.
-          if apps.complete && receiptStoreHealthy && candidate.matchStrength != .weak,
+          if (apps.complete
+            || (candidate.classification == .installed && candidate.matchStrength == .strong
+              && RelatedLocation.matching(path: candidate.path, homeDirectory: homeDirectory)?.0 != .groupContainers))
+            && receiptStoreHealthy && candidate.matchStrength != .weak,
             candidate.classification == .installed || candidate.classification == .historicallyVerifiedAbsent
               || candidate.classification == .orphanVerified,
             let identity = try? DescriptorFileSystem.identity(at: candidate.path), identity.hasStableTrashProof,
@@ -580,6 +906,7 @@ public struct RelatedDataService: Sendable {
       for _ in 0..<4 { enqueue() }
       while let (index, result) = await group.next() {
         results[index] = result
+        if !Task.isCancelled { progress?(results.filter { $0.observation != nil }) }
         enqueue()
       }
       return results
@@ -592,7 +919,8 @@ public struct RelatedDataService: Sendable {
           id: groupRoot, path: groupRoot, classification: .shared,
           reason: .sharedGroup, snapshot: nil, receipt: nil))
     }
-    if app == nil && writeVerifiedReceipts && !Task.isCancelled && apps.complete && receiptStoreHealthy {
+    if app == nil && allowReceipts && writeVerifiedReceipts && !Task.isCancelled && apps.complete && receiptStoreHealthy
+    {
       do { try saveVerifiedReceipts(apps: apps, candidates: candidates, existing: receipts) } catch {
         candidates.append(
           RelatedDataCandidate(
@@ -644,12 +972,20 @@ public struct RelatedDataService: Sendable {
       throw PlanRejection(.lightenItself, path: app.path)
     }
     _ = try packagePlan(app: app)
-    return try planInstalled(app: app, candidate: candidate, inventory: inventory(including: app))
+    let context = makeContext(including: [app])
+    try validateContext(context, groups: candidate.path.contains("/Library/Group Containers/"))
+    return try planInstalled(app: app, candidate: candidate, context: context)
   }
 
   private func planInstalled(
-    app: InstalledApplication, candidate: RelatedDataCandidate, inventory apps: BundleInventory
+    app: InstalledApplication, candidate: RelatedDataCandidate, context: AuthenticApplicationContext
   ) throws -> ActionPlan {
+    let apps = context.inventory
+    if let id = context.standardBundleID {
+      guard id == app.bundleID, isExactStandardSelection(app: app, candidates: [candidate]) else {
+        throw RelatedFailure.unsupportedInstalledData
+      }
+    }
     guard apps.complete else { throw RelatedFailure.incompleteInventory }
     guard apps.applications.filter({ foldedAppID($0.bundleID) == foldedAppID(app.bundleID) }).count == 1,
       apps.applications.contains(app), candidate.classification == .installed, candidate.canSelect,
@@ -658,7 +994,7 @@ public struct RelatedDataService: Sendable {
       let infoIdentity = try? DescriptorFileSystem.identity(at: app.path + "/Contents/Info.plist"),
       infoIdentity.kind == .regular,
       Self.bundleID(at: app.path) == app.bundleID,
-      let policy = installedPolicy(app: app, relatedPath: candidate.path, inventory: apps)
+      let policy = installedPolicy(app: app, relatedPath: candidate.path, inventory: apps, context: context)
     else { throw RelatedFailure.unsupportedInstalledData }
     let current = try ExactInventory(homeDirectory: homeDirectory).collect(
       rootPath: candidate.path,
@@ -673,7 +1009,8 @@ public struct RelatedDataService: Sendable {
       ancestors: current.ancestors, installedRelatedProof: proof, policy: policy,
       nestedApplicationIDs: current.nestedApplicationIDs, snapshotRunID: observation.runID)
     let plan = ActionPlan(snapshotRunID: observation.runID, kind: .trash, items: [item])
-    try validateInstalled(item, plan: plan, inventory: apps)
+    planContexts.bind(plan, context: context)
+    try validateInstalled(item, plan: plan, context: context)
     return plan
   }
 
@@ -693,6 +1030,16 @@ public struct RelatedDataService: Sendable {
   public func makeAvailableUninstallPlan(
     app: InstalledApplication, selectedRelated: [RelatedDataCandidate], includePackage: Bool = true
   ) async -> AvailableUninstallPlan {
+    await makeAvailableUninstallPlan(
+      app: app, selectedRelated: selectedRelated, includePackage: includePackage,
+      context: nil)
+  }
+
+  @concurrent
+  func makeAvailableUninstallPlan(
+    app: InstalledApplication, selectedRelated: [RelatedDataCandidate], includePackage: Bool,
+    context suppliedContext: AuthenticApplicationContext?
+  ) async -> AvailableUninstallPlan {
     let package: ActionPlan
     do {
       guard app.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame else {
@@ -708,12 +1055,23 @@ public struct RelatedDataService: Sendable {
     } catch {
       return AvailableUninstallPlan(plan: nil, rejections: Self.uninstallRejections(error, path: app.path))
     }
-    let apps = inventory(including: app)
+    var context: AuthenticApplicationContext?
+    var contextError: (any Error)?
+    if !selectedRelated.isEmpty {
+      do {
+        let selected = try selectedContext(app: app, base: suppliedContext ?? makeContext(including: [app]))
+        try validateContext(
+          selected, groups: selectedRelated.contains { $0.path.contains("/Library/Group Containers/") })
+        context = selected
+      } catch { contextError = error }
+    }
     var items: [PlanItem] = []
     var rejections: [PlanRejection] = []
     for candidate in selectedRelated {
       do {
-        let selected = try planInstalled(app: app, candidate: candidate, inventory: apps)
+        if let contextError { throw contextError }
+        guard let context, !Task.isCancelled else { throw CancellationError() }
+        let selected = try planInstalled(app: app, candidate: candidate, context: context)
         guard !items.contains(where: { $0.sourcePath == candidate.path }) else { continue }
         items += selected.items
       } catch {
@@ -726,7 +1084,93 @@ public struct RelatedDataService: Sendable {
       ? nil
       : ActionPlan(
         snapshotRunID: items.first?.snapshotRunID ?? package.snapshotRunID, kind: .trash, items: items)
+    if let plan, let context { planContexts.bind(plan, context: context) }
     return AvailableUninstallPlan(plan: plan, rejections: rejections)
+  }
+
+  /// A dry validation uses the same prepared-owner envelope as execution,
+  /// without acquiring a journal lease or returning that envelope publicly.
+  @concurrent
+  func validatePlan(_ plan: ActionPlan) async -> [PlanRejection] {
+    guard plan.schema == 1, plan.kind == .trash, !plan.items.isEmpty,
+      Set(plan.items.map(\.id)).count == plan.items.count,
+      Set(plan.items.map(\.sourcePath)).count == plan.items.count
+    else {
+      return plan.items.isEmpty
+        ? [PlanRejection(.unavailable, path: "", ruleID: "empty-plan")]
+        : plan.items.map { PlanRejection(.unavailable, path: $0.sourcePath, ruleID: "invalid-plan") }
+    }
+    let prepared = prepareInstalledOwners(plan: plan)
+    let guardService = ActionGuard(homeDirectory: homeDirectory)
+    let running = NativeRunningApplicationSource()
+    var packageResults: [String: [PlanRejection]] = [:]
+    var rejections: [PlanRejection] = []
+    for item in plan.items {
+      if Task.isCancelled {
+        rejections.append(PlanRejection(.unavailable, path: item.sourcePath, ruleID: "cancelled"))
+        continue
+      }
+      do {
+        if let proof = item.installedRelatedProof {
+          guard let owner = prepared.owners[item.id] else {
+            throw PlanRejection(
+              .unavailable, path: item.sourcePath,
+              ruleID: prepared.failures[item.id] ?? "owner-unavailable")
+          }
+          if packageResults[proof.appPath] == nil {
+            var packageRefusals: [PlanRejection] = []
+            do {
+              guard let app = application(at: proof.appPath), app.bundleID == proof.bundleID else {
+                throw RelatedFailure.changedItem
+              }
+              let package = try packagePlan(app: app)
+              for selected in package.items { try guardService.validate(selected) }
+              for id in [app.bundleID] + (package.items.first?.nestedApplicationIDs ?? []) {
+                switch await running.isRunning(bundleID: id) {
+                case false: break
+                case true: throw PlanRejection(.applicationRunning, path: app.path, ruleID: id)
+                case nil: throw PlanRejection(.activityUnavailable, path: app.path, ruleID: id)
+                }
+              }
+            } catch { packageRefusals = Self.uninstallRejections(error, path: proof.appPath) }
+            packageResults[proof.appPath] = packageRefusals
+          }
+          if let failures = packageResults[proof.appPath], !failures.isEmpty {
+            rejections += failures.map { PlanRejection($0.reason, path: item.sourcePath, ruleID: $0.ruleID) }
+            continue
+          }
+          try guardService.validate(item, plan: plan, preparedOwner: owner)
+          for id in item.nestedApplicationIDs ?? [] {
+            guard id.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame else {
+              throw PlanRejection(.lightenItself, path: item.sourcePath, ruleID: id)
+            }
+            switch await running.isRunning(bundleID: id) {
+            case false: break
+            case true: throw PlanRejection(.applicationRunning, path: item.sourcePath, ruleID: id)
+            case nil: throw PlanRejection(.activityUnavailable, path: item.sourcePath, ruleID: id)
+            }
+          }
+        } else {
+          guard item.policy == .wholeBundle, item.relatedProof == nil, item.orphanRelatedProof == nil,
+            item.catalogProof == nil, item.duplicateProof == nil,
+            let app = application(at: item.sourcePath), app.bundleID == item.applicationBundleID,
+            app.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame
+          else { throw PlanRejection(.unavailable, path: item.sourcePath, ruleID: "invalid-scope") }
+          // Activity is fresh even when a previously prepared package is still
+          // byte-for-byte equal to its original plan.
+          _ = try packagePlan(app: app)
+          try guardService.validate(item)
+          for id in [app.bundleID] + (item.nestedApplicationIDs ?? []) {
+            switch await running.isRunning(bundleID: id) {
+            case false: break
+            case true: throw PlanRejection(.applicationRunning, path: item.sourcePath, ruleID: id)
+            case nil: throw PlanRejection(.activityUnavailable, path: item.sourcePath, ruleID: id)
+            }
+          }
+        }
+      } catch { rejections += Self.uninstallRejections(error, path: item.sourcePath) }
+    }
+    return rejections
   }
 
   private static func uninstallRejections(_ error: any Error, path: String) -> [PlanRejection] {
@@ -747,12 +1191,20 @@ public struct RelatedDataService: Sendable {
       throw PlanRejection(.lightenItself, path: app.path)
     }
     let package = try packagePlan(app: app)
+    let context = selectedRelated.isEmpty ? nil : makeContext(including: [app])
+    if let context {
+      try validateContext(context, groups: selectedRelated.contains { $0.path.contains("/Library/Group Containers/") })
+    }
     var items: [PlanItem] = []
     for candidate in selectedRelated {
-      items += try planInstalled(app: app, candidate: candidate).items
+      guard let context else { throw RelatedFailure.incompleteInventory }
+      items += try planInstalled(app: app, candidate: candidate, context: context).items
     }
     items += package.items
-    return ActionPlan(snapshotRunID: items.first?.snapshotRunID ?? package.snapshotRunID, kind: .trash, items: items)
+    let plan = ActionPlan(
+      snapshotRunID: items.first?.snapshotRunID ?? package.snapshotRunID, kind: .trash, items: items)
+    if let context { planContexts.bind(plan, context: context) }
+    return plan
   }
 
   func packagePlan(app: InstalledApplication) throws -> ActionPlan {
@@ -777,21 +1229,24 @@ public struct RelatedDataService: Sendable {
     return package
   }
 
-  func installedPolicy(app: InstalledApplication, relatedPath: String, inventory: BundleInventory) -> TreePolicy? {
+  func installedPolicy(
+    app: InstalledApplication, relatedPath: String, inventory: BundleInventory,
+    context: AuthenticApplicationContext? = nil
+  ) -> TreePolicy? {
     guard let (location, domain) = RelatedLocation.matching(path: relatedPath, homeDirectory: homeDirectory) else {
       return nil
     }
     if location == .groupContainers {
-      guard inventory.complete, !domain.lowercased().hasPrefix("group.com.apple.") else { return nil }
+      guard inventory.ownershipComplete, !domain.lowercased().hasPrefix("group.com.apple.") else { return nil }
       var owners: Set<String> = []
-      for candidate in inventory.ownershipCandidates {
-        guard let signature = signingMetadata(candidate.path) else { return nil }
+      for candidate in inventory.ownershipCandidates where !candidate.path.hasPrefix("/System/") {
+        guard let signature = signingMetadata(candidate.path, context: context) else { return nil }
         if signature.groupIdentifiers.contains(domain) { owners.insert(candidate.packagePath) }
       }
       return owners == [app.path] ? .relatedGroupContainer : nil
     }
     if domain != app.bundleID {
-      guard let team = signingMetadata(app.path)?.teamID,
+      guard let team = signingMetadata(app.path, context: context)?.teamID,
         domain == team + "." + app.bundleID || domain.hasPrefix(team + "." + app.bundleID + ".")
       else { return nil }
     }
@@ -801,16 +1256,19 @@ public struct RelatedDataService: Sendable {
   func prepareInstalledOwners(plan: ActionPlan) -> InstalledOwnerPreparation {
     let items = plan.items.filter { $0.installedRelatedProof != nil }
     guard !items.isEmpty else { return InstalledOwnerPreparation() }
-    var apps = inventory()
-    for item in items {
-      guard let proof = item.installedRelatedProof else { continue }
-      let app = InstalledApplication(bundleID: proof.bundleID, path: proof.appPath, version: nil)
-      apps = inventory(including: app, base: apps)
-    }
     var result = InstalledOwnerPreparation()
+    let context: AuthenticApplicationContext
+    do {
+      context = try self.context(for: plan)
+      try validateContext(context, groups: items.contains { $0.policy == .relatedGroupContainer })
+    } catch {
+      for item in items { result.failures[item.id] = String(describing: error) }
+      return result
+    }
+    let apps = context.inventory
     for item in items {
       do {
-        try validateInstalled(item, plan: plan, inventory: apps)
+        try validateInstalled(item, plan: plan, context: context)
         guard let proof = item.installedRelatedProof,
           let (location, domain) = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory)
         else { throw RelatedFailure.unsupportedInstalledData }
@@ -819,13 +1277,17 @@ public struct RelatedDataService: Sendable {
           let selected = apps.ownershipCandidates.filter { $0.packagePath == proof.appPath }
           guard !selected.isEmpty else { throw RelatedFailure.ambiguousOwner }
           for owner in selected {
-            guard let observation = signatureCache.observation(at: owner.path), observation.metadata != nil else {
+            guard let observation = context.signature(at: owner.path, cache: signatureCache),
+              observation.metadata != nil
+            else {
               throw RelatedFailure.unsupportedInstalledData
             }
             identities.append(observation.identity)
           }
         } else if domain != proof.bundleID {
-          guard let observation = signatureCache.observation(at: proof.appPath), observation.metadata != nil else {
+          guard let observation = context.signature(at: proof.appPath, cache: signatureCache),
+            observation.metadata != nil
+          else {
             throw RelatedFailure.unsupportedInstalledData
           }
           identities.append(observation.identity)
@@ -838,12 +1300,21 @@ public struct RelatedDataService: Sendable {
   }
 
   public func validateInstalled(_ item: PlanItem, plan: ActionPlan) throws {
-    guard let proof = item.installedRelatedProof else { throw RelatedFailure.unsupportedInstalledData }
-    let app = InstalledApplication(bundleID: proof.bundleID, path: proof.appPath, version: nil)
-    try validateInstalled(item, plan: plan, inventory: inventory(including: app))
+    let context = try self.context(for: plan)
+    try validateContext(context, groups: item.policy == .relatedGroupContainer)
+    try validateInstalled(item, plan: plan, context: context)
   }
 
-  private func validateInstalled(_ item: PlanItem, plan: ActionPlan, inventory apps: BundleInventory) throws {
+  private func validateInstalled(
+    _ item: PlanItem, plan: ActionPlan, context: AuthenticApplicationContext
+  ) throws {
+    let apps = context.inventory
+    if let id = context.standardBundleID {
+      guard let proof = item.installedRelatedProof, proof.bundleID == id,
+        let (location, domain) = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory),
+        location != .groupContainers, domain == id
+      else { throw RelatedFailure.unsupportedInstalledData }
+    }
     try validateScope(item, plan: plan)
     guard plan.kind == .trash, let proof = item.installedRelatedProof,
       proof.bundleID.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame,
@@ -863,7 +1334,7 @@ public struct RelatedDataService: Sendable {
         proof.appPath
       ],
       let app = apps.applications.first(where: { $0.path == proof.appPath }),
-      let policy = installedPolicy(app: app, relatedPath: item.sourcePath, inventory: apps),
+      let policy = installedPolicy(app: app, relatedPath: item.sourcePath, inventory: apps, context: context),
       item.policy == nil || item.policy == policy
     else { throw RelatedFailure.ambiguousOwner }
   }
@@ -934,13 +1405,24 @@ public struct RelatedDataService: Sendable {
       else { throw RelatedFailure.unsupportedInstalledData }
       if location == .groupContainers {
         let app = InstalledApplication(bundleID: proof.bundleID, path: proof.appPath, version: nil)
-        let owners = ApplicationOwnershipInventory.collect(roots: [], applications: [app])
-        guard owners.complete, !domain.lowercased().hasPrefix("group.com.apple.") else {
+        let bound = planContexts.context(for: plan, scope: contextScope)
+        let owners: [ApplicationOwnerCandidate]
+        if let bound {
+          guard bound.inventory.ownershipComplete else { throw RelatedFailure.unsupportedInstalledData }
+          owners = bound.inventory.ownershipCandidates.filter { $0.packagePath == app.path }
+        } else {
+          let observed = ApplicationOwnershipInventory.collect(roots: [], applications: [app])
+          guard observed.complete else { throw RelatedFailure.unsupportedInstalledData }
+          owners = observed.candidates
+        }
+        guard !owners.isEmpty, !domain.lowercased().hasPrefix("group.com.apple.") else {
           throw RelatedFailure.unsupportedInstalledData
         }
         var claimed = false
-        for owner in owners.candidates {
-          guard let signature = signingMetadata(owner.path) else { throw RelatedFailure.unsupportedInstalledData }
+        for owner in owners {
+          guard let signature = signingMetadata(owner.path, context: bound) else {
+            throw RelatedFailure.unsupportedInstalledData
+          }
           claimed = claimed || (owner.packagePath == app.path && signature.groupIdentifiers.contains(domain))
         }
         guard claimed else { throw RelatedFailure.unsupportedInstalledData }

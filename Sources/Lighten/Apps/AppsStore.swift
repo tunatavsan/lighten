@@ -19,6 +19,27 @@ final class AppsStore {
   @ObservationIgnored private let events: @Sendable () -> AsyncStream<ApplicationDiscovery.Event>
   @ObservationIgnored private var scanTask: Task<Void, Never>?
   @ObservationIgnored private var generation = UUID()
+  @ObservationIgnored private var session: ApplicationScanSession?
+  @ObservationIgnored private var selectedReviewTask: Task<Void, Never>?
+  @ObservationIgnored private var selectedReviewToken = UUID()
+  @ObservationIgnored private let selectedReview: SelectedReview?
+  @ObservationIgnored private let relatedService: RelatedDataService
+  @ObservationIgnored private let usesInjectedPlanner: Bool
+  @ObservationIgnored private var relatedReviewedPaths: Set<String> = []
+  @ObservationIgnored private var removedPaths: Set<String> = []
+  private(set) var ownershipPendingPaths: Set<String> = []
+  private(set) var selectedReviewPending = false
+  private(set) var backgroundStartedAt: ContinuousClock.Instant?
+  private(set) var inventoryPublishedAt: ContinuousClock.Instant?
+  private(set) var backgroundFinishedAt: ContinuousClock.Instant?
+  private(set) var backgroundCancelledAt: ContinuousClock.Instant?
+  private(set) var selectedReviewRequestedAt: ContinuousClock.Instant?
+  private(set) var selectedReviewPublishedAt: ContinuousClock.Instant?
+  private(set) var selectedPackageReadyAt: ContinuousClock.Instant?
+  private(set) var selectedReviewReadyAt: ContinuousClock.Instant?
+
+  typealias SelectedReview =
+    @Sendable (String, (@Sendable (ApplicationRelatedReview) -> Void)?) async throws -> ApplicationRelatedReview?
   @ObservationIgnored private var cancellationRequestedAt: ContinuousClock.Instant?
   private(set) var cancellationLayoutMilliseconds: Double?
   @ObservationIgnored private var preparationTask: Task<RelatedDataService.AvailableUninstallPlan, Error>?
@@ -65,6 +86,7 @@ final class AppsStore {
       nil,
     availableUninstallPlanBuilder: AvailableUninstallPlanBuilder? = nil,
     relatedService: RelatedDataService = .system,
+    selectedReview: SelectedReview? = nil,
     orphanPlanBuilder: @escaping @Sendable ([RelatedDataCandidate]) async throws -> ActionPlan = { candidates in
       let service = RelatedDataService.system
       let plans = try candidates.map { try service.plan(candidate: $0) }
@@ -95,6 +117,9 @@ final class AppsStore {
       }.value
     }
   ) {
+    self.selectedReview = selectedReview
+    self.relatedService = relatedService
+    self.usesInjectedPlanner = availableUninstallPlanBuilder != nil || uninstallPlanBuilder != nil || planBuilder != nil
     self.pictures = pictures
     self.running = running
     self.events = events
@@ -165,6 +190,17 @@ final class AppsStore {
     guard !busy else { return }
     invalidatePreparation(actions: actions)
     reviewedDropPath = nil
+    cancelSelectedReview()
+    let previousSession = session
+    session = nil
+    if let previousSession { Task { await previousSession.cancel() } }
+    relatedReviewedPaths = []
+    removedPaths = []
+    ownershipPendingPaths = []
+    backgroundStartedAt = .now
+    inventoryPublishedAt = nil
+    backgroundFinishedAt = nil
+    backgroundCancelledAt = nil
     let id = UUID()
     generation = id
     cancellationRequestedAt = nil
@@ -193,13 +229,22 @@ final class AppsStore {
         await MainActor.run {
           guard self.generation == id else { return }
           switch event {
+          case .session(let session):
+            self.session = session
           case .inventory(_, let metadata):
             self.reports = metadata
             self.measuringPaths = Set(metadata.map(\.path))
+            self.inventoryPublishedAt = .now
+            self.pictureRows = []
+            self.pictureObservedAt = nil
+          case .related(let path, let candidates, let ownershipPending):
+            self.publishRelated(path: path, candidates: candidates, ownershipPending: ownershipPending)
+          case .ownershipReady(let inventory):
+            self.inventoryComplete = inventory.complete
           case .measured(let batch):
             for report in batch {
               if let index = self.reports.firstIndex(where: { $0.path == report.path }) {
-                self.reports[index] = report
+                self.reports[index] = self.mergingMeasurement(report, with: self.reports[index])
                 self.measuringPaths.remove(report.path)
                 self.measuredCount += 1
               }
@@ -207,7 +252,12 @@ final class AppsStore {
           case .orphans(let candidates):
             self.orphanCandidates = candidates
           case .completed(let inventory, let reports):
-            self.reports = reports
+            self.reports = reports.filter { !self.removedPaths.contains($0.path) }.map { report in
+              self.reports.first(where: { $0.path == report.path }).map {
+                self.mergingMeasurement(report, with: $0)
+              } ?? report
+            }
+            self.backgroundFinishedAt = .now
             self.measuringPaths = []
             self.measuredCount = reports.count
             self.inventoryComplete = inventory.complete
@@ -218,9 +268,14 @@ final class AppsStore {
           }
         }
       }
-      guard let inventory = finishedInventory, !Task.isCancelled else {
+      guard finishedInventory != nil, !Task.isCancelled else {
         await MainActor.run {
           guard self.generation == id, !Task.isCancelled else { return }
+          self.cancelSelectedReview()
+          self.backgroundCancelledAt = .now
+          let endedSession = self.session
+          self.session = nil
+          if let endedSession { Task { await endedSession.cancel() } }
           self.busy = false
           self.needsRescan = true
           self.measuringPaths = []
@@ -228,16 +283,6 @@ final class AppsStore {
           self.message = String(localized: "Scan stopped before review was complete. Scan again.")
         }
         return
-      }
-      for app in inventory.applications {
-        if Task.isCancelled { break }
-        let status = await running.isRunning(bundleID: app.bundleID)
-        await MainActor.run {
-          guard self.generation == id else { return }
-          if status == true { self.runningIDs.insert(app.bundleID) }
-          if status == nil { self.runningUnknownIDs.insert(app.bundleID) }
-          self.runningCheckedIDs.insert(app.bundleID)
-        }
       }
       let picture = await MainActor.run {
         ResultPicture(
@@ -259,12 +304,18 @@ final class AppsStore {
     guard busy else { return }
     cancellationRequestedAt = .now
     cancellationLayoutMilliseconds = nil
+    backgroundCancelledAt = .now
+    cancelSelectedReview()
+    let cancelledSession = session
+    session = nil
+    if let cancelledSession { Task { await cancelledSession.cancel() } }
     generation = UUID()
     scanTask?.cancel()
     scanTask = nil
     busy = false
     measuringPaths = []
     needsRescan = true
+    invalidatePreparation()
     packageSelected = false
     selectedDataPaths = []
     message = String(localized: "Scan cancelled")
@@ -288,11 +339,137 @@ final class AppsStore {
     packageSelected = false
     selectedDataPaths = []
     message = nil
+    requestSelectedReview(path)
   }
 
   func select(_ path: String, actions: ActionStore) {
     invalidatePreparation(actions: actions)
     select(path)
+  }
+
+  func waitForSelectedReview() async { await selectedReviewTask?.value }
+
+  private func cancelSelectedReview() {
+    selectedReviewToken = UUID()
+    selectedReviewTask?.cancel()
+    selectedReviewTask = nil
+    selectedReviewPending = false
+  }
+
+  private func requestSelectedReview(_ path: String) {
+    cancelSelectedReview()
+    let activeSession = session
+    let review = selectedReview
+    // Legacy injected streams already carry fully reviewed reports.
+    guard activeSession != nil || review != nil else { return }
+    let token = UUID()
+    selectedReviewToken = token
+    let scanGeneration = generation
+    selectedReviewRequestedAt = .now
+    selectedPackageReadyAt = nil
+    selectedReviewPublishedAt = nil
+    selectedReviewReadyAt = nil
+    selectedReviewPending = true
+    let running = self.running
+    let bundleID = selectedReport?.bundleID
+    if let bundleID {
+      runningCheckedIDs.remove(bundleID)
+      runningIDs.remove(bundleID)
+      runningUnknownIDs.remove(bundleID)
+    }
+    selectedReviewTask = Task(priority: .userInitiated) { @concurrent in
+      if let bundleID {
+        let status = await running.isRunning(bundleID: bundleID)
+        await MainActor.run {
+          guard self.acceptsReview(path: path, token: token, generation: scanGeneration) else { return }
+          self.runningCheckedIDs.insert(bundleID)
+          if status == false { self.selectedPackageReadyAt = .now }
+          if status == true { self.runningIDs.insert(bundleID) }
+          if status == nil { self.runningUnknownIDs.insert(bundleID) }
+        }
+      }
+      guard !Task.isCancelled else { return }
+      let progress: @Sendable (ApplicationRelatedReview) -> Void = { update in
+        Task { @MainActor in
+          guard self.acceptsReview(path: path, token: token, generation: scanGeneration) else { return }
+          self.publishReview(update, path: path)
+        }
+      }
+      do {
+        let result: ApplicationRelatedReview?
+        if let review {
+          result = try await review(path, progress)
+        } else if let activeSession {
+          result = try await activeSession.relatedReview(path: path, progress: progress)
+        } else {
+          result = nil
+        }
+        guard !Task.isCancelled else { return }
+        await MainActor.run {
+          guard self.acceptsReview(path: path, token: token, generation: scanGeneration) else { return }
+          if let result { self.publishReview(result, path: path, ready: true) }
+          self.selectedReviewPending = false
+          self.selectedReviewTask = nil
+        }
+      } catch {
+        await MainActor.run {
+          guard self.acceptsReview(path: path, token: token, generation: scanGeneration) else { return }
+          self.selectedReviewPending = false
+          self.selectedReviewTask = nil
+          self.message = FailureText.describe(error)
+        }
+      }
+    }
+  }
+
+  private func acceptsReview(path: String, token: UUID, generation: UUID) -> Bool {
+    self.generation == generation && selectedReviewToken == token && selectedPath == path
+      && !needsRescan && pictureRows.isEmpty
+  }
+
+  private func publishReview(_ review: ApplicationRelatedReview, path: String, ready: Bool = false) {
+    guard review.application.path == path, let old = reports.first(where: { $0.path == path }),
+      old.bundleID == review.application.bundleID
+    else { return }
+    publishRelated(path: path, candidates: review.candidates, ownershipPending: review.ownershipPending)
+    if let index = reports.firstIndex(where: { $0.path == path }) {
+      let current = reports[index]
+      var updated = ApplicationReport(
+        path: current.path, bundleID: current.bundleID, version: current.version,
+        signerTeamID: review.signerTeamID ?? current.signerTeamID,
+        logical: current.logical, allocated: current.allocated, knownItemCount: current.knownItemCount,
+        partial: current.partial, related: current.related,
+        manualUninstallerSuggested: current.manualUninstallerSuggested, linkTarget: current.linkTarget)
+      updated.isIOSWrapper = current.isIOSWrapper
+      reports[index] = updated
+    }
+    selectedReviewPublishedAt = selectedReviewPublishedAt ?? .now
+    if ready { selectedReviewReadyAt = selectedReviewReadyAt ?? .now }
+  }
+
+  private func publishRelated(path: String, candidates: [RelatedDataCandidate], ownershipPending: Bool) {
+    guard !removedPaths.contains(path), let index = reports.firstIndex(where: { $0.path == path }) else { return }
+    let incoming = candidates.filter { !removedPaths.contains($0.path) }
+    let incomingPaths = Set(incoming.map(\.path))
+    reports[index].related =
+      ownershipPending
+      ? incoming + reports[index].related.filter { !incomingPaths.contains($0.path) && !removedPaths.contains($0.path) }
+      : incoming
+    relatedReviewedPaths.insert(path)
+    if ownershipPending { ownershipPendingPaths.insert(path) } else { ownershipPendingPaths.remove(path) }
+  }
+
+  private func mergingMeasurement(_ report: ApplicationReport, with current: ApplicationReport) -> ApplicationReport {
+    var merged = ApplicationReport(
+      path: report.path, bundleID: report.bundleID, version: report.version,
+      signerTeamID: current.signerTeamID ?? report.signerTeamID,
+      logical: report.logical, allocated: report.allocated, knownItemCount: report.knownItemCount,
+      partial: report.partial,
+      related: (relatedReviewedPaths.contains(report.path) ? current.related : report.related)
+        .filter { !removedPaths.contains($0.path) },
+      manualUninstallerSuggested: report.manualUninstallerSuggested, linkTarget: report.linkTarget)
+    merged.isIOSWrapper = report.isIOSWrapper
+    return merged
   }
 
   func togglePackage(actions: ActionStore) {
@@ -311,7 +488,6 @@ final class AppsStore {
   /// Why the whole app cannot be moved to the Trash, or nil when it can be selected.
   func packageUnavailableReason(_ report: ApplicationReport) -> String? {
     if let reason = unsupportedPackageReason(report) { return reason }
-    if busy { return String(localized: "Review is available after the scan") }
     if needsRescan { return String(localized: "Scan again to review data") }
 
     guard let bundleID = report.bundleID else { return String(localized: "App identity unavailable") }
@@ -343,7 +519,7 @@ final class AppsStore {
   }
 
   func toggleData(_ path: String, actions: ActionStore) {
-    guard !busy, !needsRescan else { return }
+    guard !needsRescan else { return }
     invalidatePreparation(actions: actions)
     guard let app = selectedReport, let candidate = app.related.first(where: { $0.path == path }),
       canSelect(candidate, app: app)
@@ -365,6 +541,7 @@ final class AppsStore {
     observedResultID = result.planID
     invalidatePreparation(actions: actions, keepPresentedPlanID: true)
     let moved = Set(result.items.filter { $0.outcome == .applied }.compactMap { presentedPaths[$0.itemID] })
+    removedPaths.formUnion(moved)
     let retainedData = reports.filter { moved.contains($0.path) }.flatMap { report in
       report.related.filter { !moved.contains($0.path) }
     }
@@ -384,7 +561,8 @@ final class AppsStore {
 
   func canSelect(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> Bool {
     guard unsupportedPackageReason(app) == nil, candidate.canSelect, candidate.classification == .installed,
-      inventoryComplete || reviewedDropPath == app.path, !busy, !needsRescan, pictureRows.isEmpty,
+      inventoryComplete || relatedReviewedPaths.contains(app.path) || reviewedDropPath == app.path,
+      !needsRescan, pictureRows.isEmpty,
       let id = app.bundleID,
       reports.filter({ $0.bundleID?.caseInsensitiveCompare(id) == .orderedSame }).count == 1,
       id.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame,
@@ -485,7 +663,7 @@ final class AppsStore {
   }
 
   func prepareSelectedData(actions: ActionStore) async {
-    guard !busy, !preparing, !needsRescan, !actions.busy, pictureRows.isEmpty, let report = selectedReport,
+    guard !preparing, !needsRescan, !actions.busy, pictureRows.isEmpty, let report = selectedReport,
       packageSelected || !selectedDataPaths.isEmpty
     else {
       message = String(localized: "Select the app or eligible related data")
@@ -505,7 +683,20 @@ final class AppsStore {
     }
     let includePackage = packageSelected
     let dataPaths = selectedDataPaths
-    let builder = uninstallPlanBuilder
+    let fallbackBuilder = uninstallPlanBuilder
+    let activeSession = usesInjectedPlanner ? nil : session
+    let service = relatedService
+    let builder: AvailableUninstallPlanBuilder = { report, candidates, includePackage in
+      guard let activeSession else { return try await fallbackBuilder(report, candidates, includePackage) }
+      guard let expectedID = report.bundleID, let app = service.application(at: report.path),
+        app.bundleID == expectedID
+      else {
+        return RelatedDataService.AvailableUninstallPlan(
+          plan: nil, rejections: [PlanRejection(.changedSinceScan, path: report.path)])
+      }
+      return await activeSession.makeAvailableUninstallPlan(
+        app: app, selectedRelated: candidates, includePackage: includePackage)
+    }
     await prepare(
       actions: actions,
       stillSelected: {

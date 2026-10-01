@@ -145,7 +145,7 @@ enum Bench {
     for await event in ApplicationDiscovery(related: RelatedDataService(writeVerifiedReceipts: false)).events() {
       switch event {
       case .inventory: inventoryAt = inventoryAt ?? clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-      case .measured, .orphans: break
+      case .measured, .orphans, .session, .related, .ownershipReady: break
       case .completed(let inventory, let final):
         reports = final
         complete = inventory.complete

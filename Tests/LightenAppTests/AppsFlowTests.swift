@@ -273,13 +273,13 @@ private actor AppsAvailableGate {
       let report = try #require(reports.first { $0.path == appPath })
       #expect(report.isIOSWrapper)
       completeSeen = true
-    case .orphans: break
+    case .orphans, .session, .related, .ownershipReady: break
     }
   }
   #expect(metadataSeen && measuredSeen && completeSeen)
   let focused = try #require(await discovery.report(path: appPath))
   #expect(focused.isIOSWrapper)
-  #expect(focused.bundleID == nil)
+  #expect(focused.bundleID == "qa.lighten.wrapper")
   #expect(focused.related.isEmpty)
   let store = AppsStore(pictures: flowPictures(root), droppedReport: { _ in focused })
   let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))

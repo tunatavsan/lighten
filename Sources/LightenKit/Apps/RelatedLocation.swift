@@ -85,20 +85,3 @@ struct ApplicationSigningMetadata: Sendable {
       groupIdentifiers: Set(groups.filter(RelatedDataService.validBundleID)))
   }
 }
-
-enum ApplicationRegistration {
-  static func isInstalled(bundleID: String) -> Bool {
-    var error: Unmanaged<CFError>?
-    guard let result = LSCopyApplicationURLsForBundleIdentifier(bundleID as CFString, &error) else {
-      guard let error = error?.takeRetainedValue() else { return false }
-      return CFErrorGetCode(error) != Int(kLSApplicationNotFoundErr)
-    }
-    guard let urls = result.takeRetainedValue() as? [URL] else { return true }
-    let trash = NSHomeDirectory() + "/.Trash/"
-    return urls.contains { url in
-      let path = url.resolvingSymlinksInPath().path
-      return !path.hasPrefix(trash) && !path.contains("/.Trashes/")
-        && FileManager.default.fileExists(atPath: RelatedDataService.infoPlistPath(ofBundleAt: path))
-    }
-  }
-}
