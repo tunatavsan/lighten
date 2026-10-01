@@ -350,7 +350,7 @@ public actor ActionExecutor {
         }
         continue
       }
-      // The move has happened. Any later error is uncertain, never a failed move.
+      // A move without a verified identity and durable applied record is uncertain.
       do {
         let moved = try KnownPathFileSystem.identity(at: returnedPath)
         guard let original = item.inventory.first?.identity,
@@ -370,18 +370,24 @@ public actor ActionExecutor {
               kind: .applied, planID: plan.id, itemID: item.id,
               returnedTrashPath: returnedPath, movedIdentity: moved
             ))
-          if ownerPackages[item.sourcePath] != nil {
-            movedOwners[item.sourcePath] = try MovedApplicationOwner(
-              planID: plan.id, package: item, path: returnedPath, identity: moved)
-          }
-          results.append(
-            ItemActionResult(
-              itemID: item.id, outcome: .applied,
-              addedFileCount: deltas[item.id]?.0, logicalByteDelta: deltas[item.id]?.1))
         } catch {
           results.append(ItemActionResult(itemID: item.id, outcome: .uncertain, detail: "applied journal failure"))
           break
         }
+        if ownerPackages[item.sourcePath] != nil {
+          do {
+            movedOwners[item.sourcePath] = try MovedApplicationOwner(
+              planID: plan.id, package: item, path: returnedPath, identity: moved)
+          } catch {
+            // The applied record already describes the verified package move.
+            // Dependent data needs this additional fresh owner context.
+            ownerFailures[item.sourcePath] = String(describing: error)
+          }
+        }
+        results.append(
+          ItemActionResult(
+            itemID: item.id, outcome: .applied,
+            addedFileCount: deltas[item.id]?.0, logicalByteDelta: deltas[item.id]?.1))
       } catch {
         results.append(
           ItemActionResult(

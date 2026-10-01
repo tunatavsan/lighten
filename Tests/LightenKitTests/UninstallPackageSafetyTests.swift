@@ -78,6 +78,36 @@ private actor UninstallTrash: TrashMoving {
   func paths() -> [String] { attempts }
 }
 
+private actor UninstallAppliedJournal: ActionJournal {
+  private let journal: JSONLActionJournal
+  private let packageID: UUID
+  private let failApplied: Bool
+  private let afterApplied: (@Sendable (JournalRecord) throws -> Void)?
+
+  init(
+    journal: JSONLActionJournal, packageID: UUID, failApplied: Bool = false,
+    afterApplied: (@Sendable (JournalRecord) throws -> Void)? = nil
+  ) {
+    self.journal = journal
+    self.packageID = packageID
+    self.failApplied = failApplied
+    self.afterApplied = afterApplied
+  }
+
+  func acquireMutationLease() async throws -> JournalLease { try await journal.acquireMutationLease() }
+  func releaseMutationLease(_ lease: JournalLease) async { await journal.releaseMutationLease(lease) }
+  func read() async throws -> JournalReadout { try await journal.read() }
+  func readSummary() async throws -> JournalReadout { try await journal.readSummary() }
+  func loadPlan(id: UUID) async throws -> ActionPlan { try await journal.loadPlan(id: id) }
+
+  func append(_ record: JournalRecord) async throws {
+    let packageApplied = record.kind == .applied && record.itemID == packageID
+    if packageApplied && failApplied { throw JournalFailure.systemCall("fixture append", EIO) }
+    try await journal.append(record)
+    if packageApplied { try afterApplied?(record) }
+  }
+}
+
 private func stopUninstallHelper(_ pid: Int32) async -> Bool {
   func exited() -> Bool {
     var status: Int32 = 0
@@ -100,6 +130,113 @@ private func stopUninstallHelper(_ pid: Int32) async -> Bool {
 
 @Suite("Uninstall package safety")
 struct UninstallPackageSafetyTests {
+  @Test(
+    "Durably applied packages stay applied when owner context fails and independent items still finish",
+    arguments: ["context", "info"])
+  func appliedPackageContextFailure(_ change: String) async throws {
+    let fixture = try UninstallFixture()
+    defer { fixture.cleanup() }
+    let independent = fixture.home + "/independent.bin"
+    let independentBytes = Data("independent owned file".utf8)
+    try independentBytes.write(to: URL(fileURLWithPath: independent))
+    let relatedBytes = try Data(contentsOf: URL(fileURLWithPath: fixture.cache + "/record"))
+    let (app, candidate) = try await fixture.selected()
+    let uninstall = try fixture.service.planUninstall(app: app, selectedRelated: [candidate])
+    let package = try #require(uninstall.items.first { $0.sourcePath == fixture.app })
+    let data = try #require(uninstall.items.first { $0.sourcePath == fixture.cache })
+    let identity = try DescriptorFileSystem.identity(at: independent)
+    let ownPlan = try PlanService(homeDirectory: fixture.home).makeSpacePlan(
+      selections: [.init(path: independent, device: identity.device, inode: identity.inode)],
+      scanRootPath: fixture.home, runID: uninstall.snapshotRunID)
+    let own = try #require(ownPlan.items.first)
+    let plan = ActionPlan(
+      id: uninstall.id, snapshotRunID: uninstall.snapshotRunID, kind: .trash,
+      createdAt: uninstall.createdAt, items: uninstall.items + [own])
+    let durable = JSONLActionJournal(path: fixture.home + "/Journal/actions.jsonl")
+    let journal = UninstallAppliedJournal(
+      journal: durable, packageID: package.id,
+      afterApplied: { record in
+        if change == "context" {
+          // Simulate a fresh source namespace appearing after the durable move.
+          try FileManager.default.createDirectory(atPath: fixture.app, withIntermediateDirectories: false)
+        } else {
+          let moved = try #require(record.returnedTrashPath)
+          try Data("changed owner metadata".utf8).write(to: URL(fileURLWithPath: moved + "/Contents/Info.plist"))
+        }
+      })
+    let trash = UninstallTrash(destination: fixture.home + "/Trash")
+    let result = try await ActionExecutor(
+      journal: journal, trash: trash, guardService: ActionGuard(homeDirectory: fixture.home),
+      related: fixture.service, runningApplications: UninstallNotRunning(),
+      applicationActivity: FixtureClearApplicationActivity()
+    ).execute(plan)
+    #expect(result.items.first { $0.itemID == package.id }?.outcome == .applied)
+    #expect(result.items.first { $0.itemID == data.id }?.outcome == .skipped)
+    #expect(result.items.first { $0.itemID == data.id }?.detail == "changedItem")
+    #expect(result.items.first { $0.itemID == own.id }?.outcome == .applied)
+    #expect(await trash.paths() == [fixture.app, independent])
+    #expect(try Data(contentsOf: URL(fileURLWithPath: fixture.cache + "/record")) == relatedBytes)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: fixture.home + "/Trash/independent.bin")) == independentBytes)
+    #expect(!FileManager.default.fileExists(atPath: independent))
+    let records = try await durable.readSummary().records
+    #expect(records.filter { $0.kind == .intent }.count == 1)
+    #expect(records.filter { $0.itemID == package.id }.map(\.kind) == [.applied])
+    #expect(records.filter { $0.itemID == data.id }.map(\.kind) == [.skipped])
+    let history = try await ActionHistory(journal: durable, homeDirectory: fixture.home).loadGroup(planID: plan.id)
+    #expect(history.appliedCount == 2)
+    #expect(history.items.first { $0.itemID == package.id }?.state == .inTrash)
+    #expect(history.items.first { $0.itemID == package.id }?.applied == true)
+    #expect(history.items.first { $0.itemID == data.id }?.state == .skipped)
+    #expect(history.items.first { $0.itemID == data.id }?.detail == "changedItem")
+    #expect(history.items.first { $0.itemID == own.id }?.state == .inTrash)
+    let restored = try await ActionHistory(journal: durable, homeDirectory: fixture.home).undo(planID: plan.id)
+    #expect(restored.items.first { $0.itemID == own.id }?.outcome == .restored)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: independent)) == independentBytes)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: fixture.cache + "/record")) == relatedBytes)
+  }
+
+  @Test("An applied append failure stays uncertain and stops dependent and independent moves")
+  func packageAppliedAppendFailure() async throws {
+    let fixture = try UninstallFixture()
+    defer { fixture.cleanup() }
+    let (app, candidate) = try await fixture.selected()
+    let uninstall = try fixture.service.planUninstall(app: app, selectedRelated: [candidate])
+    let package = try #require(uninstall.items.first { $0.sourcePath == fixture.app })
+    let data = try #require(uninstall.items.first { $0.sourcePath == fixture.cache })
+    let independent = fixture.home + "/independent.bin"
+    let independentBytes = Data("unattempted owned file".utf8)
+    try independentBytes.write(to: URL(fileURLWithPath: independent))
+    let identity = try DescriptorFileSystem.identity(at: independent)
+    let ownPlan = try PlanService(homeDirectory: fixture.home).makeSpacePlan(
+      selections: [.init(path: independent, device: identity.device, inode: identity.inode)],
+      scanRootPath: fixture.home, runID: uninstall.snapshotRunID)
+    let own = try #require(ownPlan.items.first)
+    let plan = ActionPlan(
+      id: uninstall.id, snapshotRunID: uninstall.snapshotRunID, kind: .trash,
+      createdAt: uninstall.createdAt, items: uninstall.items + [own])
+    let bytes = try Data(contentsOf: URL(fileURLWithPath: fixture.cache + "/record"))
+    let durable = JSONLActionJournal(path: fixture.home + "/Journal/actions.jsonl")
+    let journal = UninstallAppliedJournal(journal: durable, packageID: package.id, failApplied: true)
+    let trash = UninstallTrash(destination: fixture.home + "/Trash")
+    let result = try await ActionExecutor(
+      journal: journal, trash: trash, guardService: ActionGuard(homeDirectory: fixture.home),
+      related: fixture.service, runningApplications: UninstallNotRunning(),
+      applicationActivity: FixtureClearApplicationActivity()
+    ).execute(plan)
+    #expect(result.items.first { $0.itemID == package.id }?.outcome == .uncertain)
+    #expect(result.items.first { $0.itemID == package.id }?.detail == "applied journal failure")
+    #expect(result.items.first { $0.itemID == data.id }?.outcome == .notAttempted)
+    #expect(result.items.first { $0.itemID == own.id }?.outcome == .notAttempted)
+    #expect(await trash.paths() == [fixture.app])
+    #expect(!FileManager.default.fileExists(atPath: fixture.app))
+    #expect(try Data(contentsOf: URL(fileURLWithPath: fixture.cache + "/record")) == bytes)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: independent)) == independentBytes)
+    #expect(try await durable.readSummary().records.map(\.kind) == [.intent])
+    let history = try await ActionHistory(journal: durable, homeDirectory: fixture.home).reconcile()
+    #expect(history.items.first { $0.itemID == package.id }?.state == .uncertain)
+    #expect(history.items.first { $0.itemID == package.id }?.applied == false)
+  }
+
   @Test("A native helper executable blocks both planning and every dependent move")
   func nativeHelperBlocksUninstall() async throws {
     let fixture = try UninstallFixture()
