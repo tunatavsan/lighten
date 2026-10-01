@@ -210,7 +210,7 @@ func installedDataVetoes() async throws {
 }
 
 @Test(
-  "Duplicate ID, incomplete inventory, and similar names cannot authorize installed data",
+  "Duplicate IDs refuse data while unrelated metadata stays scoped",
   arguments: ["missing", "malformed"])
 func installedDataRequiresUniqueCompleteExactOwner(_ unknownMetadata: String) async throws {
   let fixture = try AppsFixture()
@@ -222,7 +222,7 @@ func installedDataRequiresUniqueCompleteExactOwner(_ unknownMetadata: String) as
   #expect((await fixture.service.discover()).first { $0.path == similar }?.classification == .uncertain)
   let sibling = fixture.appRoot + "/Sibling.app"
   try FileManager.default.copyItem(atPath: fixture.app, toPath: sibling)
-  #expect(throws: RelatedFailure.self) {
+  #expect(throws: RelatedFailure.ambiguousOwner) {
     try fixture.service.planInstalled(app: app, candidate: candidate)
   }
   try FileManager.default.removeItem(atPath: sibling)
@@ -233,9 +233,9 @@ func installedDataRequiresUniqueCompleteExactOwner(_ unknownMetadata: String) as
     try Data("malformed application metadata".utf8).write(to: URL(fileURLWithPath: bad + "/Contents/Info.plist"))
   }
   #expect(!fixture.service.inventory().complete)
-  #expect(throws: RelatedFailure.self) {
-    try fixture.service.planInstalled(app: app, candidate: candidate)
-  }
+  let plan = try fixture.service.planInstalled(app: app, candidate: candidate)
+  #expect(plan.items.first?.installedRelatedProof?.appPath == fixture.app)
+  #expect(fixture.service.prepareInstalledOwners(plan: plan).failures.isEmpty)
 }
 
 @Test("Case aliases remain owner evidence but never exclusive installed-data authority")
@@ -508,7 +508,7 @@ func unknownOrphanReportsMetadataCause() async throws {
   let fixture = try AppsFixture()
   defer { fixture.remove() }
   try FileManager.default.removeItem(atPath: fixture.app)
-  let unknown = fixture.home + "/External/LightenQA-unknown.app"
+  let unknown = fixture.home + "/External/" + fixture.bundleID + ".app"
   try FileManager.default.createDirectory(atPath: unknown + "/Contents", withIntermediateDirectories: true)
   try Data("malformed plist".utf8).write(to: URL(fileURLWithPath: unknown + "/Contents/Info.plist"))
   let service = RelatedDataService(
@@ -546,7 +546,7 @@ func orphanAbsenceIgnoresUnrelatedOwnerDirectories() async throws {
 }
 
 @Test(
-  "Unreadable registered application metadata cannot authorize absence even when the per-ID registry is empty",
+  "Unknown metadata blocks its registered ID while unrelated absence remains scoped",
   arguments: [false, true])
 func orphanAbsenceUsesRelevantRegisteredMetadata(relevant: Bool) async throws {
   let fixture = try AppsFixture()
@@ -565,9 +565,17 @@ func orphanAbsenceUsesRelevantRegisteredMetadata(relevant: Bool) async throws {
   #expect(context.inventory.metadataIssues.contains { $0.path == external })
   #expect(context.inventory.ownershipCandidates.contains { $0.path == external })
   let candidate = try #require((await service.discover(context: context)).first { $0.path == fixture.cache })
-  #expect(candidate.classification == .uncertain && candidate.reason == .incompleteInventory)
   let outcome = await service.availableOrphanPlan(candidate: candidate, context: context)
-  #expect(outcome.plan == nil && !outcome.rejections.isEmpty)
+  if relevant {
+    #expect(candidate.classification == .uncertain && candidate.reason == .incompleteInventory)
+    #expect(outcome.plan == nil && !outcome.rejections.isEmpty)
+    #expect(candidate.refusalEvidence.contains { $0.reason == .unknownMetadata && $0.ownerPaths == [external] })
+  } else {
+    #expect(candidate.classification == .orphanVerified && candidate.canSelect)
+    let plan = try #require(outcome.plan)
+    #expect(outcome.rejections.isEmpty)
+    try service.validateOrphan(plan.items[0], plan: plan)
+  }
 }
 
 private struct SelectiveRunning: RunningApplicationSource {

@@ -216,31 +216,44 @@ func orphanRemovalRequiresCurrentAbsence() async throws {
   let fixture = try RemovalFixture()
   defer { fixture.cleanup() }
   try FileManager.default.removeItem(atPath: fixture.app)
-  let candidates = await fixture.service.discover()
+  let service = fixture.service
+  let candidates = await service.discover()
   let selected = candidates.filter { fixture.paths.prefix(3).contains($0.path) }
   #expect(selected.count == 3)
   #expect(
     selected.allSatisfy {
       $0.classification == .orphanVerified && $0.canSelect && !$0.defaultSelected && $0.modifiedAt != nil
     })
-  let plans = try selected.map { try fixture.service.plan(candidate: $0) }
-  let plan = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: plans.flatMap(\.items))
+  let plans = try selected.map { try service.plan(candidate: $0) }
+  let combined = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: plans.flatMap(\.items))
+  for item in combined.items {
+    #expect(throws: RelatedFailure.incompleteInventory) { try service.validateOrphan(item, plan: combined) }
+  }
+  let refused = await service.validatePlan(combined)
+  #expect(refused.count == 3 && refused.allSatisfy { $0.ruleID == "incompleteInventory" })
   let journal = JSONLActionJournal(path: fixture.storage + "/Journal/actions.jsonl")
-  let result = try await ActionExecutor(
+  let executor = ActionExecutor(
     journal: journal,
     trash: RemovalTrash(directory: fixture.storage + "/Trash", native: false),
-    guardService: ActionGuard(homeDirectory: fixture.home), related: fixture.service,
+    guardService: ActionGuard(homeDirectory: fixture.home), related: service,
     runningApplications: RemovalRunning(), applicationActivity: FixtureClearApplicationActivity()
-  ).execute(plan)
-  #expect(result.items.allSatisfy { $0.outcome == .applied }, "\(result.items)")
-  try await ActionHistory(journal: journal, homeDirectory: fixture.home).undo(planID: plan.id)
+  )
+  for original in plans {
+    let result = try await executor.execute(original)
+    #expect(result.items.count == 1 && result.items.allSatisfy { $0.outcome == .applied }, "\(result.items)")
+    let history = ActionHistory(journal: journal, homeDirectory: fixture.home)
+    #expect(try await history.loadGroup(planID: original.id).canUndo)
+    let restored = try await history.undo(planID: original.id)
+    #expect(restored.restoredCount == 1 && restored.remainingCount == 0)
+  }
+  #expect(try await journal.readSummary().records.filter { $0.kind == .intent }.count == 3)
   for candidate in selected { #expect(FileManager.default.fileExists(atPath: candidate.path)) }
   let elsewhere = RelatedDataService(
     homeDirectory: fixture.home, applicationRoots: [fixture.appRoot],
     writeVerifiedReceipts: false, installedElsewhere: { _ in true },
     packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   #expect((await elsewhere.discover()).filter { fixture.paths.contains($0.path) }.allSatisfy { !$0.canSelect })
-  #expect(throws: RelatedFailure.self) { try elsewhere.validateOrphan(plan.items[0], plan: plan) }
+  #expect(throws: RelatedFailure.self) { try elsewhere.validateOrphan(plans[0].items[0], plan: plans[0]) }
 }
 
 @Test("Group ownership must be exclusive and exact observations never grant subtree authority")

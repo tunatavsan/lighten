@@ -108,6 +108,7 @@ final class AuthenticApplicationContext: Sendable {
   let registeredPaths: [String]
   let standardBundleID: String?
   let metadata: ApplicationContextMetadata
+  private let infoAbsences: Mutex<[String: ApplicationMetadataObservation]>
   private let signers = Mutex<[String: ApplicationSignatureCache.Observation]>([:])
 
   init(
@@ -119,6 +120,12 @@ final class AuthenticApplicationContext: Sendable {
     self.inventory = inventory
     self.installedListing = installedListing ?? inventory
     self.metadata = metadata ?? ApplicationContextMetadata()
+    self.infoAbsences = Mutex(
+      Dictionary(
+        inventory.applicationMetadata.compactMap { observation in
+          if case .absentInfo = observation.state { return (observation.path, observation) }
+          return nil
+        }, uniquingKeysWith: { first, _ in first }))
     var first: [String: ApplicationPathObservation] = [:]
     for observation in lineage where first[observation.path] == nil { first[observation.path] = observation }
     self.lineage = first.values.sorted { $0.path < $1.path }
@@ -139,6 +146,17 @@ final class AuthenticApplicationContext: Sendable {
   func validateSignatures() throws {
     let observations = signers.withLock { Array($0.values) }
     for observation in observations { try observation.identity.validate() }
+  }
+
+  func recordInfoAbsence(_ observation: ApplicationMetadataObservation) {
+    guard case .absentInfo = observation.state else { return }
+    infoAbsences.withLock { entries in
+      if entries[observation.path] == nil { entries[observation.path] = observation }
+    }
+  }
+
+  func observedInfoAbsences() -> [ApplicationMetadataObservation] {
+    infoAbsences.withLock { $0.values.sorted { $0.path < $1.path } }
   }
 }
 
@@ -340,6 +358,15 @@ public actor ApplicationScanSession {
       return plan.items.map { PlanRejection(.unavailable, path: $0.sourcePath, ruleID: "cancelled") }
     }
     return await related.validatePlan(plan)
+  }
+
+  public func ownershipRefusalEvidence(for plan: ActionPlan) async -> [RelatedOwnershipRefusalEvidence] {
+    guard !cancelled, !Task.isCancelled else { return [] }
+    let service = related
+    let evidence = await Task.detached(priority: .userInitiated) {
+      service.ownershipRefusalEvidence(for: plan)
+    }.value
+    return cancelled || Task.isCancelled ? [] : evidence
   }
 
   /// A leftover still needs current owner absence and, when present, a

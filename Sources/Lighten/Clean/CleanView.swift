@@ -280,7 +280,8 @@ struct CleanView: View {
       String(localized: "Lighten could not read this data area. Check access to this folder in Finder.")
     case .recordUnsafe: String(localized: "The ownership record could not be verified. Inspect this data in Finder.")
     case .protected: String(localized: "A safety rule protects this data. Inspect it in Finder.")
-    case .installed: String(localized: "An installed app owns this data. Review the app in Applications.")
+    case .installed, .literalIdentifierOwner:
+      String(localized: "An installed app owns this data. Review the app in Applications.")
     case .incompleteInventory:
       String(localized: "Lighten could not check every possible app owner of this data. Inspect it in Finder.")
     case .recordUnavailable: String(localized: "The ownership record is unavailable. Inspect this data in Finder.")
@@ -290,7 +291,7 @@ struct CleanView: View {
       String(localized: "Lighten could not confirm which apps use this shared folder. Inspect the folder in Finder.")
     case .sharedGroup:
       String(localized: "Shared Group Containers may contain data from several apps. Inspect the folder in Finder.")
-    case .installedElsewhere:
+    case .installedElsewhere, .sharedInstalledData:
       String(localized: "An app with this identifier is installed elsewhere. Review the app in Applications.")
     case .orphanVerified:
       String(localized: "No installed app with this identifier was found. Review before moving to Trash.")

@@ -502,7 +502,7 @@ func relatedReceiptRoundTrip() async throws {
   #expect((await service.discover()).first { $0.path == related }?.classification == .installed)
 }
 
-@Test("Recreated object and incomplete owner inventory remain report only")
+@Test("Recreated objects refuse old receipts while unknown owners stay candidate scoped")
 func relatedReceiptRejectsChangedObjectAndPartialInventory() async throws {
   let fixture = try cleanFixture()
   defer { try? FileManager.default.removeItem(atPath: fixture.home) }
@@ -536,19 +536,30 @@ func relatedReceiptRejectsChangedObjectAndPartialInventory() async throws {
   #expect(installedWithPartialInventory.snapshot != nil)
   try FileManager.default.removeItem(atPath: app)
   let absentWithPartialInventory = try #require((await service.discover()).first { $0.path == related })
-  #expect(absentWithPartialInventory.classification == .uncertain)
-  #expect(absentWithPartialInventory.reason == .incompleteInventory)
-  #expect(absentWithPartialInventory.snapshot == nil)
-  #expect(!absentWithPartialInventory.canSelect)
+  #expect(absentWithPartialInventory.classification == .historicallyVerifiedAbsent)
+  #expect(absentWithPartialInventory.reason == .historicallyVerified)
+  #expect(absentWithPartialInventory.snapshot != nil && absentWithPartialInventory.canSelect)
+  let historical = try service.plan(candidate: absentWithPartialInventory)
+  try service.validate(historical.items[0], plan: historical)
+  let relevant = appRoot + "/" + id + ".app"
+  try FileManager.default.createDirectory(atPath: relevant + "/Contents", withIntermediateDirectories: true)
+  try Data("unknown relevant metadata".utf8).write(to: URL(fileURLWithPath: relevant + "/Contents/Info.plist"))
+  let relevantUnknown = try #require((await service.discover()).first { $0.path == related })
+  #expect(relevantUnknown.classification == .uncertain && relevantUnknown.reason == .incompleteInventory)
+  #expect(relevantUnknown.snapshot == nil && !relevantUnknown.canSelect)
+  #expect(relevantUnknown.refusalEvidence.contains { $0.reason == .unknownMetadata && $0.ownerPaths == [relevant] })
+  #expect(throws: RelatedFailure.self) { try service.plan(candidate: relevantUnknown) }
+  try FileManager.default.removeItem(atPath: relevant)
   try FileManager.default.removeItem(atPath: unclassified)
   let orphan = try #require((await service.discover()).first { $0.path == related })
   #expect(orphan.classification == .historicallyVerifiedAbsent)
   try FileManager.default.removeItem(atPath: appRoot)
   try Data("not a directory".utf8).write(to: URL(fileURLWithPath: appRoot))
   #expect((await service.discover()).first { $0.path == related }?.classification == .uncertain)
-  try FileManager.default.removeItem(atPath: related)
+  try FileManager.default.moveItem(atPath: related, toPath: fixture.home + "/Original-related")
   try FileManager.default.createDirectory(atPath: related, withIntermediateDirectories: true)
   #expect((await service.discover()).first { $0.path == related }?.classification == .uncertain)
+  #expect(throws: RelatedFailure.invalidReceipt) { try service.validate(historical.items[0], plan: historical) }
 }
 
 @Test("A bounded child snapshot never makes its parent actionable")
