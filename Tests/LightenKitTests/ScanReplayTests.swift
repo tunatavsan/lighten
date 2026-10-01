@@ -139,6 +139,176 @@ struct ScanReplayTests {
 }
 
 extension ScanReplayTests {
+  @Test("Native histories retain every event while ordering within and across callbacks")
+  func nativeEventOrdering() {
+    let first = FileEvent(path: "/home/first", flags: UInt32(kFSEventStreamEventFlagItemIsFile), id: 11)
+    let second = FileEvent(path: "/home/second", flags: UInt32(kFSEventStreamEventFlagItemIsDir), id: 12)
+    let third = FileEvent(path: "/home/third", flags: UInt32(kFSEventStreamEventFlagItemRemoved), id: 13)
+    let sameID = FileEvent(path: "/home/another", flags: UInt32(kFSEventStreamEventFlagItemCreated), id: 12)
+    var collection = NativeReplayCollection()
+    for batch in [[third, second, first], [sameID, second]] {
+      for event in batch { collection.record(path: event.path, flags: event.flags, id: event.id) }
+    }
+    collection.record(path: nil, flags: UInt32(kFSEventStreamEventFlagHistoryDone), id: 13)
+    // A synchronous flush can deliver another batch after the history sentinel.
+    collection.record(path: first.path, flags: first.flags, id: first.id)
+    let replay = collection.replay(latestID: 13)
+    #expect(replay.complete)
+    #expect(replay.latestID == 13)
+    #expect(replay.events.map(\.id) == [11, 11, 12, 12, 12, 13])
+    #expect(replay.events.filter { $0 == first }.count == 2)
+    #expect(replay.events.filter { $0 == second }.count == 2)
+    #expect(replay.events.filter { $0 == sameID }.count == 1)
+    #expect(replay.events.filter { $0 == third }.count == 1)
+  }
+
+  @Test("Native ordering refreshes exact totals while unsorted public histories still refuse")
+  func nativeOrderedRefresh() async throws {
+    let root = try fixture()
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    try FileManager.default.createDirectory(atPath: root + "/sub", withIntermediateDirectories: true)
+    try Data(repeating: 1, count: 10).write(to: URL(fileURLWithPath: root + "/grow"))
+    try Data(repeating: 2, count: 20).write(to: URL(fileURLWithPath: root + "/sub/remove"))
+    let engine = ScanEngine(configuration: ScanConfiguration(homeDirectory: root))
+    let run = try engine.start(root: root)
+    await run.waitUntilFinished()
+    let old = try #require(run.tree.item(run.tree.rootID))
+    let oldSub = try #require(run.tree.find(path: root + "/sub"))
+    try #require(run.tree.children(of: oldSub, metric: .logical).contains { $0.path == root + "/sub/remove" })
+    try Data(repeating: 3, count: 70).write(to: URL(fileURLWithPath: root + "/grow"))
+    try FileManager.default.removeItem(atPath: root + "/sub/remove")
+    try Data(repeating: 4, count: 30).write(to: URL(fileURLWithPath: root + "/sub/new"))
+    let baseline = ScanReplayBaseline(eventID: 10, volumeUUID: UUID(), storeUUID: UUID())
+    let events = [
+      FileEvent(path: root + "/sub/remove", flags: UInt32(kFSEventStreamEventFlagItemRemoved), id: 13),
+      FileEvent(path: root + "/grow", flags: UInt32(kFSEventStreamEventFlagItemIsFile), id: 11),
+      FileEvent(path: root + "/sub/new", flags: UInt32(kFSEventStreamEventFlagItemIsFile), id: 12),
+    ]
+    #expect(
+      engine.reconcile(
+        tree: run.tree, replay: FileEventReplay(events: events, latestID: 13),
+        baseline: baseline, currentBaseline: baseline) == .requiresFullScan)
+    #expect(run.tree.item(run.tree.rootID) == old)
+    var collection = NativeReplayCollection()
+    for event in events { collection.record(path: event.path, flags: event.flags, id: event.id) }
+    collection.record(path: nil, flags: UInt32(kFSEventStreamEventFlagHistoryDone), id: 13)
+    #expect(
+      engine.reconcile(
+        tree: run.tree, replay: collection.replay(latestID: 13),
+        baseline: baseline, currentBaseline: baseline) == .refreshed(directories: 2))
+    let fresh = try engine.start(root: root)
+    await fresh.waitUntilFinished()
+    let refreshed = try #require(run.tree.item(run.tree.rootID))
+    let full = try #require(fresh.tree.item(fresh.tree.rootID))
+    #expect(refreshed.logical == full.logical)
+    #expect(refreshed.allocated == full.allocated)
+    #expect(refreshed.itemCount == full.itemCount)
+    #expect(refreshed.logical.completeTotal == 100)
+    let sub = try #require(run.tree.find(path: root + "/sub"))
+    let children = run.tree.children(of: sub, metric: .logical)
+    #expect(!children.contains { $0.path == root + "/sub/remove" })
+    let added = try #require(children.first { $0.path == root + "/sub/new" })
+    #expect(added.kind == .file)
+    #expect(added.logical.completeTotal == 30)
+    #expect(added.itemCount == 1)
+  }
+
+  @Test(
+    "Native ordering preserves unsafe flags and below-baseline IDs for refusal",
+    arguments: [
+      UInt32(0), UInt32(kFSEventStreamEventFlagMustScanSubDirs), UInt32(kFSEventStreamEventFlagUserDropped),
+      UInt32(kFSEventStreamEventFlagKernelDropped), UInt32(kFSEventStreamEventFlagEventIdsWrapped),
+      UInt32(kFSEventStreamEventFlagRootChanged), UInt32(kFSEventStreamEventFlagMount),
+      UInt32(kFSEventStreamEventFlagUnmount), UInt32(kFSEventStreamEventFlagItemIsHardlink),
+      UInt32(kFSEventStreamEventFlagItemIsLastHardlink),
+    ])
+  func nativeUnsafeRecords(_ flag: UInt32) async throws {
+    let root = try fixture()
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    let engine = ScanEngine()
+    let run = try engine.start(root: root)
+    await run.waitUntilFinished()
+    let baseline = ScanReplayBaseline(eventID: 10, volumeUUID: UUID(), storeUUID: UUID())
+    let unsafe = FileEvent(path: root + "/change", flags: flag, id: flag == 0 ? 9 : 12)
+    let regular = FileEvent(path: root + "/other", flags: 0, id: 11)
+    var collection = NativeReplayCollection()
+    for event in [unsafe, regular] { collection.record(path: event.path, flags: event.flags, id: event.id) }
+    collection.record(path: nil, flags: UInt32(kFSEventStreamEventFlagHistoryDone), id: 12)
+    let replay = collection.replay(latestID: 12)
+    #expect(replay.complete)
+    #expect(replay.events.count == 2)
+    #expect(replay.events.contains(unsafe))
+    #expect(replay.events.contains(regular))
+    #expect(
+      engine.reconcile(tree: run.tree, replay: replay, baseline: baseline, currentBaseline: baseline)
+        == .requiresFullScan)
+  }
+
+  @Test(
+    "A history sentinel cannot hide unsafe flags, even without a usable path",
+    arguments: [
+      UInt32(kFSEventStreamEventFlagMustScanSubDirs), UInt32(kFSEventStreamEventFlagUserDropped),
+      UInt32(kFSEventStreamEventFlagKernelDropped), UInt32(kFSEventStreamEventFlagEventIdsWrapped),
+      UInt32(kFSEventStreamEventFlagRootChanged), UInt32(kFSEventStreamEventFlagMount),
+      UInt32(kFSEventStreamEventFlagUnmount), UInt32(kFSEventStreamEventFlagItemIsHardlink),
+      UInt32(kFSEventStreamEventFlagItemIsLastHardlink),
+    ])
+  func nativeUnsafeHistoryMarker(_ flag: UInt32) async throws {
+    let root = try fixture()
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    let engine = ScanEngine()
+    let run = try engine.start(root: root)
+    await run.waitUntilFinished()
+    let baseline = ScanReplayBaseline(eventID: 10, volumeUUID: UUID(), storeUUID: UUID())
+    let flags = flag | UInt32(kFSEventStreamEventFlagHistoryDone)
+    for path in [Optional(root), nil] {
+      var collection = NativeReplayCollection()
+      collection.record(path: root + "/regular", flags: 0, id: 11)
+      collection.record(path: path, flags: flags, id: 12)
+      #expect(collection.shouldStopWaiting)
+      let replay = collection.replay(latestID: 12)
+      #expect(!replay.complete)
+      #expect(replay.events.count == (path == nil ? 1 : 2))
+      if let path {
+        #expect(replay.events.contains(FileEvent(path: path, flags: flags, id: 12)))
+      }
+      #expect(
+        engine.reconcile(tree: run.tree, replay: replay, baseline: baseline, currentBaseline: baseline)
+          == .requiresFullScan)
+    }
+  }
+
+  @Test(
+    "Incomplete, malformed, and over-limit native collections still require a full scan",
+    arguments: ["incomplete", "malformed", "limit", "overflow"])
+  func nativeIncompleteCollection(_ reason: String) async throws {
+    let root = try fixture()
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    let engine = ScanEngine()
+    let run = try engine.start(root: root)
+    await run.waitUntilFinished()
+    let baseline = ScanReplayBaseline(eventID: 10, volumeUUID: UUID(), storeUUID: UUID())
+    var collection = NativeReplayCollection()
+    let count = reason == "overflow" ? 50_002 : reason == "limit" ? 50_001 : 2
+    for index in 0..<count {
+      collection.record(path: root + "/change", flags: 0, id: UInt64(count - index) + 10)
+    }
+    if reason == "malformed" { collection.record(path: nil, flags: 0, id: 12) }
+    if reason != "incomplete" {
+      collection.record(path: nil, flags: UInt32(kFSEventStreamEventFlagHistoryDone), id: UInt64(count) + 10)
+    }
+    let replay = collection.replay(latestID: UInt64(count) + 10)
+    #expect(replay.events.count == min(count, 50_001))
+    #expect(replay.complete == (reason == "limit"))
+    if reason != "limit" {
+      #expect(replay.events.first?.id == UInt64(count) + 10)
+      #expect(replay.events.last?.id == UInt64(count - min(count, 50_001) + 1) + 10)
+    }
+    #expect(
+      engine.reconcile(tree: run.tree, replay: replay, baseline: baseline, currentBaseline: baseline)
+        == .requiresFullScan)
+  }
+
   @Test(
     "Deleting the counted hardlink requests a full scan and retains the surviving bytes",
     arguments: [UInt32(kFSEventStreamEventFlagItemIsHardlink), UInt32(kFSEventStreamEventFlagItemIsLastHardlink)])

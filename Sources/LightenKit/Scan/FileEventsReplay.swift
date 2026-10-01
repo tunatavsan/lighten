@@ -61,13 +61,47 @@ public struct FileEventReplay: Sendable {
   }
 }
 
-private final class ReplayObservation: Sendable {
-  struct State {
-    var events: [FileEvent] = []
-    var complete = false
-    var overflow = false
+/// Accumulates the native callback protocol before exposing a replay. Callback
+/// delivery order need not follow the IDs of the reported per-path events.
+struct NativeReplayCollection: Sendable {
+  private var events: [FileEvent] = []
+  private var historyComplete = false
+  private var overflow = false
+  private var malformedPath = false
+  private var invalidHistoryMarker = false
+
+  mutating func record(path: String?, flags: UInt32, id: UInt64) {
+    if flags & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 {
+      historyComplete = true
+      // The sentinel's path is unspecified. Only a pure sentinel can be
+      // discarded: additional flags must never hide a history refusal.
+      if flags == UInt32(kFSEventStreamEventFlagHistoryDone) { return }
+      invalidHistoryMarker = true
+    }
+    guard let path else {
+      malformedPath = true
+      return
+    }
+    if events.count < 50_001 {
+      events.append(FileEvent(path: path, flags: flags, id: id))
+    } else {
+      overflow = true
+    }
   }
-  let state = Mutex(State())
+
+  var shouldStopWaiting: Bool { historyComplete || overflow }
+
+  func replay(latestID: UInt64) -> FileEventReplay {
+    let complete = historyComplete && !overflow && !malformedPath && !invalidHistoryMarker
+    // Keep every decoded record, including duplicate IDs and unsafe flags.
+    // Incomplete observations retain their original delivery order.
+    return FileEventReplay(
+      events: complete ? events.sorted { $0.id < $1.id } : events, latestID: latestID, complete: complete)
+  }
+}
+
+private final class ReplayObservation: Sendable {
+  let state = Mutex(NativeReplayCollection())
   let finished = DispatchSemaphore(value: 0)
   func waitForHistory() { _ = finished.wait(timeout: .now() + 5) }
 }
@@ -78,18 +112,9 @@ private let replayCallback: FSEventStreamCallback = { _, context, count, paths, 
   let names = unsafeBitCast(paths, to: NSArray.self)
   let done = observation.state.withLock { state -> Bool in
     for index in 0..<count {
-      if flags[index] & UInt32(kFSEventStreamEventFlagHistoryDone) != 0 {
-        state.complete = true
-        continue
-      }
-      guard let path = names[index] as? String else { continue }
-      if state.events.count < 50_001 {
-        state.events.append(FileEvent(path: path, flags: flags[index], id: ids[index]))
-      } else {
-        state.overflow = true
-      }
+      state.record(path: names[index] as? String, flags: flags[index], id: ids[index])
     }
-    return state.complete || state.overflow
+    return state.shouldStopWaiting
   }
   if done { observation.finished.signal() }
 }
@@ -130,7 +155,7 @@ public enum FileEventsReplay {
       FSEventStreamFlushSync(stream)
       queue.sync {}
       return observation.state.withLock {
-        FileEventReplay(events: $0.events, latestID: latest, complete: $0.complete && !$0.overflow)
+        $0.replay(latestID: latest)
       }
     }.value
   }
