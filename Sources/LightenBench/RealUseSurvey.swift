@@ -38,6 +38,8 @@ final class RealUseSurvey {
   private var listingComplete = false
   private var ownershipComplete = false
   private var metadataIssueCount = 0
+  private var unattributedRejectionCount = 0
+  private var unattributedErrorCount = 0
   private var foldersComplete = true
   private var foldersFinished = false
   private var discoveryComplete = false
@@ -191,21 +193,20 @@ final class RealUseSurvey {
     let session = ApplicationDiscovery(related: service).scanSession()
     self.session = session
     var reports: [ApplicationReport] = []
-    var applications: [InstalledApplication] = []
     for await event in await session.events() {
       switch event {
       case .inventory(let inventory, let current), .completed(let inventory, let current):
         reports = current
-        applications = inventory.applications
         listingComplete = inventory.complete
         ownershipComplete = inventory.ownershipComplete
+        registerScopeExclusions(inventory.scopeExclusions)
         observedApplications = Set(current.map(\.path)).count
         if case .completed = event { discoveryComplete = true }
         registerReports(current)
       case .ownershipReady(let inventory):
-        applications = inventory.applications
         listingComplete = inventory.complete
         ownershipComplete = inventory.ownershipComplete
+        registerScopeExclusions(inventory.scopeExclusions)
         for issue in inventory.ownershipIssues {
           line([
             "type": "ownershipIssue", "path": issue.path, "errno": issue.code,
@@ -248,23 +249,10 @@ final class RealUseSurvey {
     for report in reports {
       stage = "application-planning"
       progress(path: report.path)
-      guard let app = applications.first(where: { $0.path == report.path }) else {
-        await result(
-          path: report.path, scope: "application", owner: report.path,
-          rejections: [.init(.missingMetadata, path: report.path, ruleID: "unidentified-application")],
-          planned: false, planning: nil, validation: nil)
-        for candidate in report.related {
-          await result(
-            path: candidate.path, scope: "installedRelated", owner: report.path,
-            rejections: [.init(.missingMetadata, path: report.path, ruleID: "unidentified-application")],
-            planned: false, planning: nil, validation: nil)
-        }
-        continue
-      }
       let start = ContinuousClock.now
       activePlanStarted = start
       let outcome = await session.makeAvailableUninstallPlan(
-        app: app, selectedRelated: report.related, includePackage: true)
+        path: report.path, expectedBundleID: report.bundleID, selectedRelated: report.related, includePackage: true)
       let planning = elapsed(start)
       planSeconds += planning
       appPlanTimes.append(planning)
@@ -273,26 +261,58 @@ final class RealUseSurvey {
       let checkedAt = ContinuousClock.now
       activeValidationStarted = outcome.plan == nil ? nil : checkedAt
       let validation: [PlanRejection] = if let plan = outcome.plan { await session.validatePlan(plan) } else { [] }
+      let validationEvidence =
+        if let plan = outcome.plan, !validation.isEmpty {
+          await session.ownershipRefusalEvidence(for: plan)
+        } else { [RelatedOwnershipRefusalEvidence]() }
       let checking = outcome.plan == nil ? nil : elapsed(checkedAt)
       validationSeconds += checking ?? 0
       activeValidationStarted = nil
       let rejections = outcome.rejections + validation
-      let roots = [report.path] + report.related.map(\.path)
+      let evidence = outcome.refusalEvidence + validationEvidence
+      let packageItems = outcome.plan?.items.filter { $0.policy == .wholeBundle || $0.policy == .applicationLink } ?? []
+      let packageRoots = Array(
+        Set([report.path] + [report.linkTarget].compactMap { $0 } + packageItems.map(\.sourcePath)))
+      let roots = packageRoots + report.related.map(\.path)
       let unassigned = rejections.filter { rejection in
         !roots.contains { Self.covers(root: $0, path: rejection.path) }
       }
-      let packageRefusals = rejections.filter { Self.covers(root: report.path, path: $0.path) } + unassigned
+      let packageRefusals = rejections.filter { rejection in
+        packageRoots.contains { Self.covers(root: $0, path: rejection.path) }
+      }
+      for rejection in unassigned {
+        let row = await refusal(rejection, evidence: evidence)
+        unattributedRejectionCount += 1
+        if row["classification"] as? String != "legitimate" { unattributedErrorCount += 1 }
+        line([
+          "type": "unattributedPlanRejection", "ownerApplicationPath": report.path,
+          "includedInApplicationDenominator": false, "rejection": row,
+          "owningRequestOutcome": "errorRefusal",
+        ])
+      }
+      let physicalItems = packageItems.filter { $0.policy == .wholeBundle }
+      let linkItems = packageItems.filter { $0.policy == .applicationLink }
+      let requiresLink = report.linkTarget != nil || !linkItems.isEmpty
+      let packagePlanned =
+        physicalItems.count == 1
+        && (!requiresLink
+          || linkItems.contains { link in
+            link.sourcePath == report.path && link.packageLinkTargetItemID == physicalItems.first?.id
+          })
+      let packageDetails = await applicationPlanDetails(
+        report: report, items: packageItems, rejections: packageRefusals, evidence: evidence,
+        validationPerformed: checking != nil)
       await result(
-        path: report.path, scope: "application", owner: report.path, rejections: packageRefusals,
-        planned: outcome.plan?.items.contains { $0.sourcePath == report.path } == true,
-        planning: planning, validation: checking)
+        path: report.path, scope: "application", owner: report.path, rejections: packageRefusals + unassigned,
+        planned: packagePlanned, planning: planning, validation: checking, evidence: evidence,
+        extra: packageDetails, forceError: !unassigned.isEmpty)
       for candidate in report.related {
         let refusals = rejections.filter { Self.covers(root: candidate.path, path: $0.path) }
         await result(
           path: candidate.path, scope: "installedRelated", owner: report.path,
           rejections: packageRefusals.isEmpty ? refusals : packageRefusals + refusals,
           planned: outcome.plan?.items.contains { $0.sourcePath == candidate.path } == true,
-          planning: planning, validation: checking)
+          planning: planning, validation: checking, evidence: evidence)
       }
       completedApplications += 1
     }
@@ -312,6 +332,10 @@ final class RealUseSurvey {
       let checkedAt = ContinuousClock.now
       activeValidationStarted = outcome.plan == nil ? nil : checkedAt
       let validation: [PlanRejection] = if let plan = outcome.plan { await session.validatePlan(plan) } else { [] }
+      let validationEvidence =
+        if let plan = outcome.plan, !validation.isEmpty {
+          await session.ownershipRefusalEvidence(for: plan)
+        } else { [RelatedOwnershipRefusalEvidence]() }
       let checking = outcome.plan == nil ? nil : elapsed(checkedAt)
       validationSeconds += checking ?? 0
       activeValidationStarted = nil
@@ -319,7 +343,7 @@ final class RealUseSurvey {
         path: candidate.path, scope: kind, owner: nil,
         rejections: outcome.rejections + validation,
         planned: outcome.plan?.items.contains { $0.sourcePath == candidate.path } == true,
-        planning: planning, validation: checking)
+        planning: planning, validation: checking, evidence: outcome.refusalEvidence + validationEvidence)
     }
     await session.cancel()
     self.session = nil
@@ -341,6 +365,99 @@ final class RealUseSurvey {
     observedApplications = targets.values.filter { $0.scope == "application" }.count
   }
 
+  private func registerScopeExclusions(_ exclusions: [ApplicationScopeExclusion]) {
+    for exclusion in exclusions {
+      let scope = "simulatorOutOfScope"
+      let id = scope + "::" + exclusion.path
+      register(
+        path: exclusion.path, scope: scope, owner: nil, logical: nil, allocated: nil,
+        extra: [
+          "bundleID": exclusion.bundleID as Any? ?? NSNull(),
+          "reason": exclusion.reason, "nextStep": exclusion.nextStep,
+          "includedInApplicationDenominator": false,
+          "byteObservation": "not supplied by discovery; unknown",
+        ])
+      targets[id]?.outcome = "outOfScope"
+      line([
+        "type": "result", "id": id, "scope": scope, "path": exclusion.path,
+        "bundleID": exclusion.bundleID as Any? ?? NSNull(), "outcome": "outOfScope",
+        "reason": exclusion.reason, "nextStep": exclusion.nextStep,
+        "includedInApplicationDenominator": false, "planBuilt": false, "planExecution": false,
+        "fullValidationPerformed": false, "rejections": [], "bytes": bytes(nil, nil),
+      ])
+    }
+  }
+
+  private func applicationPlanDetails(
+    report: ApplicationReport, items: [PlanItem], rejections: [PlanRejection],
+    evidence: [RelatedOwnershipRefusalEvidence], validationPerformed: Bool
+  ) async -> [String: Any] {
+    var rows: [[String: Any]] = []
+    for item in items {
+      let relevant = rejections.filter { Self.covers(root: item.sourcePath, path: $0.path) }
+      var refusals: [[String: Any]] = []
+      for rejection in relevant { refusals.append(await refusal(rejection, evidence: evidence)) }
+      let dependencies =
+        item.policy == .applicationLink
+        ? rejections.filter { rejection in
+          items.contains { $0.policy == .wholeBundle && Self.covers(root: $0.sourcePath, path: rejection.path) }
+        } : []
+      var dependencyRows: [[String: Any]] = []
+      for rejection in dependencies { dependencyRows.append(await refusal(rejection, evidence: evidence)) }
+      let outcome = Self.resultOutcome(planned: true, refusals: refusals + dependencyRows)
+      let row: [String: Any] = [
+        "type": "applicationPlanItem", "ownerApplicationPath": report.path,
+        "itemID": item.id.uuidString, "sourcePath": item.sourcePath,
+        "role": item.policy == .applicationLink ? "linkLeaf" : "physicalPackage",
+        "packageLinkTargetItemID": item.packageLinkTargetItemID?.uuidString as Any? ?? NSNull(),
+        "applicationBundleID": item.applicationBundleID as Any? ?? NSNull(),
+        "pathSource": "freshPlan", "includedInApplicationDenominator": false,
+        "planBuilt": true, "outcome": outcome, "rejections": refusals,
+        "dependencyRejections": dependencyRows,
+        "fullValidationPerformed": validationPerformed,
+        "planExecution": false, "bytes": bytes(item.displaySize.logical, item.displaySize.allocated),
+      ]
+      rows.append(row)
+      line(row)
+    }
+    let physical = items.first { $0.policy == .wholeBundle }
+    let leaf = items.first { $0.policy == .applicationLink && $0.sourcePath == report.path }
+    let expectedPhysical = report.linkTarget ?? report.path
+    let missingTargets: [(String, String)] =
+      (physical == nil ? [(expectedPhysical, "physicalPackage")] : [])
+      + (report.linkTarget != nil && leaf == nil ? [(report.path, "linkLeaf")] : [])
+    for (path, role) in missingTargets {
+      let relevant = rejections.filter { Self.covers(root: path, path: $0.path) }
+      var refusals: [[String: Any]] = []
+      for rejection in relevant { refusals.append(await refusal(rejection, evidence: evidence)) }
+      let dependencies =
+        role == "linkLeaf" ? rejections.filter { Self.covers(root: expectedPhysical, path: $0.path) } : []
+      var dependencyRows: [[String: Any]] = []
+      for rejection in dependencies { dependencyRows.append(await refusal(rejection, evidence: evidence)) }
+      let row: [String: Any] = [
+        "type": "applicationPlanTarget", "ownerApplicationPath": report.path,
+        "itemID": NSNull(), "sourcePath": path, "role": role,
+        "packageLinkTargetItemID": NSNull(), "pathSource": "listedObservation",
+        "includedInApplicationDenominator": false, "planBuilt": false,
+        "outcome": Self.resultOutcome(planned: false, refusals: refusals + dependencyRows), "rejections": refusals,
+        "dependencyRejections": dependencyRows,
+        "fullValidationPerformed": false, "planExecution": false, "bytes": bytes(nil, nil),
+        "unexplainedMissingPlan": relevant.isEmpty && dependencies.isEmpty,
+      ]
+      rows.append(row)
+      line(row)
+    }
+    return [
+      "physicalPackagePath": physical?.sourcePath as Any? ?? NSNull(),
+      "physicalPackageItemID": physical?.id.uuidString as Any? ?? NSNull(),
+      "listedLinkPath": report.linkTarget != nil || leaf != nil ? report.path as Any : NSNull(),
+      "listedLinkItemID": leaf?.id.uuidString as Any? ?? NSNull(),
+      "observedLinkTarget": report.linkTarget as Any? ?? NSNull(),
+      "packageAndLinkResults": rows,
+      "packageSuccessRequiresLink": report.linkTarget != nil || leaf != nil,
+    ]
+  }
+
   private func registerRelated(
     _ candidate: RelatedDataCandidate, scope: String, owner: String?,
     extra: [String: Any] = [:]
@@ -352,6 +469,7 @@ final class RealUseSurvey {
     details["canSelectObservation"] = candidate.canSelect
     details["matchStrength"] = candidate.matchStrength.rawValue
     details["bundleID"] = candidate.bundleID as Any? ?? NSNull()
+    details["ownershipRefusalEvidence"] = candidate.refusalEvidence.map { Self.ownershipEvidence($0, fresh: false) }
     register(path: candidate.path, scope: scope, owner: owner, logical: values.0, allocated: values.1, extra: details)
   }
 
@@ -424,21 +542,25 @@ final class RealUseSurvey {
 
   private func result(
     path: String, scope: String, owner: String?, rejections: [PlanRejection],
-    planned: Bool, planning: Double?, validation: Double?
+    planned: Bool, planning: Double?, validation: Double?,
+    evidence: [RelatedOwnershipRefusalEvidence] = [], extra: [String: Any] = [:], forceError: Bool = false
   ) async {
     let id = scope + ":" + (owner ?? "") + ":" + path
     var refusalRows: [[String: Any]] = []
-    for rejection in rejections { refusalRows.append(await refusal(rejection)) }
-    let outcome: String
-    if rejections.isEmpty && planned {
-      outcome = "actionable"
-    } else if !refusalRows.isEmpty && refusalRows.allSatisfy({ $0["classification"] as? String == "legitimate" }) {
-      outcome = "legitimateRefusal"
-    } else {
-      outcome = "errorRefusal"
+    for rejection in rejections { refusalRows.append(await refusal(rejection, evidence: evidence)) }
+    let outcome = forceError ? "errorRefusal" : Self.resultOutcome(planned: planned, refusals: refusalRows)
+    let relevantEvidence = evidence.filter { $0.candidatePath == path }
+    for veto in relevantEvidence where veto.reason == .unknownMetadata {
+      line([
+        "type": "ownershipVeto", "candidatePath": veto.candidatePath,
+        "bundleID": veto.bundleID as Any? ?? NSNull(), "unknownOwnerPaths": veto.ownerPaths,
+        "reason": veto.reason.rawValue, "detail": veto.detail as Any? ?? NSNull(),
+        "nextStep": veto.nextStep, "freshPlanEvidence": true, "classification": "ERROR",
+      ])
     }
     targets[id]?.outcome = outcome
-    line([
+    var row = extra
+    row.merge([
       "type": "result", "id": id, "scope": scope, "path": path,
       "ownerApplicationPath": owner as Any? ?? NSNull(), "outcome": outcome,
       "planBuilt": planned, "planBuilderSeconds": planning as Any? ?? NSNull(),
@@ -447,10 +569,32 @@ final class RealUseSurvey {
       "timingScope": scope == "installedRelated" ? "shared owner application plan" : "requested item plan",
       "bytes": bytes(targets[id]?.logical, targets[id]?.allocated),
       "unexplainedMissingPlan": !planned && rejections.isEmpty,
-    ])
+      "ownershipRefusalEvidence": relevantEvidence.map { Self.ownershipEvidence($0, fresh: true) },
+      "hasUnattributedRejection": forceError,
+    ]) { _, value in value }
+    line(row)
   }
 
-  private func refusal(_ rejection: PlanRejection) async -> [String: Any] {
+  private static func resultOutcome(planned: Bool, refusals: [[String: Any]]) -> String {
+    if refusals.isEmpty && planned { return "actionable" }
+    if !refusals.isEmpty && refusals.allSatisfy({ $0["classification"] as? String == "legitimate" }) {
+      return "legitimateRefusal"
+    }
+    return "errorRefusal"
+  }
+
+  private static func ownershipEvidence(_ evidence: RelatedOwnershipRefusalEvidence, fresh: Bool) -> [String: Any] {
+    [
+      "candidatePath": evidence.candidatePath, "bundleID": evidence.bundleID as Any? ?? NSNull(),
+      "reason": evidence.reason.rawValue, "ownerPaths": evidence.ownerPaths,
+      "nextStep": evidence.nextStep, "detail": evidence.detail as Any? ?? NSNull(),
+      "freshPlanEvidence": fresh,
+    ]
+  }
+
+  private func refusal(
+    _ rejection: PlanRejection, evidence: [RelatedOwnershipRefusalEvidence] = []
+  ) async -> [String: Any] {
     let named = rejection.ruleID ?? ""
     let code = named.hasPrefix("errno:") ? Int32(named.dropFirst(6)) : nil
     var info = stat()
@@ -494,6 +638,10 @@ final class RealUseSurvey {
       if !names.isEmpty { processEvidenceSource = "workspaceBundleIdentifier" }
     }
     let legit: Bool
+    let matchingEvidence = evidence.filter { $0.candidatePath == rejection.path }
+    let sharedOwners = matchingEvidence.first {
+      $0.reason == .sharedInstalledOwners && Set($0.ownerPaths).count >= 2
+    }
     switch rejection.reason {
     case .protectedItem, .containsProtectedItem: legit = neverRule != nil
     case .lightenItself: legit = true
@@ -501,6 +649,10 @@ final class RealUseSurvey {
     case .needsAdministrator: legit = owner.map { $0 != geteuid() } ?? false
     case .unreadableFolder, .userPermissionDenied:
       legit = code.map { $0 > 0 } ?? false
+    case .unavailable:
+      legit =
+        named == "ambiguousOwner" && sharedOwners != nil
+        && !matchingEvidence.contains { $0.reason == .unknownMetadata || $0.reason == .infoAbsenceChanged }
     default: legit = false
     }
     return [
@@ -514,6 +666,9 @@ final class RealUseSurvey {
       "currentUserDescriptorState": currentUserDescriptorState as Any? ?? NSNull(),
       "observedStatErrno": observedErrno as Any? ?? NSNull(), "ownerUID": owner as Any? ?? NSNull(),
       "classification": legit ? "legitimate" : "ERROR",
+      "ownershipRefusalEvidence": matchingEvidence.map { Self.ownershipEvidence($0, fresh: true) },
+      "legitimateCategory": legit && rejection.reason == .unavailable && sharedOwners != nil
+        ? "sharedInstalledOwners" as Any : NSNull(),
       "appleSystemPath": rejection.path.hasPrefix("/System/"),
     ]
   }
@@ -521,7 +676,9 @@ final class RealUseSurvey {
   private func finish(timedOut: Bool) {
     guard !finished else { return }
     finished = true
-    let requested = Array(targets.values)
+    let observed = Array(targets.values)
+    let requested = observed.filter { $0.scope != "simulatorOutOfScope" }
+    let exclusions = observed.filter { $0.scope == "simulatorOutOfScope" }
     let pending = requested.filter { $0.outcome == "pending" }.count
     let folderCoverage = scope == "apps" || (foldersFinished && foldersComplete)
     let applicationCoverage =
@@ -547,13 +704,17 @@ final class RealUseSurvey {
       ancestors.append(path)
     }
     var scopes: [String: [String: Any]] = [:]
-    for name in ["space", "application", "installedRelated", "orphanRelated", "unmatchedRelated"] {
-      let rows = requested.filter { $0.scope == name }
+    for name in [
+      "space", "application", "installedRelated", "orphanRelated", "unmatchedRelated", "simulatorOutOfScope",
+    ] {
+      let rows = observed.filter { $0.scope == name }
       let included = name == "space" ? scope != "apps" : scope != "space"
       let covered = name == "space" ? folderCoverage : applicationCoverage
       var values = scopeSummary(
         rows, coverageComplete: included && !timedOut && covered && rows.allSatisfy { $0.outcome != "pending" })
       values["includedInSurvey"] = included
+      values["includedInApplicationDenominator"] = name == "application"
+      values["includedInRequestedDenominator"] = name != "simulatorOutOfScope"
       scopes[name] = values
     }
     line([
@@ -582,6 +743,12 @@ final class RealUseSurvey {
       "folderPoolCount": folderPoolCount, "folderLimit": folderLimit,
       "folderRanking": "global known logical lower bound; partial observations included",
       "requestedCount": requested.count, "allObservedRowCount": targets.count,
+      "simulatorOutOfScopeObservedCount": exclusions.count,
+      "simulatorOutOfScopeCompletedCount": exclusions.filter { $0.outcome == "outOfScope" }.count,
+      "simulatorOutOfScope": scopeSummary(exclusions, coverageComplete: applicationCoverage && !timedOut),
+      "applicationDenominator": "Mac application request rows; simulator device apps reported separately",
+      "unattributedPlanRejectionCount": unattributedRejectionCount,
+      "unattributedPlanErrorCount": unattributedErrorCount,
       "uniqueObservedPathCount": paths.count, "uniqueFolderPoolPathCount": folderPoolPaths.count,
       "requested": scopeSummary(requested, coverageComplete: completed), "scopes": scopes,
       "canonicalUnionLogicalBytes": NSNull(), "canonicalUnionMeasured": false, "overlaps": overlaps,

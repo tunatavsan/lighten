@@ -175,6 +175,21 @@ struct AppsView: View {
           Text(resultLine(result))
             .font(.system(size: 11)).foregroundStyle(LightenStyle.muted).padding(.top, 7)
         }
+        ForEach(store.packageItemResults) { item in
+          VStack(alignment: .leading, spacing: 2) {
+            Text(
+              "\(item.isLink ? String(localized: "Application link") : String(localized: "Physical application")): \(packageOutcome(item.outcome))"
+            )
+            .font(.system(size: 11, weight: .medium))
+            Text(item.sourcePath).font(.system(size: 10)).textSelection(.enabled)
+              .foregroundStyle(LightenStyle.muted)
+            if let detail = item.detail {
+              Text(FailureText.describe(detail)).font(.system(size: 10))
+            }
+          }
+          .padding(.top, 5)
+        }
+
       }
       .padding(20)
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -355,8 +370,7 @@ struct AppsView: View {
           Text(app.bundleID ?? String(localized: "Identity unavailable"))
             .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
             .lineLimit(1).truncationMode(.middle)
-          if let reason = store.packageUnavailableReason(app), !store.busy || store.unsupportedPackageReason(app) != nil
-          {
+          if let reason = store.packageUnavailableReason(app), !store.busy {
             Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
               .lineLimit(2)
           }
@@ -381,7 +395,7 @@ struct AppsView: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .disabled(store.needsRescan || store.unsupportedPackageReason(app) != nil)
+    .disabled(store.needsRescan)
     .accessibilityLabel(
       "\(app.path), \(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : app.partial ? String(localized: "Partial size") : String(localized: "Measured size"))"
     )
@@ -418,11 +432,23 @@ struct AppsView: View {
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         VStack(alignment: .leading, spacing: 5) {
           metadataRow(String(localized: "Bundle ID"), app.bundleID ?? String(localized: "Unknown"))
+          if let target = app.linkTarget {
+            metadataRow(String(localized: "Physical application"), target)
+          }
           metadataRow(String(localized: "Version"), app.version ?? String(localized: "Unknown"))
           metadataRow(String(localized: "Signer"), app.signerTeamID ?? String(localized: "Unavailable"))
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
+        if app.bundleID == nil {
+          Label(
+            String(
+              localized:
+                "This application has no identifier; related data could not be matched by identifier."
+            ),
+            systemImage: "info.circle"
+          ).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+        }
         if let id = app.bundleID, store.runningIDs.contains(id) {
           Label(
             String(localized: "App is running. Quit it normally before reviewing its data."),
@@ -481,7 +507,16 @@ struct AppsView: View {
         }
         Spacer(minLength: 0)
       }
-      if reason != nil, app.linkTarget == nil {
+      if app.linkTarget != nil {
+        Text(
+          String(
+            localized:
+              "The physical application and this link are separate Trash items. Each result is reported separately."
+          )
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      }
+      if reason != nil {
         Button(String(localized: "Show in Finder")) {
           NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: app.path)])
         }
@@ -557,6 +592,30 @@ struct AppsView: View {
         Text(relatedReason(candidate, eligible: eligible))
           .font(.system(size: 10)).foregroundStyle(eligible ? LightenStyle.muted : LightenStyle.warning)
           .fixedSize(horizontal: false, vertical: true)
+        let otherPaths = store.otherInstallationPaths(candidate: candidate, app: app)
+        if !otherPaths.isEmpty {
+          Text(
+            String(
+              localized:
+                "This data is also used by another installation. Remove that installation too before removing this data."
+            )
+          )
+          .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+          ForEach(otherPaths, id: \.self) { path in
+            Button {
+              Task {
+                await store.openOtherInstallation(
+                  path, candidate: candidate, app: app, actions: actions)
+              }
+            } label: {
+              Label(path, systemImage: "arrow.up.forward.app")
+                .font(.system(size: 10)).lineLimit(2).truncationMode(.middle)
+            }
+            .buttonStyle(.plain)
+            .help(String(localized: "Review this installation in Apps"))
+            .accessibilityLabel("\(String(localized: "Review this installation in Apps")): \(path)")
+          }
+        }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       Spacer(minLength: 3)
@@ -586,6 +645,16 @@ struct AppsView: View {
     case .uncertain: String(localized: "Association uncertain · report only")
     case .historicallyVerifiedAbsent: String(localized: "Previously associated · review in Clean")
     case .orphanVerified: String(localized: "App no longer found · review carefully")
+    }
+  }
+
+  private func packageOutcome(_ outcome: ActionOutcome) -> String {
+    switch outcome {
+    case .applied: String(localized: "Moved to Trash")
+    case .skipped: String(localized: "Skipped")
+    case .failed: String(localized: "Failed")
+    case .uncertain: String(localized: "Uncertain")
+    case .notAttempted: String(localized: "Not attempted")
     }
   }
 

@@ -439,4 +439,62 @@ struct ApplicationSignatureCacheTests {
     #expect(bindings.context(for: plan, scope: context.scope, itemID: UUID()) == nil)
   }
 
+  @Test("Linked aliases of one native root retain unique group ownership; a simulator claimant remains a second owner")
+  func linkedGroupOwnerUsesOnePhysicalRoot() async throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    let shared = fixture.home + "/Shared"
+    let physical = shared + "/LightenQA-physical.app"
+    try FileManager.default.createDirectory(atPath: shared, withIntermediateDirectories: true)
+    try FileManager.default.moveItem(atPath: fixture.app, toPath: physical)
+    let alias = fixture.home + "/Applications/LightenQA-alias.app"
+    #expect(symlink(physical, fixture.app) == 0 && symlink(physical, alias) == 0)
+    let registered = Mutex<[String]>([])
+    let service = RelatedDataService(
+      homeDirectory: fixture.home, applicationRoots: [fixture.home + "/Applications"], writeVerifiedReceipts: false,
+      signingMetadata: { _ in ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [fixture.groupID]) },
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+      registration: { ApplicationRegistrationObservation(paths: registered.withLock { $0 }, complete: true) })
+    let observed = try #require(service.application(at: fixture.app))
+    let candidates = await service.discover(for: observed)
+    let group = try #require(candidates.first { $0.path == fixture.group })
+    let cache = try #require(candidates.first { $0.path == fixture.cache })
+    #expect(group.canSelect && cache.canSelect)
+    let session = ApplicationDiscovery(related: service).scanSession()
+    let available = await session.makeAvailableUninstallPlan(
+      path: fixture.app, expectedBundleID: fixture.bundleID, selectedRelated: [group, cache], includePackage: true)
+    let plan = try #require(available.plan)
+    #expect(available.rejections.isEmpty && plan.items.count == 4)
+    #expect(
+      plan.items.filter { $0.installedRelatedProof != nil }.allSatisfy { $0.installedRelatedProof?.appPath == physical }
+    )
+    #expect(service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+    #expect(await session.validatePlan(plan).isEmpty)
+    let simulator =
+      fixture.home + "/Library/Developer/CoreSimulator/Devices/" + UUID().uuidString
+      + "/data/Containers/Bundle/Application/" + UUID().uuidString + "/LightenQA-claimant.app"
+    try FileManager.default.createDirectory(
+      atPath: (simulator as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(atPath: physical, toPath: simulator)
+    try PropertyListSerialization.data(
+      fromPropertyList: [
+        "CFBundleIdentifier": "qa.lighten.second." + UUID().uuidString,
+        "CFBundleExecutable": (fixture.executable as NSString).lastPathComponent,
+      ],
+      format: .xml, options: 0
+    ).write(to: URL(fileURLWithPath: simulator + "/Contents/Info.plist"))
+    registered.withLock { $0 = [simulator] }
+    let fresh = service.makeContext()
+    #expect(fresh.inventory.scopeExclusions.contains { $0.path == simulator })
+    #expect(fresh.inventory.ownershipCandidates.contains { $0.packagePath == simulator })
+    let current = await service.makeAvailableUninstallPlan(
+      app: observed, selectedRelated: [group, cache], includePackage: false, context: fresh)
+    let surviving = try #require(current.plan)
+    #expect(surviving.items.map(\.sourcePath) == [fixture.cache])
+    #expect(current.rejections.contains { $0.path == fixture.group })
+    #expect(service.prepareInstalledOwners(plan: surviving).failures.isEmpty)
+    #expect(await service.validatePlan(surviving).isEmpty)
+    await session.cancel()
+  }
+
 }

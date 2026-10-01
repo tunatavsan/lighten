@@ -337,22 +337,6 @@
         }
       }
     },
-    "App identity unavailable": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "App identity unavailable"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Uygulama kimliği alınamadı"
-          }
-        }
-      }
-    },
     "App is running. Quit it normally before reviewing its data.": {
       "localizations": {
         "en": {
@@ -429,6 +413,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulama envanteri eksik. Diğer konumlar ve okunamayan uygulamalar bilinmiyor."
+          }
+        }
+      }
+    },
+    "Application link": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application link"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama bağlantısı"
           }
         }
       }
@@ -2033,6 +2033,22 @@
         }
       }
     },
+    "Listed application link; the physical application is a separate item.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listed application link; the physical application is a separate item."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listelenen uygulama bağlantısı; fiziksel uygulama ayrı bir öğedir."
+          }
+        }
+      }
+    },
     "Loading history details…": {
       "localizations": {
         "en": {
@@ -2913,6 +2929,22 @@
         }
       }
     },
+    "Physical application": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Physical application"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fiziksel uygulama"
+          }
+        }
+      }
+    },
     "Previous result · refreshing before actions": {
       "localizations": {
         "en": {
@@ -3469,6 +3501,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Seçimi incele"
+          }
+        }
+      }
+    },
+    "Review this installation in Apps": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review this installation in Apps"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu kurulumu Apps’te incele"
           }
         }
       }
@@ -4449,6 +4497,22 @@
         }
       }
     },
+    "The application changed. Refresh Apps before reviewing it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The application changed. Refresh Apps before reviewing it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama değişti. İncelemeden önce Apps’i yenileyin."
+          }
+        }
+      }
+    },
     "The chosen item is not a folder. Choose a folder to scan.": {
       "localizations": {
         "en": {
@@ -4737,6 +4801,22 @@
         }
       }
     },
+    "The physical application and this link are separate Trash items. Each result is reported separately.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The physical application and this link are separate Trash items. Each result is reported separately."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fiziksel uygulama ve bu bağlantı ayrı Çöp öğeleridir. Her sonuç ayrı gösterilir."
+          }
+        }
+      }
+    },
     "The scan no longer matches this selection. Scan this folder again.": {
       "localizations": {
         "en": {
@@ -4897,6 +4977,38 @@
         }
       }
     },
+    "This application has no identifier; related data could not be matched by identifier.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This application has no identifier; related data could not be matched by identifier."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamanın kimliği yok; ilişkili verisi kimlikle eşleştirilemedi."
+          }
+        }
+      }
+    },
+    "This application removal is incomplete. Refresh Apps to review what remains.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This application removal is incomplete. Refresh Apps to review what remains."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamanın kaldırılması tamamlanmadı. Kalanları incelemek için Apps’i yenileyin."
+          }
+        }
+      }
+    },
     "This cache is covered by another category. Review that category.": {
       "localizations": {
         "en": {
@@ -4909,6 +5021,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu önbellek başka bir kategoride bulunuyor. O kategoriyi inceleyin."
+          }
+        }
+      }
+    },
+    "This data is also used by another installation. Remove that installation too before removing this data.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This data is also used by another installation. Remove that installation too before removing this data."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu veri başka bir kurulum tarafından da kullanılıyor. Bu veriyi kaldırmadan önce o kurulumu da kaldırın."
           }
         }
       }
@@ -5021,22 +5149,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu iPhone veya iPad uygulaması buradan kaldırılamaz. Finder’da Göster'i kullanın."
-          }
-        }
-      }
-    },
-    "This is a link to an app stored elsewhere. It is shown for identification only.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This is a link to an app stored elsewhere. It is shown for identification only."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bu, başka bir yerde duran bir uygulamaya bağlantı. Yalnızca tanımlama için gösterilir."
           }
         }
       }

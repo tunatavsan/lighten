@@ -1070,3 +1070,222 @@ func sessionLeftoverNativeActivityIsFresh() async throws {
   #expect((await session.validatePlan(plan)).contains { $0.reason == .activityUnavailable })
   await session.cancel()
 }
+
+private enum PublicPackageLayout: String, CaseIterable, Sendable {
+  case contents, flat, wrapper
+}
+
+private func publicPackageInfo(app: String, layout: PublicPackageLayout, identifier: String?) throws -> String {
+  let relative: String
+  switch layout {
+  case .contents: relative = "Contents/Info.plist"
+  case .flat:
+    try FileManager.default.removeItem(atPath: app + "/Contents/Info.plist")
+    try FileManager.default.moveItem(atPath: app + "/Contents", toPath: app + "/Payload")
+    relative = "Info.plist"
+  case .wrapper:
+    try FileManager.default.removeItem(atPath: app + "/Contents/Info.plist")
+    let inner = "Wrapper/LightenQA-" + UUID().uuidString + ".app"
+    try FileManager.default.createDirectory(atPath: app + "/" + inner, withIntermediateDirectories: true)
+    try FileManager.default.moveItem(atPath: app + "/Contents", toPath: app + "/" + inner + "/Contents")
+    relative = inner + "/Info.plist"
+  }
+  var dictionary: [String: String] = ["CFBundleVersion": "LightenQA-1"]
+  if let identifier { dictionary["CFBundleIdentifier"] = identifier }
+  try PropertyListSerialization.data(fromPropertyList: dictionary, format: .xml, options: 0)
+    .write(to: URL(fileURLWithPath: app + "/" + relative))
+  return relative
+}
+
+@Test(
+  "Public service and session plans bind and measure each native application layout",
+  arguments: PublicPackageLayout.allCases)
+private func publicUninstallBindsNativeLayout(layout: PublicPackageLayout) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let relative = try publicPackageInfo(app: fixture.app, layout: layout, identifier: fixture.bundleID)
+  let service = fixture.service
+  let app = try #require(service.application(at: fixture.app))
+  let candidate = try #require(
+    (await service.initialReview(for: app, progress: nil)).candidates.first { $0.path == fixture.cache })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  defer { Task { await session.cancel() } }
+  let available = await session.makeAvailableUninstallPlan(
+    path: fixture.app, expectedBundleID: fixture.bundleID, selectedRelated: [candidate], includePackage: true)
+  let plan = try #require(available.plan)
+  #expect(available.rejections.isEmpty)
+  #expect(Set(plan.items.map(\.sourcePath)) == [fixture.app, fixture.cache])
+  let package = try #require(plan.items.first { $0.policy == .wholeBundle })
+  #expect(package.applicationPackageObservation?.infoRelativePath == relative)
+  #expect(package.observedSize?.logical?.knownLowerBound ?? 0 > 0)
+  #expect(package.observedSize?.allocated?.knownLowerBound ?? 0 > 0)
+  let data = try #require(plan.items.first { $0.installedRelatedProof != nil })
+  #expect(
+    data.installedRelatedProof?.infoIdentity == (try DescriptorFileSystem.identity(at: fixture.app + "/" + relative)))
+  #expect(service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+  #expect(await session.validatePlan(plan) == [])
+  let compatible = await service.makeAvailableUninstallPlan(app: app, selectedRelated: [candidate])
+  #expect(compatible.rejections.isEmpty && compatible.plan?.items.count == 2)
+  #expect(compatible.plan?.items.first { $0.policy == .wholeBundle }?.observedSize?.logical?.knownLowerBound ?? 0 > 0)
+  let replacement = try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": fixture.bundleID, "CFBundleVersion": "LightenQA-changed"],
+    format: .xml, options: 0)
+  try replacement.write(to: URL(fileURLWithPath: fixture.app + "/" + relative))
+  #expect(!service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+  #expect(!(await session.validatePlan(plan)).isEmpty)
+}
+
+@Test(
+  "Identifierless public plans keep the measured package and name every unmatched related request",
+  arguments: PublicPackageLayout.allCases)
+private func identifierlessPublicPlanHasNoRelatedAuthority(layout: PublicPackageLayout) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let activity = Mutex(ApplicationActivity(state: .clearObservedProcesses))
+  let walks = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    packageActivity: { _ in activity.withLock { $0 } }, ownershipCollected: { walks.withLock { $0 += 1 } })
+  let original = try #require(service.application(at: fixture.app))
+  let candidate = try #require(
+    (await service.initialReview(for: original, progress: nil)).candidates.first { $0.path == fixture.cache })
+  #expect(candidate.canSelect)
+  let relative = try publicPackageInfo(app: fixture.app, layout: layout, identifier: nil)
+  #expect(service.application(at: fixture.app) == nil)
+  #expect(ApplicationIdentity.bundleIdentifier(ofApplicationAt: fixture.app) == nil)
+  let discovery = ApplicationDiscovery(related: service)
+  let report = try #require(await discovery.report(path: fixture.app))
+  #expect(report.bundleID == nil && report.related.isEmpty)
+  #expect(report.logical.knownLowerBound > 0 && !report.partial)
+  #expect(report.isIOSWrapper == (layout == .wrapper))
+  let session = discovery.scanSession()
+  defer { Task { await session.cancel() } }
+  let available = await session.makeAvailableUninstallPlan(
+    path: fixture.app, expectedBundleID: nil, selectedRelated: [candidate], includePackage: true)
+  let plan = try #require(available.plan)
+  #expect(plan.items.count == 1 && plan.items[0].sourcePath == fixture.app)
+  #expect(plan.items[0].applicationBundleID == nil && plan.items[0].installedRelatedProof == nil)
+  #expect(plan.items[0].applicationPackageObservation?.infoRelativePath == relative)
+  #expect(plan.items[0].observedSize?.logical?.knownLowerBound ?? 0 > 0)
+  #expect(available.rejections.count == 1)
+  #expect(
+    available.rejections[0].path == fixture.cache && available.rejections[0].ruleID == "application-identifier-absent")
+  #expect(walks.withLock { $0 } == 0)
+  #expect(await session.validatePlan(plan) == [])
+  let dataOnly = await service.makeAvailableUninstallPlan(
+    path: fixture.app, expectedBundleID: nil, selectedRelated: [candidate], includePackage: false)
+  #expect(dataOnly.plan == nil && dataOnly.rejections.count == 1)
+  let staleID = await service.makeAvailableUninstallPlan(
+    path: fixture.app, expectedBundleID: fixture.bundleID, selectedRelated: [], includePackage: true)
+  #expect(staleID.plan == nil && staleID.rejections.contains { $0.reason == .changedSinceScan })
+  activity.withLock { $0 = ApplicationActivity(state: .unknown) }
+  #expect((await session.validatePlan(plan)).contains { $0.path == fixture.app && $0.reason == .activityUnavailable })
+  activity.withLock { $0 = ApplicationActivity(state: .clearObservedProcesses) }
+  try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": fixture.bundleID], format: .xml, options: 0
+  )
+  .write(to: URL(fileURLWithPath: fixture.app + "/" + relative))
+  #expect(!(await session.validatePlan(plan)).isEmpty)
+}
+
+@Test("Public linked plans bind data to the physical app and recheck the same-plan leaf", arguments: [false, true])
+private func publicLinkedUninstallUsesPhysicalOwner(relative: Bool) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let physical = fixture.home + "/Shared/LightenQA-physical.app"
+  try FileManager.default.createDirectory(atPath: fixture.home + "/Shared", withIntermediateDirectories: true)
+  try FileManager.default.moveItem(atPath: fixture.app, toPath: physical)
+  #expect(symlink(relative ? "../Shared/LightenQA-physical.app" : physical, fixture.app) == 0)
+  let activities = Mutex<[String]>([])
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    packageActivity: { path in
+      activities.withLock { $0.append(path) }
+      return ApplicationActivity(state: .clearObservedProcesses)
+    })
+  let observed = try #require(service.application(at: fixture.app))
+  #expect(observed.linkTarget == physical && observed.bundleID == fixture.bundleID)
+  let candidate = try #require(
+    (await service.initialReview(for: observed, progress: nil)).candidates.first { $0.path == fixture.cache })
+  let report = try #require(await ApplicationDiscovery(related: service).report(path: fixture.app))
+  #expect(report.linkTarget == physical && report.logical.knownLowerBound > 0)
+  let session = ApplicationDiscovery(related: service).scanSession()
+  defer { Task { await session.cancel() } }
+  let available = await session.makeAvailableUninstallPlan(
+    path: fixture.app, expectedBundleID: fixture.bundleID, selectedRelated: [candidate], includePackage: true)
+  let plan = try #require(available.plan)
+  #expect(available.rejections.isEmpty && plan.items.count == 3)
+  let package = try #require(plan.items.first { $0.policy == .wholeBundle })
+  let leaf = try #require(plan.items.first { $0.policy == .applicationLink })
+  let data = try #require(plan.items.first { $0.installedRelatedProof != nil })
+  #expect(package.sourcePath == physical && leaf.sourcePath == fixture.app)
+  #expect(leaf.packageLinkTargetItemID == package.id && data.installedRelatedProof?.appPath == physical)
+  #expect(activities.withLock { !$0.isEmpty && $0.allSatisfy { $0 == physical } })
+  #expect(service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+  #expect(await session.validatePlan(plan) == [])
+  #expect(throws: (any Error).self) { try ActionGuard(homeDirectory: fixture.home).validate(leaf) }
+  let other = fixture.home + "/Shared/LightenQA-other.app"
+  try FileManager.default.copyItem(atPath: physical, toPath: other)
+  #expect(unlink(fixture.app) == 0 && symlink(other, fixture.app) == 0)
+  let refused = await session.validatePlan(plan)
+  #expect(refused.contains { $0.path == fixture.app })
+  #expect(refused.contains { $0.path == physical })
+  #expect(refused.contains { $0.path == fixture.cache })
+  #expect(FileManager.default.fileExists(atPath: physical) && FileManager.default.fileExists(atPath: other))
+}
+
+@Test("Exact simulator-device exclusions survive inventory, owner enrichment and completion")
+private func simulatorScopeObservationsSurviveDiscovery() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let device = fixture.home + "/Library/Developer/CoreSimulator/Devices/" + UUID().uuidString
+  let installation = device + "/data/Containers/Bundle/Application/" + UUID().uuidString
+  let simulator = installation + "/LightenQA-device.app"
+  let daemon = fixture.home + "/Library/DaemonContainers/LightenQA-daemon.app"
+  let ordinary = fixture.home + "/Library/Developer/CoreSimulator/LightenQA-Mac.app"
+  for path in [simulator, daemon, ordinary] {
+    try FileManager.default.createDirectory(
+      atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(atPath: fixture.app, toPath: path)
+  }
+  let alias = fixture.appRoot + "/LightenQA-device-alias.app"
+  #expect(symlink(simulator, alias) == 0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot, installation], writeVerifiedReceipts: false,
+    registration: { ApplicationRegistrationObservation(paths: [simulator, daemon, ordinary], complete: true) })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  var seen: [BundleInventory] = []
+  var reports: [ApplicationReport] = []
+  for await event in await session.events() {
+    switch event {
+    case .inventory(let inventory, _), .ownershipReady(let inventory): seen.append(inventory)
+    case .completed(let inventory, let final):
+      seen.append(inventory)
+      reports = final
+    default: break
+    }
+  }
+  #expect(seen.count == 3)
+  for inventory in seen {
+    #expect(Set(inventory.scopeExclusions.map(\.path)) == [simulator, alias])
+    #expect(
+      inventory.scopeExclusions.allSatisfy {
+        $0.bundleID == fixture.bundleID && $0.reason == "simulator-device-application" && !$0.nextStep.isEmpty
+      })
+    #expect(!inventory.applications.contains { $0.path == simulator || $0.path == alias })
+    #expect(!inventory.unidentifiedPaths.contains(simulator) && !inventory.unidentifiedPaths.contains(alias))
+  }
+  #expect(reports.contains { $0.path == daemon } && reports.contains { $0.path == ordinary })
+  #expect(!reports.contains { $0.path == simulator || $0.path == alias })
+  let final = try #require(seen.last)
+  #expect(final.ownershipCandidates.contains { $0.path == simulator })
+  #expect(final.applicationMetadata.contains { $0.path == simulator })
+  #expect(!RelatedDataService.isSimulatorDeviceApplication(daemon, homeDirectory: fixture.home))
+  #expect(!RelatedDataService.isSimulatorDeviceApplication(ordinary, homeDirectory: fixture.home))
+  let discovery = ApplicationDiscovery(related: service)
+  #expect(await discovery.report(path: simulator) == nil)
+  let refused = await service.makeAvailableUninstallPlan(
+    path: alias, expectedBundleID: fixture.bundleID, selectedRelated: [], includePackage: true)
+  #expect(refused.plan == nil && refused.rejections.contains { $0.ruleID == "simulator-device-application" })
+  await session.cancel()
+}

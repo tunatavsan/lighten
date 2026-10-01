@@ -351,3 +351,104 @@ private func selectedAppCandidate(_ path: String) -> RelatedDataCandidate {
   #expect(!store.packageSelected && store.selectedDataPaths.isEmpty)
   #expect(actions.pending == nil)
 }
+
+@Test("Shared data opens the other installation through fresh review without selecting any action")
+@MainActor func appsSharedOwnerNavigationRefreshesDestination() async throws {
+  let firstPath = "/Applications/LightenQA-first.app"
+  let otherPath = "/Applications/LightenQA-other.app"
+  let bundleID = "qa.lighten.shared"
+  let candidatePath = "/tmp/LightenQA-shared/Library/Caches/qa.lighten.shared"
+  let evidence = RelatedOwnershipRefusalEvidence(
+    candidatePath: candidatePath, bundleID: bundleID, reason: .sharedInstalledOwners,
+    ownerPaths: [firstPath, otherPath], nextStep: "review-other-installations", detail: nil)
+  let candidate = RelatedDataCandidate(
+    id: candidatePath, path: candidatePath, classification: .shared,
+    reason: .sharedInstalledData, snapshot: nil, receipt: nil, bundleID: bundleID,
+    refusalEvidence: [evidence])
+  var first = selectedAppReport(firstPath, bundleID: bundleID)
+  first.related = [candidate]
+  let fresh = selectedAppReport(otherPath, bundleID: bundleID, bytes: 123)
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    selectedReview: { path, _ in
+      #expect(path == otherPath)
+      return ApplicationRelatedReview(
+        application: InstalledApplication(bundleID: bundleID, path: path, version: "1"),
+        candidates: [])
+    },
+    droppedReport: { path in
+      #expect(path == otherPath)
+      return fresh
+    }, running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [first]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = [bundleID]
+  store.selectedPath = firstPath
+  #expect(!store.canSelect(candidate, app: first))
+  #expect(store.otherInstallationPaths(candidate: candidate, app: first) == [otherPath])
+  await store.openOtherInstallation(otherPath, candidate: candidate, app: first, actions: actions)
+  await store.waitForSelectedReview()
+  #expect(store.selectedReport?.path == otherPath)
+  #expect(store.selectedReport?.logical.completeTotal == 123)
+  #expect(store.selectedReviewReadyAt != nil)
+  #expect(store.selectedDataPaths.isEmpty && !store.packageSelected)
+  #expect(actions.pending == nil)
+}
+
+@Test("Unknown owner observations cannot offer installed-owner navigation or data selection")
+@MainActor func appsUnknownOwnerRemainsUnavailable() async {
+  let path = "/Applications/LightenQA-first.app"
+  let other = "/Applications/LightenQA-unknown.app"
+  let candidatePath = "/tmp/LightenQA-unknown/Library/Caches/qa.lighten.unknown"
+  let evidence = RelatedOwnershipRefusalEvidence(
+    candidatePath: candidatePath, bundleID: "qa.lighten.unknown",
+    reason: .unknownMetadata, ownerPaths: [path, other], nextStep: "inspect-owner-metadata",
+    detail: "unreadable")
+  let candidate = RelatedDataCandidate(
+    id: candidatePath, path: candidatePath, classification: .uncertain,
+    reason: .ownershipUnavailable, snapshot: nil, receipt: nil, refusalEvidence: [evidence])
+  var app = selectedAppReport(path, bundleID: "qa.lighten.unknown")
+  app.related = [candidate]
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    droppedReport: { _ in
+      Issue.record("Unknown metadata offered installed-owner navigation")
+      return nil
+    }, running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [app]
+  store.inventoryComplete = true
+  store.selectedPath = path
+  #expect(store.otherInstallationPaths(candidate: candidate, app: app).isEmpty)
+  #expect(!store.canSelect(candidate, app: app))
+  await store.openOtherInstallation(other, candidate: candidate, app: app, actions: actions)
+  #expect(store.selectedPath == path && actions.pending == nil)
+}
+
+@Test(
+  "Selected linked review accepts fresh physical metadata while preserving the listed request path")
+@MainActor func appsLinkedReviewKeepsListedPath() async {
+  let listed = "/Applications/LightenQA-link.app"
+  let physical = "/tmp/LightenQA-physical.app"
+  let bundleID = "qa.lighten.alias"
+  let candidate = selectedAppCandidate("/tmp/LightenQA-alias-cache/qa.lighten.alias")
+  var report = selectedAppReport(listed, bundleID: bundleID)
+  report.linkTarget = physical
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    selectedReview: { path, _ in
+      #expect(path == listed)
+      return ApplicationRelatedReview(
+        application: InstalledApplication(bundleID: bundleID, path: physical, version: "1"),
+        candidates: [candidate])
+    }, running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [report]
+  store.select(listed, actions: actions)
+  await store.waitForSelectedReview()
+  #expect(store.selectedPath == listed)
+  #expect(store.selectedReport?.linkTarget == physical)
+  #expect(store.selectedReport?.related.map(\.path) == [candidate.path])
+  #expect(store.message == nil && actions.pending == nil)
+}

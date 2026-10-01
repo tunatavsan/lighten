@@ -204,42 +204,177 @@ private actor AppsAvailableGate {
   #expect(!store.preparing)
 }
 
-@Test("Linked and iOS wrapper apps remain visible without package or data selection", arguments: [false, true])
-@MainActor func appsUnsupportedPackagesCannotSelect(isWrapper: Bool) async throws {
+@Test(
+  "Linked and wrapper application choices reach one fresh package review", arguments: [false, true])
+@MainActor func appsNormalPackagesReachReview(isWrapper: Bool) async throws {
   let root = try flowRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }
-  let appPath = root + "/LightenQA-unsupported.app"
+  let appPath = root + "/LightenQA-listed.app"
+  let physicalPath = isWrapper ? appPath : root + "/LightenQA-physical.app"
+  try FileManager.default.createDirectory(atPath: physicalPath, withIntermediateDirectories: false)
+  if !isWrapper {
+    try FileManager.default.createSymbolicLink(atPath: appPath, withDestinationPath: physicalPath)
+  }
   let candidate = flowCandidate(root + "/Library/Caches/qa.lighten.flow")
   var report = flowReport(path: appPath, candidates: [candidate])
   report.isIOSWrapper = isWrapper
-  report.linkTarget = isWrapper ? nil : root + "/LightenQA-target.app"
+  report.linkTarget = isWrapper ? nil : physicalPath
+  let physical = PlanItem(
+    id: UUID(), sourcePath: physicalPath, inventory: [], ancestors: [], policy: .wholeBundle,
+    applicationBundleID: report.bundleID)
+  let link = PlanItem(
+    id: UUID(), sourcePath: appPath, inventory: [], ancestors: [], policy: .applicationLink,
+    packageLinkTargetItemID: physical.id)
+  let data = PlanItem(id: UUID(), sourcePath: candidate.path, inventory: [], ancestors: [])
+  let plan = ActionPlan(
+    snapshotRunID: UUID(), kind: .trash, items: [physical, data] + (isWrapper ? [] : [link]))
   let store = AppsStore(
     pictures: flowPictures(root),
-    uninstallPlanBuilder: { _, _, _ in
-      Issue.record("Unsupported app reached the plan builder")
-      throw PlanFailure.emptySelection
+    availableUninstallPlanBuilder: { requested, candidates, includePackage in
+      #expect(requested.path == appPath && includePackage)
+      #expect(candidates.map(\.path) == [candidate.path])
+      return .init(plan: plan, rejections: [])
     }, running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
   let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
   store.reports = [report]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
   store.select(appPath, actions: actions)
-  #expect(store.reports.count == 1)
-  #expect(store.selectedPath == nil)
-  #expect(store.message?.isEmpty == false)
-  #expect(!store.canSelect(candidate, app: report))
-  #expect(store.packageUnavailableReason(report)?.contains(isWrapper ? "iPhone or iPad" : "link to an app") == true)
-  // Directly injected selections must not bypass the same display-only boundary.
-  store.selectedPath = appPath
-  store.packageSelected = true
-  store.selectedDataPaths = [candidate.path]
-  store.toggleData(candidate.path, actions: actions)
+  #expect(store.selectedPath == appPath)
+  #expect(store.canSelect(candidate, app: report))
+  store.togglePackage(actions: actions)
   await store.prepareSelectedData(actions: actions)
-  #expect(actions.pending == nil)
-  store.packageSelected = false
-  await store.prepareSelectedData(actions: actions)
-  #expect(actions.pending == nil)
+  let presentation = try #require(actions.pending)
+  #expect(presentation.plan == plan)
+  #expect(Set(presentation.items.map(\.path)) == Set(plan.items.map(\.sourcePath)))
   #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+}
+
+@Test("Identifierless package review keeps its missing ID and selects no related data")
+@MainActor func appsIdentifierlessPackageReview() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let app = root + "/LightenQA-identifierless.app"
+  try FileManager.default.createDirectory(
+    atPath: app + "/Contents", withIntermediateDirectories: true)
+  let info = app + "/Contents/Info.plist"
+  try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleName": "LightenQA"], format: .xml, options: 0
+  )
+  .write(to: URL(fileURLWithPath: info))
+  let candidate = flowCandidate(root + "/Library/Caches/qa.lighten.unmatched")
+  let report = ApplicationReport(
+    path: app, bundleID: nil, version: nil, signerTeamID: nil,
+    logical: ByteAggregate(knownLowerBound: 64, completeTotal: 64),
+    allocated: ByteAggregate(knownLowerBound: 64, completeTotal: 64),
+    knownItemCount: 1, partial: false, related: [candidate], manualUninstallerSuggested: false)
+  let observation = ApplicationPackageObservation(
+    infoRelativePath: "Contents/Info.plist",
+    infoIdentity: try DescriptorFileSystem.identity(at: info), bundleIdentifier: nil)
+  let package = PlanItem(
+    id: UUID(), sourcePath: app, inventory: [], ancestors: [], policy: .wholeBundle,
+    applicationPackageObservation: observation)
+  let plan = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [package])
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    availableUninstallPlanBuilder: { requested, candidates, includePackage in
+      #expect(requested.bundleID == nil && candidates.isEmpty && includePackage)
+      return .init(plan: plan, rejections: [])
+    },
+    selectedReview: { _, _ in
+      Issue.record("Identifierless app acquired an ID-based review")
+      return nil
+    },
+    running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [report]
+  store.inventoryComplete = true
+  store.select(app, actions: actions)
+  store.togglePackage(actions: actions)
+  #expect(!store.canSelect(candidate, app: report) && store.selectedDataPaths.isEmpty)
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending?.plan == plan)
+  #expect(actions.pending?.plan.items.first?.applicationBundleID == nil)
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+}
+
+@Test(
+  "Linked application results retain the row whenever the physical and leaf outcomes differ",
+  arguments: [true, false])
+@MainActor func appsLinkedPartialResultsKeepBothPaths(physicalApplied: Bool) async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let listed = root + "/LightenQA-listed.app"
+  let physicalPath = root + "/LightenQA-physical.app"
+  try FileManager.default.createDirectory(atPath: physicalPath, withIntermediateDirectories: false)
+  try FileManager.default.createSymbolicLink(atPath: listed, withDestinationPath: physicalPath)
+  var report = flowReport(path: listed)
+  report.linkTarget = physicalPath
+  let physical = PlanItem(
+    id: UUID(), sourcePath: physicalPath, inventory: [], ancestors: [], policy: .wholeBundle,
+    applicationBundleID: report.bundleID)
+  let leaf = PlanItem(
+    id: UUID(), sourcePath: listed, inventory: [], ancestors: [], policy: .applicationLink,
+    packageLinkTargetItemID: physical.id)
+  let plan = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [physical, leaf])
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    availableUninstallPlanBuilder: { _, _, _ in .init(plan: plan, rejections: []) },
+    running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [report]
+  store.inventoryComplete = true
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(listed, actions: actions)
+  store.togglePackage(actions: actions)
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending?.plan == plan)
+  actions.pending = nil
+  actions.result = ActionResult(
+    planID: plan.id,
+    items: [
+      ItemActionResult(itemID: physical.id, outcome: physicalApplied ? .applied : .failed),
+      ItemActionResult(itemID: leaf.id, outcome: physicalApplied ? .skipped : .applied),
+    ])
+  store.observeResult(actions: actions)
+  #expect(store.selectedReport?.path == listed)
+  #expect(Set(store.packageItemResults.map(\.sourcePath)) == [listed, physicalPath])
+  #expect(
+    store.packageItemResults.first { !$0.isLink }?.outcome == (physicalApplied ? .applied : .failed)
+  )
+  #expect(
+    store.packageItemResults.first { $0.isLink }?.outcome == (physicalApplied ? .skipped : .applied)
+  )
+  #expect(store.packageUnavailableReason(report)?.contains("incomplete") == true)
+  #expect(!store.packageSelected)
+}
+
+@Test("A linked review rejects a forged leaf without its same-plan physical item")
+@MainActor func appsLinkedConfirmationRejectsMissingPair() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let listed = root + "/LightenQA-listed.app"
+  let physicalPath = root + "/LightenQA-physical.app"
+  try FileManager.default.createDirectory(atPath: physicalPath, withIntermediateDirectories: false)
+  try FileManager.default.createSymbolicLink(atPath: listed, withDestinationPath: physicalPath)
+  var report = flowReport(path: listed)
+  report.linkTarget = physicalPath
+  let leaf = PlanItem(
+    id: UUID(), sourcePath: listed, inventory: [], ancestors: [], policy: .applicationLink,
+    packageLinkTargetItemID: UUID())
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    availableUninstallPlanBuilder: { _, _, _ in
+      .init(plan: ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [leaf]), rejections: [])
+    }, running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [report]
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(listed, actions: actions)
+  store.togglePackage(actions: actions)
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending == nil)
+  #expect(store.message?.contains(listed) == true)
 }
 
 @Test("Discovery caches iOS wrapper metadata before measurements and preserves it in every report")
@@ -281,13 +416,20 @@ private actor AppsAvailableGate {
   #expect(focused.isIOSWrapper)
   #expect(focused.bundleID == "qa.lighten.wrapper")
   #expect(focused.related.isEmpty)
-  let store = AppsStore(pictures: flowPictures(root), droppedReport: { _ in focused })
+  let store = AppsStore(
+    pictures: flowPictures(root), relatedService: related,
+    droppedReport: { _ in focused }, running: AppsClosedSource())
   let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
   await store.acceptDrop([URL(fileURLWithPath: appPath)], actions: actions)
   #expect(store.reports.first?.isIOSWrapper == true)
-  #expect(store.selectedPath == nil)
-  #expect(store.message?.contains("iPhone or iPad") == true)
-  #expect(actions.pending == nil)
+  #expect(store.selectedPath == appPath)
+  let plan = try #require(actions.pending?.plan)
+  #expect(plan.items.count == 1 && plan.items[0].sourcePath == appPath)
+  #expect(plan.items[0].applicationBundleID == "qa.lighten.wrapper")
+  #expect(
+    plan.items[0].applicationPackageObservation?.infoRelativePath
+      == "Wrapper/LightenQA-inner.app/Info.plist")
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
 }
 
 @MainActor private func waitFlow(_ condition: @escaping @MainActor () -> Bool) async throws {
@@ -449,8 +591,11 @@ private func flowRoot() throws -> String {
   defer { try? FileManager.default.removeItem(atPath: root) }
   let app = root + "/LightenQA-external.app"
   let bundleID = "qa.lighten." + UUID().uuidString.lowercased()
-  try FileManager.default.createDirectory(atPath: app + "/Contents", withIntermediateDirectories: true)
-  let plist = ["CFBundleIdentifier": bundleID, "CFBundleName": "LightenQA", "CFBundlePackageType": "APPL"]
+  try FileManager.default.createDirectory(
+    atPath: app + "/Contents", withIntermediateDirectories: true)
+  let plist = [
+    "CFBundleIdentifier": bundleID, "CFBundleName": "LightenQA", "CFBundlePackageType": "APPL",
+  ]
   try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
     .write(to: URL(fileURLWithPath: app + "/Contents/Info.plist"))
   try Data("owned fixture".utf8).write(to: URL(fileURLWithPath: app + "/Contents/payload"))

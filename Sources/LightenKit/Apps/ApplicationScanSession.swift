@@ -64,7 +64,7 @@ final class ApplicationContextMetadata: Sendable {
     } else {
       physical = path
     }
-    let info = RelatedDataService.infoPlistPath(ofBundleAt: physical)
+    let info = physical + "/" + (try ApplicationPackagePlanning.infoRelativePath(at: physical))
     do {
       observations.append(ApplicationPathObservation(path: info, identity: try DescriptorFileSystem.identity(at: info)))
     } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT {
@@ -328,13 +328,26 @@ public actor ApplicationScanSession {
   public func makeAvailableUninstallPlan(
     app: InstalledApplication, selectedRelated: [RelatedDataCandidate], includePackage: Bool = true
   ) async -> RelatedDataService.AvailableUninstallPlan {
+    await makeAvailableUninstallPlan(
+      path: app.path, expectedBundleID: app.bundleID, selectedRelated: selectedRelated,
+      includePackage: includePackage)
+  }
+
+  public func makeAvailableUninstallPlan(
+    path: String, expectedBundleID: String?, selectedRelated: [RelatedDataCandidate],
+    includePackage: Bool = true
+  ) async -> RelatedDataService.AvailableUninstallPlan {
     guard !cancelled, !Task.isCancelled else {
-      return .init(plan: nil, rejections: [PlanRejection(.unavailable, path: app.path, ruleID: "cancelled")])
+      return .init(
+        plan: nil, rejections: [PlanRejection(.unavailable, path: path, ruleID: "cancelled")])
     }
     let context: AuthenticApplicationContext?
-    if selectedRelated.isEmpty {
+    if selectedRelated.isEmpty || expectedBundleID == nil {
       context = nil
-    } else if related.isExactStandardSelection(app: app, candidates: selectedRelated) {
+    } else if let observed = related.application(at: path),
+      let app = related.application(at: observed.linkTarget ?? observed.path),
+      related.isExactStandardSelection(app: app, candidates: selectedRelated)
+    {
       let listing = await installedListing()
       let service = related
       let metadata = self.metadata
@@ -345,10 +358,12 @@ public actor ApplicationScanSession {
       context = await self.context()
     }
     guard !cancelled, !Task.isCancelled else {
-      return .init(plan: nil, rejections: [PlanRejection(.unavailable, path: app.path, ruleID: "cancelled")])
+      return .init(
+        plan: nil, rejections: [PlanRejection(.unavailable, path: path, ruleID: "cancelled")])
     }
     return await related.makeAvailableUninstallPlan(
-      app: app, selectedRelated: selectedRelated, includePackage: includePackage, context: context)
+      path: path, expectedBundleID: expectedBundleID, selectedRelated: selectedRelated,
+      includePackage: includePackage, context: context)
   }
 
   /// Fresh read-only refusals for one concrete plan. Private ownership

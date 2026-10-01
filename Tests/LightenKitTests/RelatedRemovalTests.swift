@@ -144,8 +144,17 @@ func relatedNineDomainsUndo() async throws {
   let app = try #require(fixture.service.inventory().applications.first)
   let plan = try fixture.service.planUninstall(app: app, selectedRelated: selected)
   #expect(plan.items.count == 10)
-  #expect(Set(plan.items.compactMap(\.snapshotRunID)).count == 9)
-  #expect(plan.items.last?.policy == .wholeBundle)
+  for candidate in selected {
+    let observedRun = try #require(candidate.snapshot?.runID)
+    let related = try #require(plan.items.first { $0.sourcePath == candidate.path })
+    #expect(related.snapshotRunID == observedRun)
+    #expect(related.installedRelatedProof?.snapshotRunID == observedRun)
+  }
+  let package = try #require(plan.items.last)
+  #expect(package.policy == .wholeBundle)
+  let packageRun = try #require(package.snapshotRunID)
+  #expect(!selected.contains { $0.snapshot?.runID == packageRun })
+  #expect(Set(plan.items.compactMap(\.snapshotRunID)).count == 10)
   let journal = JSONLActionJournal(path: fixture.storage + "/Journal/actions.jsonl")
   let executor = ActionExecutor(
     journal: journal,
