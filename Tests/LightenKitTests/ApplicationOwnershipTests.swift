@@ -125,4 +125,36 @@ struct ApplicationOwnershipTests {
     #expect(candidate.classification == .shared && !candidate.canSelect && !candidate.defaultSelected)
     #expect(throws: RelatedFailure.self) { try service.planInstalled(app: app, candidate: candidate) }
   }
+  @Test("Descriptor traversal retains raw native helpers and linked owners, and refuses unresolved links")
+  func descriptorTraversalRetainsCoverage() throws {
+    let home = try ownerFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let apps = home + "/Applications"
+    let chosen = apps + "/LightenQA-selected.app"
+    try ownerApp(chosen, id: "qa.lighten.selected")
+    let helpers = chosen + "/Contents/Helpers"
+    try FileManager.default.createDirectory(atPath: helpers, withIntermediateDirectories: true)
+    let native = helpers + "/LightenQA-native"
+    try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: native)
+    try Data("plain data".utf8).write(to: URL(fileURLWithPath: helpers + "/record"))
+    let other = home + "/System/Applications/LightenQA-other.app"
+    try ownerApp(other, id: "qa.lighten.other")
+    let otherHelper = other + "/Contents/LightenQA-native"
+    try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: otherHelper)
+    let linked = helpers + "/LightenQA-linked.app"
+    #expect(symlink(other, linked) == 0)
+    let owners = ApplicationOwnershipInventory.collect(roots: [apps], applications: [])
+    #expect(owners.complete)
+    #expect(
+      owners.candidates
+        == [
+          ApplicationOwnerCandidate(path: chosen, packagePath: chosen),
+          ApplicationOwnerCandidate(path: native, packagePath: chosen),
+          ApplicationOwnerCandidate(path: other, packagePath: other),
+          ApplicationOwnerCandidate(path: otherHelper, packagePath: other),
+        ].sorted { $0.path < $1.path })
+    #expect(symlink(home + "/missing", helpers + "/LightenQA-unresolved") == 0)
+    #expect(!ApplicationOwnershipInventory.collect(roots: [apps], applications: []).complete)
+  }
+
 }
