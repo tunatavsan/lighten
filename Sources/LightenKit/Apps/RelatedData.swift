@@ -490,16 +490,20 @@ public struct RelatedDataService: Sendable {
   }
 
   func validateContext(_ context: AuthenticApplicationContext, groups: Bool) throws {
+    try validateLineage(context)
+    if context.standardBundleID != nil, groups { throw RelatedFailure.unsupportedInstalledData }
+    let current = context.standardBundleID.map { registeredByID($0) } ?? registration()
+    guard current.complete, current.paths == context.registeredPaths else { throw RelatedFailure.incompleteInventory }
+    if groups { try context.validateSignatures() }
+  }
+
+  private func validateLineage(_ context: AuthenticApplicationContext) throws {
     guard context.scope == contextScope else { throw RelatedFailure.changedItem }
     for observation in context.lineage {
       // System failures do not invalidate a third-party ownership decision.
       if observation.path.hasPrefix("/System/") { continue }
       try observation.validate()
     }
-    if context.standardBundleID != nil, groups { throw RelatedFailure.unsupportedInstalledData }
-    let current = context.standardBundleID.map { registeredByID($0) } ?? registration()
-    guard current.complete, current.paths == context.registeredPaths else { throw RelatedFailure.incompleteInventory }
-    if groups { try context.validateSignatures() }
   }
 
   private func context(for plan: ActionPlan) throws -> AuthenticApplicationContext {
@@ -932,6 +936,22 @@ public struct RelatedDataService: Sendable {
   }
 
   public func plan(candidate: RelatedDataCandidate) throws -> ActionPlan {
+    try plan(candidate: candidate, context: makeContext())
+  }
+
+  @concurrent
+  func availableOrphanPlan(
+    candidate: RelatedDataCandidate, context: AuthenticApplicationContext
+  ) async -> AvailableUninstallPlan {
+    do {
+      try Task.checkCancellation()
+      return AvailableUninstallPlan(plan: try plan(candidate: candidate, context: context), rejections: [])
+    } catch {
+      return AvailableUninstallPlan(plan: nil, rejections: Self.uninstallRejections(error, path: candidate.path))
+    }
+  }
+
+  private func plan(candidate: RelatedDataCandidate, context: AuthenticApplicationContext) throws -> ActionPlan {
     guard candidate.classification == .historicallyVerifiedAbsent || candidate.classification == .orphanVerified,
       candidate.canSelect, let bundleID = candidate.bundleID ?? candidate.receipt?.bundleID,
       let observation = candidate.snapshot, let expected = observation.entries.first?.identity,
@@ -946,7 +966,8 @@ public struct RelatedDataService: Sendable {
     let root = current.entries[0]
     let relatedProof: RelatedProof?
     let orphanProof: OrphanRelatedProof?
-    if candidate.classification == .historicallyVerifiedAbsent, let receipt = candidate.receipt {
+    if candidate.classification == .historicallyVerifiedAbsent {
+      guard let receipt = candidate.receipt else { throw RelatedFailure.invalidReceipt }
       relatedProof = RelatedProof(
         bundleID: bundleID, relatedPath: candidate.path, identity: receipt.identity,
         receiptObservedAt: receipt.observedAt, snapshotRunID: observation.runID)
@@ -963,7 +984,12 @@ public struct RelatedDataService: Sendable {
       nestedApplicationIDs: current.nestedApplicationIDs, snapshotRunID: observation.runID,
       orphanRelatedProof: orphanProof)
     let plan = ActionPlan(snapshotRunID: observation.runID, kind: .trash, items: [item])
-    if relatedProof != nil { try validate(item, plan: plan) } else { try validateOrphan(item, plan: plan) }
+    if relatedProof != nil {
+      try validate(item, plan: plan, context: context)
+    } else {
+      try validateOrphan(item, plan: plan, context: context)
+    }
+    planContexts.bind(plan, context: context)
     return plan
   }
 
@@ -1104,6 +1130,7 @@ public struct RelatedDataService: Sendable {
     let guardService = ActionGuard(homeDirectory: homeDirectory)
     let running = NativeRunningApplicationSource()
     var packageResults: [String: [PlanRejection]] = [:]
+    var absentContext: AuthenticApplicationContext?
     var rejections: [PlanRejection] = []
     for item in plan.items {
       if Task.isCancelled {
@@ -1144,6 +1171,34 @@ public struct RelatedDataService: Sendable {
             guard id.caseInsensitiveCompare(LightenIdentity.bundleIdentifier) != .orderedSame else {
               throw PlanRejection(.lightenItself, path: item.sourcePath, ruleID: id)
             }
+            switch await running.isRunning(bundleID: id) {
+            case false: break
+            case true: throw PlanRejection(.applicationRunning, path: item.sourcePath, ruleID: id)
+            case nil: throw PlanRejection(.activityUnavailable, path: item.sourcePath, ruleID: id)
+            }
+          }
+        } else if item.relatedProof != nil || item.orphanRelatedProof != nil {
+          if absentContext == nil { absentContext = try context(for: plan) }
+          guard let absentContext else { throw RelatedFailure.incompleteInventory }
+          if item.relatedProof != nil {
+            try validate(item, plan: plan, context: absentContext)
+          } else {
+            try validateOrphan(item, plan: plan, context: absentContext)
+          }
+          try guardService.validate(item)
+          for entry in item.inventory {
+            guard let identity = entry.identity,
+              ExactInventory.isOpaquePackage(path: entry.path, identity: identity, policy: item.policy)
+            else { continue }
+            let activity = packageActivity(entry.path)
+            switch activity.state {
+            case .clearObservedProcesses: break
+            case .active: throw ProcessActivityFailure.active(processNames: activity.processNames)
+            case .unknown: throw ProcessActivityFailure.unavailable
+            }
+          }
+          let ownerID = item.relatedProof?.bundleID ?? item.orphanRelatedProof?.bundleID
+          for id in [ownerID].compactMap({ $0 }) + (item.nestedApplicationIDs ?? []) {
             switch await running.isRunning(bundleID: id) {
             case false: break
             case true: throw PlanRejection(.applicationRunning, path: item.sourcePath, ruleID: id)
@@ -1340,6 +1395,10 @@ public struct RelatedDataService: Sendable {
   }
 
   public func validateOrphan(_ item: PlanItem, plan: ActionPlan) throws {
+    try validateOrphan(item, plan: plan, context: makeContext())
+  }
+
+  private func validateOrphan(_ item: PlanItem, plan: ActionPlan, context: AuthenticApplicationContext) throws {
     try validateScope(item, plan: plan)
     guard plan.kind == .trash, let proof = item.orphanRelatedProof,
       proof.snapshotRunID == (item.snapshotRunID ?? plan.snapshotRunID), proof.relatedPath == item.sourcePath,
@@ -1350,16 +1409,14 @@ public struct RelatedDataService: Sendable {
       let location = RelatedLocation.matching(path: item.sourcePath, homeDirectory: homeDirectory)?.0,
       location != .groupContainers, item.policy == (location == .containers ? .relatedContainer : .relatedTrash)
     else { throw RelatedFailure.invalidReceipt }
-    let apps = inventory()
-    guard apps.complete else { throw RelatedFailure.incompleteInventory }
-    guard !apps.contains(proof.bundleID), !installedElsewhere(proof.bundleID),
-      !apps.applications.contains(where: {
-        proof.bundleID.hasPrefix($0.bundleID + "-") || proof.bundleID.hasPrefix($0.bundleID + ".")
-      })
-    else { throw RelatedFailure.ownerPresent }
+    try validateAbsentOwner(bundleID: proof.bundleID, context: context)
   }
 
   public func validate(_ item: PlanItem, plan: ActionPlan) throws {
+    try validate(item, plan: plan, context: makeContext())
+  }
+
+  private func validate(_ item: PlanItem, plan: ActionPlan, context: AuthenticApplicationContext) throws {
     try validateScope(item, plan: plan)
     guard plan.kind == .trash, let proof = item.relatedProof,
       proof.snapshotRunID == (item.snapshotRunID ?? plan.snapshotRunID), proof.relatedPath == item.sourcePath,
@@ -1371,9 +1428,35 @@ public struct RelatedDataService: Sendable {
       receipt.identity.matchesStableTrashIdentity(current), Self.currentUserOwns(item.sourcePath),
       ProtectionPolicy.rule(for: item.sourcePath, homeDirectory: homeDirectory) == nil
     else { throw RelatedFailure.invalidReceipt }
-    let apps = inventory()
+    try validateAbsentOwner(bundleID: proof.bundleID, context: context)
+  }
+
+  private func validateAbsentOwner(bundleID: String, context: AuthenticApplicationContext) throws {
+    // Absence is never granted by the selected-owner-only standard scope.
+    guard context.standardBundleID == nil else { throw RelatedFailure.unsupportedInstalledData }
+    try validateLineage(context)
+    let apps = context.inventory
     guard apps.complete else { throw RelatedFailure.incompleteInventory }
-    guard !apps.contains(proof.bundleID), !installedElsewhere(proof.bundleID) else { throw RelatedFailure.ownerPresent }
+    let registered = registeredByID(bundleID)
+    guard registered.complete else { throw RelatedFailure.incompleteInventory }
+    for path in registered.paths where !ApplicationRegistration.isTrash(path) {
+      do {
+        let identity = try DescriptorFileSystem.identity(at: path)
+        let current =
+          identity.kind == .symbolicLink
+          ? Self.resolveLinkedApplication(at: path) : readApplication(at: path, allowProtected: true)
+        guard let current else {
+          if identity.kind == .symbolicLink, Self.isDanglingLink(path) { continue }
+          throw RelatedFailure.incompleteInventory
+        }
+        if foldedAppID(current.bundleID) == foldedAppID(bundleID) { throw RelatedFailure.ownerPresent }
+      } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT { continue }
+    }
+    guard !apps.contains(bundleID), !installedElsewhere(bundleID),
+      !apps.applications.contains(where: {
+        bundleID.hasPrefix($0.bundleID + "-") || bundleID.hasPrefix($0.bundleID + ".")
+      })
+    else { throw RelatedFailure.ownerPresent }
   }
 
   static func currentUserOwns(_ path: String) -> Bool {

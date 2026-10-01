@@ -259,6 +259,19 @@ public actor ApplicationScanSession {
     return await related.validatePlan(plan)
   }
 
+  /// A leftover still needs current owner absence and, when present, a
+  /// freshly validated receipt. Review observations do not grant authority.
+  public func plan(candidate: RelatedDataCandidate) async -> RelatedDataService.AvailableUninstallPlan {
+    guard !cancelled, !Task.isCancelled else {
+      return .init(plan: nil, rejections: [PlanRejection(.unavailable, path: candidate.path, ruleID: "cancelled")])
+    }
+    let context = await self.context()
+    guard !cancelled, !Task.isCancelled else {
+      return .init(plan: nil, rejections: [PlanRejection(.unavailable, path: candidate.path, ruleID: "cancelled")])
+    }
+    return await related.availableOrphanPlan(candidate: candidate, context: context)
+  }
+
   public func cancel() async {
     cancelled = true
     activity.active.withLock { $0 = false }

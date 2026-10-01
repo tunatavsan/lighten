@@ -691,3 +691,145 @@ func scopedStandardCannotGrantMixedAuthority() async throws {
     #expect(outcome.plan?.items.allSatisfy { $0.sourcePath == candidate.path } != false)
   }
 }
+
+private func writeSessionReceipt(fixture: AppsFixture) throws -> String {
+  let identity = try DescriptorFileSystem.identity(at: fixture.cache)
+  let receipt = RelatedReceipt(
+    schema: 1, bundleID: fixture.bundleID, appPath: fixture.app, relatedPath: fixture.cache,
+    identity: identity, observedAt: Date(), ruleSource: "exact-standard-domain-v1")
+  let path = fixture.home + "/Library/Application Support/com.tavsn.lighten/related-receipts.json"
+  try FileManager.default.createDirectory(
+    atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+  try JSONEncoder().encode([receipt]).write(to: URL(fileURLWithPath: path))
+  #expect(chmod(path, 0o600) == 0)
+  return path
+}
+
+@Test("Leftover plans and dry validation reuse one session universe", arguments: [false, true])
+func sessionAbsenceUsesOneUniverse(_ historical: Bool) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let receiptPath = historical ? try writeSessionReceipt(fixture: fixture) : nil
+  try FileManager.default.removeItem(atPath: fixture.app)
+  let walks = Mutex(0)
+  let dumps = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    registration: {
+      dumps.withLock { $0 += 1 }
+      return ApplicationRegistrationObservation(paths: [], complete: true)
+    }, registeredByID: { _ in ApplicationRegistrationObservation(paths: [], complete: true) },
+    ownershipCollected: { walks.withLock { $0 += 1 } })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  let candidate = try #require((await session.observedRelatedCandidates()).first { $0.path == fixture.cache })
+  #expect(candidate.classification == (historical ? .historicallyVerifiedAbsent : .orphanVerified))
+  for _ in 0..<3 {
+    let outcome = await session.plan(candidate: candidate)
+    let plan = try #require(outcome.plan)
+    #expect(outcome.rejections.isEmpty)
+    #expect((await session.validatePlan(plan)).isEmpty)
+    #expect(plan.items.first?.installedRelatedProof == nil)
+    #expect((plan.items.first?.relatedProof != nil) == historical)
+    #expect((plan.items.first?.orphanRelatedProof != nil) != historical)
+  }
+  #expect(walks.withLock { $0 } == 1 && dumps.withLock { $0 } == 1)
+  if let receiptPath {
+    let outcome = await session.plan(candidate: candidate)
+    let plan = try #require(outcome.plan)
+    try FileManager.default.removeItem(atPath: receiptPath)
+    #expect(!(await session.validatePlan(plan)).isEmpty)
+    #expect((await session.plan(candidate: candidate)).plan == nil)
+    #expect(walks.withLock { $0 } == 1 && dumps.withLock { $0 } == 1)
+  }
+  await session.cancel()
+}
+
+@Test("Fresh per-ID registration refuses owner absence without another global walk", arguments: [false, true])
+func sessionAbsenceRefreshesRegistration(_ unknown: Bool) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let external = fixture.home + "/External/LightenQA-returned.app"
+  try FileManager.default.createDirectory(
+    atPath: (external as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+  try FileManager.default.copyItem(atPath: fixture.app, toPath: external)
+  try FileManager.default.removeItem(atPath: fixture.app)
+  let registration = Mutex(ApplicationRegistrationObservation(paths: [], complete: true))
+  let walks = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    registeredByID: { _ in registration.withLock { $0 } },
+    ownershipCollected: { walks.withLock { $0 += 1 } })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  let candidate = try #require((await session.observedRelatedCandidates()).first { $0.path == fixture.cache })
+  let plan = try #require((await session.plan(candidate: candidate)).plan)
+  #expect((await session.validatePlan(plan)).isEmpty)
+  registration.withLock {
+    $0 = ApplicationRegistrationObservation(paths: unknown ? [] : [external], complete: !unknown)
+  }
+  let expected = unknown ? "incompleteInventory" : "ownerPresent"
+  let refused = await session.plan(candidate: candidate)
+  #expect(refused.plan == nil && refused.rejections.contains { $0.ruleID == expected })
+  let dry = await session.validatePlan(plan)
+  #expect(dry.contains { $0.ruleID == expected && $0.path == fixture.cache })
+  #expect(walks.withLock { $0 } == 1)
+  await session.cancel()
+}
+
+@Test("A selected standard context cannot grant an unrelated orphan's absence")
+func standardContextCannotGrantAbsence() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let path = RelatedLocation.caches.path(domain: "qa.lighten.absent", homeDirectory: fixture.home)
+  try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
+  let app = try #require(service.application(at: fixture.app))
+  let orphan = try #require((await service.discover()).first { $0.path == path })
+  #expect(orphan.classification == .orphanVerified && orphan.canSelect)
+  let selected = service.makeStandardContext(app: app, listing: service.installedListing())
+  let outcome = await service.availableOrphanPlan(candidate: orphan, context: selected)
+  #expect(outcome.plan == nil && outcome.rejections.contains { $0.ruleID == "unsupportedInstalledData" })
+}
+
+@Test("Historical rows cannot silently become orphan proofs or authorize unsafe rows")
+func sessionLeftoverProofKindsStayDistinct() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  try FileManager.default.removeItem(atPath: fixture.app)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false)
+  let session = ApplicationDiscovery(related: service).scanSession()
+  let orphan = try #require((await session.observedRelatedCandidates()).first { $0.path == fixture.cache })
+  for classification in [RelatedClassification.historicallyVerifiedAbsent, .shared, .protected, .uncertain] {
+    let forged = RelatedDataCandidate(
+      id: orphan.id, path: orphan.path, classification: classification, reason: orphan.reason,
+      snapshot: orphan.snapshot, receipt: nil, bundleID: orphan.bundleID)
+    let outcome = await session.plan(candidate: forged)
+    #expect(outcome.plan == nil && outcome.rejections.contains { $0.ruleID == "invalidReceipt" })
+  }
+  await session.cancel()
+}
+
+@Test("Leftover dry validation checks nested executable activity freshly")
+func sessionLeftoverNativeActivityIsFresh() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let nested = fixture.cache + "/LightenQA-nested.app"
+  try FileManager.default.copyItem(atPath: fixture.app, toPath: nested)
+  try FileManager.default.removeItem(atPath: fixture.app)
+  let activity = Mutex(ApplicationActivity(state: .clearObservedProcesses))
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    packageActivity: { _ in activity.withLock { $0 } })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  let candidate = try #require((await session.observedRelatedCandidates()).first { $0.path == fixture.cache })
+  let plan = try #require((await session.plan(candidate: candidate)).plan)
+  #expect((await session.validatePlan(plan)).isEmpty)
+  activity.withLock { $0 = ApplicationActivity(state: .active, processNames: ["LightenQA-helper"]) }
+  let active = await session.validatePlan(plan)
+  #expect(active.contains { $0.reason == .processActive && $0.ruleID == "LightenQA-helper" })
+  activity.withLock { $0 = ApplicationActivity(state: .unknown) }
+  #expect((await session.validatePlan(plan)).contains { $0.reason == .activityUnavailable })
+  await session.cancel()
+}

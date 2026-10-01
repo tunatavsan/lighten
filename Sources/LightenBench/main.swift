@@ -12,6 +12,7 @@ import LightenKit
 //   lighten-bench clean [--home PATH] [--row ID] [--timeout SECONDS]
 //   lighten-bench cache-load|space-open --root PATH [--timeout SECONDS]
 //   lighten-bench fsevents [--root PATH] [--seconds N]
+//   lighten-bench survey [--home PATH] [--scope all|space|apps] [--folder-limit N] [--timeout SECONDS]
 
 struct Options {
   var values: [String: String] = [:]
@@ -41,6 +42,7 @@ func usage() -> Never {
              lighten-bench clean [--home PATH] [--row ID] [--timeout SECONDS]
              lighten-bench cache-load|space-open --root PATH [--timeout SECONDS] [--workers N]
              lighten-bench fsevents [--root PATH] [--seconds N]
+             lighten-bench survey [--home PATH] [--scope all|space|apps] [--folder-limit N] [--timeout SECONDS] [--workers N]
 
       """.utf8))
   exit(64)
@@ -129,6 +131,8 @@ case "cache-load", "space-open":
       workers: options.int("workers", 0)))
 case "fsevents":
   output(await Bench.fileEvents(root: options.string("root"), duration: options.double("seconds", 2)))
+case "survey":
+  exit(await RealUseSurvey.run(options: options, environment: environment))
 default:
   usage()
 }
