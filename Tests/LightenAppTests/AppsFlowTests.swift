@@ -389,7 +389,11 @@ private actor AppsAvailableGate {
     .write(to: URL(fileURLWithPath: inner + "/Info.plist"))
   let related = RelatedDataService(
     homeDirectory: root, applicationRoots: [root + "/Applications"], writeVerifiedReceipts: false,
-    signingMetadata: { _ in nil })
+    signingMetadata: { _ in nil },
+    packageActivity: { path in
+      #expect(path == appPath)
+      return ApplicationActivity(state: .clearObservedProcesses)
+    })
   let discovery = ApplicationDiscovery(related: related)
   var metadataSeen = false
   var measuredSeen = false
@@ -423,12 +427,13 @@ private actor AppsAvailableGate {
   await store.acceptDrop([URL(fileURLWithPath: appPath)], actions: actions)
   #expect(store.reports.first?.isIOSWrapper == true)
   #expect(store.selectedPath == appPath)
-  let plan = try #require(actions.pending?.plan)
+  let plan = try #require(
+    actions.pending?.plan, "Wrapper confirmation missing; Apps message: \(store.message ?? "none")")
   #expect(plan.items.count == 1 && plan.items[0].sourcePath == appPath)
   #expect(plan.items[0].applicationBundleID == "qa.lighten.wrapper")
-  #expect(
-    plan.items[0].applicationPackageObservation?.infoRelativePath
-      == "Wrapper/LightenQA-inner.app/Info.plist")
+  let observation = try #require(plan.items[0].applicationPackageObservation)
+  #expect(observation.infoRelativePath == "Wrapper/LightenQA-inner.app/Info.plist")
+  #expect(observation.infoIdentity == (try DescriptorFileSystem.identity(at: inner + "/Info.plist")))
   #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
 }
 
