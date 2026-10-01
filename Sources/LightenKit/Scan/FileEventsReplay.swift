@@ -1,4 +1,5 @@
 import CoreServices
+import Darwin
 import Foundation
 import Synchronization
 
@@ -7,16 +8,32 @@ import Synchronization
 public struct ScanReplayBaseline: Sendable, Equatable {
   public let eventID: UInt64
   public let volumeUUID: UUID
+  /// The FSEvents history store can change independently of the volume.
+  public let storeUUID: UUID?
 
-  public init(eventID: UInt64, volumeUUID: UUID) {
+  public init(eventID: UInt64, volumeUUID: UUID, storeUUID: UUID? = nil) {
     self.eventID = eventID
     self.volumeUUID = volumeUUID
+    self.storeUUID = storeUUID
   }
 
   public static func capture(root: String) -> Self? {
+    capture(root: root, storeUUIDForDevice: eventStoreUUID)
+  }
+
+  static func capture(root: String, storeUUIDForDevice: (dev_t) -> UUID?) -> Self? {
     let path = root == "/" ? "/System/Volumes/Data" : root
-    guard let uuid = try? DescriptorFileSystem.volumeID(at: path) else { return nil }
-    return Self(eventID: FSEventsGetCurrentEventId(), volumeUUID: uuid)
+    var details = stat()
+    guard lstat(path, &details) == 0, details.st_mode & S_IFMT == S_IFDIR,
+      let uuid = try? DescriptorFileSystem.volumeID(at: path),
+      let storeUUID = storeUUIDForDevice(details.st_dev)
+    else { return nil }
+    return Self(eventID: FSEventsGetCurrentEventId(), volumeUUID: uuid, storeUUID: storeUUID)
+  }
+
+  private static func eventStoreUUID(device: dev_t) -> UUID? {
+    guard let value = FSEventsCopyUUIDForDevice(device) else { return nil }
+    return UUID(uuidString: CFUUIDCreateString(nil, value) as String)
   }
 }
 

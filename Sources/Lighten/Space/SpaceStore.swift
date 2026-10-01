@@ -13,6 +13,7 @@ final class SpaceStore {
   @ObservationIgnored private let engine: ScanEngine
   @ObservationIgnored private let cache: ScanCache?
   @ObservationIgnored private let pictures: ResultPictureStore?
+  @ObservationIgnored private let beforeFullRefresh: (@MainActor () async -> Void)?
   @ObservationIgnored private var generation = UUID()
   @ObservationIgnored private var openingGeneration: UUID?
   @ObservationIgnored private var picture: ResultPicture<SpacePicture>?
@@ -61,10 +62,11 @@ final class SpaceStore {
 
   init(
     engine: ScanEngine = ScanEngine(), cache: ScanCache? = ScanCache(),
-    pictures: ResultPictureStore? = nil
+    pictures: ResultPictureStore? = nil, beforeFullRefresh: (@MainActor () async -> Void)? = nil
   ) {
     self.engine = engine
     self.cache = cache
+    self.beforeFullRefresh = beforeFullRefresh
     self.pictures =
       pictures
       ?? cache.map {
@@ -185,13 +187,17 @@ final class SpaceStore {
       }
       let loaded = await Task.detached { cache.loadEntry(root: root) }.value
       guard generation == token, selectedRoot.path == root else { return }
-      guard let loaded, let baseline = loaded.baseline else {
+      guard let loaded else {
         startScan(keepingCache: cachedAt != nil)
         return
       }
       cachedAt = loaded.savedAt
-      let current = await Task.detached { ScanReplayBaseline.capture(root: root) }.value
+      guard let baseline = loaded.baseline, baseline.storeUUID != nil else {
+        await showCachedTreeAndRefresh(loaded.tree, token: token, root: root)
+        return
+      }
       let replay = await FileEventsReplay.replay(root: root, since: baseline.eventID)
+      let current = await Task.detached { ScanReplayBaseline.capture(root: root) }.value
       guard generation == token, selectedRoot.path == root else { return }
       let outcome = await Task.detached {
         engine.reconcile(tree: loaded.tree, replay: replay, baseline: baseline, currentBaseline: current)
@@ -202,16 +208,27 @@ final class SpaceStore {
         cachedAt = nil
         install(tree: loaded.tree)
         phase = rootSummary?.partial == true ? .partial : .complete
-        let nextBaseline = current.map { ScanReplayBaseline(eventID: replay.latestID, volumeUUID: $0.volumeUUID) }
+        let nextBaseline = current.map {
+          ScanReplayBaseline(eventID: replay.latestID, volumeUUID: $0.volumeUUID, storeUUID: $0.storeUUID)
+        }
         Task.detached(priority: .utility) {
           try? cache.save(loaded.tree, baseline: nextBaseline)
           try? pictures?.saveSpace(tree: loaded.tree)
         }
       } else {
-        if tree == nil, picture == nil { install(tree: loaded.tree) }
-        startScan(keepingCache: true)
+        await showCachedTreeAndRefresh(loaded.tree, token: token, root: root)
       }
     }
+  }
+
+  private func showCachedTreeAndRefresh(_ loaded: ScanTree, token: UUID, root: String) async {
+    // The small picture supplies the first frame; the full cached tree supplies
+    // navigation while a fresh scan runs and remains available after cancellation.
+    picture = nil
+    install(tree: loaded, keepingPath: current?.path)
+    await beforeFullRefresh?()
+    guard generation == token, selectedRoot.path == root else { return }
+    startScan(keepingCache: true)
   }
 
   private func measureVolume() {

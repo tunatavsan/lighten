@@ -47,9 +47,10 @@ public struct ScanCache: Sendable {
     let snapshot = tree.storage.withLock { $0 }
     let payload = Self.encode(Self.compacted(snapshot), savedAt: Date())
     var writer = Writer()
-    writer.u32(0x4C_53_43_32)
+    writer.u32(0x4C_53_43_33)
     writer.u64(baseline?.eventID ?? 0)
     writer.optionalString(baseline?.volumeUUID.uuidString)
+    writer.optionalString(baseline?.storeUUID?.uuidString)
     let header = writer.data
     writer.data.append(contentsOf: SHA256.hash(data: header + payload))
     writer.data.append(payload)
@@ -71,7 +72,15 @@ public struct ScanCache: Sendable {
       return nil
     }
     var reader = Reader(data: data)
-    guard reader.u32() == 0x4C_53_43_32, let eventID = reader.u64(), let uuidText = reader.optionalString(),
+    guard let format = reader.u32(), format == 0x4C_53_43_32 || format == 0x4C_53_43_33,
+      let eventID = reader.u64(), let uuidText = reader.optionalString()
+    else { return nil }
+    var storeUUID: UUID?
+    if format == 0x4C_53_43_33 {
+      guard let storeText = reader.optionalString() else { return nil }
+      storeUUID = storeText.flatMap(UUID.init(uuidString:))
+    }
+    guard
       reader.offset + 32 <= data.count
     else { return nil }
     let header = Data(data.prefix(reader.offset))
@@ -83,7 +92,7 @@ public struct ScanCache: Sendable {
       decoded.savedAt.timeIntervalSince1970.isFinite
     else { return nil }
     let baseline = uuidText.flatMap(UUID.init(uuidString:)).map {
-      ScanReplayBaseline(eventID: eventID, volumeUUID: $0)
+      ScanReplayBaseline(eventID: eventID, volumeUUID: $0, storeUUID: storeUUID)
     }
     let tree = ScanTree(
       runID: UUID(), rootPath: root, root: decoded.storage.nodes[0], firmlinks: decoded.storage.firmlinks,
@@ -158,7 +167,7 @@ public struct ScanCache: Sendable {
     defer { close(fd) }
     var bytes = [UInt8](repeating: 0, count: 4)
     let count = bytes.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
-    return count == 4 && bytes == [0x32, 0x43, 0x53, 0x4C]
+    return count == 4 && (bytes == [0x32, 0x43, 0x53, 0x4C] || bytes == [0x33, 0x43, 0x53, 0x4C])
   }
 
   private func prune(reserving bytes: Int, replacing root: String?) throws {

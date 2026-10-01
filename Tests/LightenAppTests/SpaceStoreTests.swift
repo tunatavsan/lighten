@@ -194,6 +194,113 @@ struct SpaceStoreTests {
 }
 
 extension SpaceStoreTests {
+  private actor FullRefreshGate {
+    private(set) var entered = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+      entered = true
+      await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+      continuation?.resume()
+      continuation = nil
+    }
+  }
+
+  @MainActor
+  @Test(
+    "Picture fallback installs the entire read-only cache and preserves navigation after cancel",
+    arguments: ["no-baseline", "legacy-baseline", "unavailable-history"])
+  func fallbackCacheNavigation(_ variant: String) async throws {
+    let fixture = "/private/tmp/LightenQA-" + UUID().uuidString
+    let root = fixture + "/home"
+    try FileManager.default.createDirectory(atPath: root + "/folder/deep", withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: fixture) }
+    try Data(repeating: 1, count: 4096).write(to: URL(fileURLWithPath: root + "/folder/deep/data.bin"))
+    let run = try ScanEngine().start(root: root)
+    await run.waitUntilFinished()
+    let pictures = ResultPictureStore(directory: fixture + "/pictures")
+    try pictures.saveSpace(tree: run.tree)
+    let cache = ScanCache(directory: fixture + "/cache", homeDirectory: root)
+    let baseline: ScanReplayBaseline? =
+      variant == "no-baseline"
+      ? nil
+      : ScanReplayBaseline(
+        eventID: UInt64.max, volumeUUID: UUID(), storeUUID: variant == "legacy-baseline" ? nil : UUID())
+    try cache.save(run.tree, baseline: baseline)
+    let gate = FullRefreshGate()
+    let store = SpaceStore(cache: cache, pictures: pictures, beforeFullRefresh: { await gate.wait() })
+    store.selectRoot(URL(fileURLWithPath: root))
+    for _ in 0..<200 {
+      if await gate.entered { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(await gate.entered)
+    let cached = try #require(store.tree)
+    let observedAt = try #require(store.cachedAt)
+    #expect(store.phase == .scanning)
+    #expect(store.isShowingCache)
+    let folder = try #require(cached.find(path: root + "/folder"))
+    let deep = try #require(cached.find(path: root + "/folder/deep"))
+    store.navigate(to: folder)
+    store.navigate(to: deep)
+    #expect(store.crumbs.map(\.path) == [root, root + "/folder", root + "/folder/deep"])
+    #expect(store.current?.logical.completeTotal == 4096)
+    #expect(store.group?.items.first?.name == "data.bin")
+    // The same state used by the action buttons stays read-only after cancel.
+    store.cancel()
+    await gate.release()
+    for _ in 0..<20 { await Task.yield() }
+    #expect(store.phase == .cancelled)
+    #expect(store.currentScanRunID == nil)
+    #expect(store.tree === cached)
+    #expect(store.cachedAt == observedAt)
+    #expect(store.isShowingCache)
+    store.back()
+    #expect(store.current?.path == root + "/folder")
+    store.navigate(to: deep)
+    #expect(store.current?.path == root + "/folder/deep")
+  }
+
+  @MainActor @Test("A successful full refresh replaces a fallback cache at the browsed path")
+  func fallbackCacheCompletes() async throws {
+    let fixture = "/private/tmp/LightenQA-" + UUID().uuidString
+    let root = fixture + "/home"
+    try FileManager.default.createDirectory(atPath: root + "/folder", withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: fixture) }
+    let file = URL(fileURLWithPath: root + "/folder/data.bin")
+    try Data(repeating: 1, count: 70).write(to: file)
+    let run = try ScanEngine().start(root: root)
+    await run.waitUntilFinished()
+    let cache = ScanCache(directory: fixture + "/cache", homeDirectory: root)
+    let pictures = ResultPictureStore(directory: fixture + "/pictures")
+    try cache.save(run.tree)
+    try pictures.saveSpace(tree: run.tree)
+    try Data(repeating: 2, count: 130).write(to: file)
+    let gate = FullRefreshGate()
+    let store = SpaceStore(cache: cache, pictures: pictures, beforeFullRefresh: { await gate.wait() })
+    store.selectRoot(URL(fileURLWithPath: root))
+    for _ in 0..<200 {
+      if await gate.entered { break }
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(await gate.entered)
+    let cached = try #require(store.tree)
+    store.navigate(to: try #require(cached.find(path: root + "/folder")))
+    #expect(store.current?.logical.completeTotal == 70)
+    #expect(store.isShowingCache)
+    await gate.release()
+    try await waitForPhase(store, .complete)
+    #expect(store.tree !== cached)
+    #expect(store.current?.path == root + "/folder")
+    #expect(store.current?.logical.completeTotal == 130)
+    #expect(!store.isShowingCache)
+    #expect(store.cachedAt == nil)
+    store.cancel()
+  }
+
   @MainActor @Test("Overview decodes only the shared Space picture")
   func overviewPicture() async throws {
     let fixture = "/private/tmp/LightenQA-" + UUID().uuidString

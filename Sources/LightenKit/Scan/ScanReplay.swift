@@ -17,8 +17,10 @@ extension ScanEngine {
     let unsafeFlags = UInt32(
       kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped
         | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagEventIdsWrapped
-        | kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagMount | kFSEventStreamEventFlagUnmount)
+        | kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagMount | kFSEventStreamEventFlagUnmount
+        | kFSEventStreamEventFlagItemIsHardlink | kFSEventStreamEventFlagItemIsLastHardlink)
     guard replay.complete, replay.events.count <= 50_000,
+      let storeUUID = baseline.storeUUID, currentBaseline?.storeUUID == storeUUID,
       currentBaseline?.volumeUUID == baseline.volumeUUID,
       (currentBaseline?.eventID ?? 0) >= baseline.eventID,
       replay.latestID >= baseline.eventID,
@@ -66,6 +68,7 @@ extension ScanEngine {
       guard let item = tree.item(id), tree.find(path: item.path) == id else { continue }
       // Protected metadata-only regions have no inspectable descendants.
       if item.isProtected { return .requiresFullScan }
+      if case .partial(let reason) = item.state, reason != .descendant { return .requiresFullScan }
       do {
         try refreshDirectory(id, tree: tree)
         refreshed += 1
@@ -85,6 +88,7 @@ extension ScanEngine {
     let oldChildren = tree.storage.withLock { storage in
       storage.nodes[Int(id.node)].childNodes.map { ($0, storage.nodes[Int($0)]) }
     }
+    let oldByName = Dictionary(uniqueKeysWithValues: oldChildren.map { ($0.1.name, $0) })
     let temporary = ScanTree(
       runID: UUID(), rootPath: item.path,
       root: ScanTree.rootNode(name: item.path, device: item.device, inode: item.inode))
@@ -96,10 +100,21 @@ extension ScanEngine {
     // A hidden small-file hardlink may have been counted in another directory.
     // Refuse the incremental path rather than silently changing deduplication.
     var throwHardLink = false
+    let oldOpaque = oldChildren.filter { $0.1.ownReason != nil || $0.1.protectedRule != nil }
+    let opaqueNames = Set(oldOpaque.map { $0.1.name })
+    var opaqueEntries: [String: RawEntry] = [:]
     try reader.read(
       path: item.path, expected: (item.device, item.inode), isCancelled: { false },
-      visit: { if $0.kind == .regular && $0.linkCount > 1 { throwHardLink = true } })
+      visit: {
+        if $0.kind == .regular && $0.linkCount > 1 { throwHardLink = true }
+        if opaqueNames.contains($0.name) { opaqueEntries[$0.name] = $0 }
+      })
     if throwHardLink { throw RefreshFailure.hardLinks }
+    for (_, old) in oldOpaque {
+      guard let entry = opaqueEntries[old.name], entry.error == 0, entry.kind == .directory,
+        entry.device == old.device, entry.inode == old.inode
+      else { throw RefreshFailure.changed }
+    }
     let job = WalkJob(
       owner: 0, path: item.path, device: item.device, inode: item.inode,
       mode: item.kind == .package ? .interior : .node,
@@ -107,12 +122,23 @@ extension ScanEngine {
     var jobs = walker.process(job, reader: reader)
     var preserved: [Int32: Int32] = [:]
     if item.kind != .package {
+      let children = temporary.storage.withLock { storage in
+        storage.nodes[0].childNodes.map { ($0, storage.nodes[Int($0)]) }
+      }
+      // Classification uses only the parent's entry metadata. Protected and
+      // cloud-only children are never opened to validate the cached boundary.
+      for (index, child) in children {
+        let old = oldByName[child.name]
+        let wasOpaque = old.map { $0.1.ownReason != nil || $0.1.protectedRule != nil } ?? false
+        guard child.ownReason != nil || child.protectedRule != nil || wasOpaque else { continue }
+        guard let old, Self.sameBoundary(child, old.1) else {
+          throw RefreshFailure.changed
+        }
+        preserved[index] = old.0
+      }
       jobs = jobs.filter { job in
-        guard
-          let old = oldChildren.first(where: {
-            $0.1.name == URL(fileURLWithPath: job.path).lastPathComponent
-              && $0.1.device == job.device && $0.1.inode == job.inode
-          })
+        let child = temporary.storage.withLock { $0.nodes[Int(job.owner)] }
+        guard let old = oldByName[child.name], Self.sameBoundary(child, old.1)
         else { return true }
         preserved[job.owner] = old.0
         temporary.storage.withLock { storage in
@@ -139,7 +165,16 @@ extension ScanEngine {
       for index in storage.nodes.indices { storage.nodes[index].lifecycle = .done }
       return storage
     }
-    guard measured.nodes.allSatisfy({ $0.ownReason == nil }) else { throw RefreshFailure.unavailable }
+    guard
+      measured.nodes.enumerated().allSatisfy({ index, node in
+        node.ownReason == nil || preserved[Int32(index)] != nil
+      })
+    else { throw RefreshFailure.unavailable }
     tree.replaceDirectory(id.node, measured: measured, preserved: preserved)
+  }
+
+  private static func sameBoundary(_ fresh: ScanTree.Node, _ old: ScanTree.Node) -> Bool {
+    fresh.name == old.name && fresh.device == old.device && fresh.inode == old.inode
+      && fresh.kind == old.kind && fresh.ownReason == old.ownReason && fresh.protectedRule == old.protectedRule
   }
 }
