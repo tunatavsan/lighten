@@ -338,4 +338,105 @@ struct ApplicationSignatureCacheTests {
     await session.cancel()
   }
 
+  @Test("A group signature failure leaves exact-ID items independently prepared and selectable")
+  func mixedPlanPreservesExactOwnerAfterGroupSignatureChange() async throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    let reads = Mutex(0)
+    let walks = Mutex(0)
+    let service = RelatedDataService(
+      homeDirectory: fixture.home, applicationRoots: [fixture.home + "/Applications"], writeVerifiedReceipts: false,
+      signingMetadata: { _ in
+        reads.withLock { $0 += 1 }
+        return ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [fixture.groupID])
+      }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+      ownershipCollected: { walks.withLock { $0 += 1 } })
+    let session = ApplicationDiscovery(related: service).scanSession()
+    var candidates: [RelatedDataCandidate] = []
+    for await event in await session.events() {
+      if case .completed(_, let reports) = event {
+        candidates =
+          reports.first { $0.path == fixture.app }?.related.filter {
+            $0.path == fixture.cache || $0.path == fixture.group
+          } ?? []
+      }
+    }
+    #expect(candidates.count == 2 && candidates.allSatisfy(\.canSelect))
+    let app = try #require(service.application(at: fixture.app))
+    let original = await session.makeAvailableUninstallPlan(
+      app: app, selectedRelated: candidates, includePackage: false)
+    let plan = try #require(original.plan)
+    #expect(original.rejections.isEmpty && plan.items.count == 2)
+    let cacheItem = try #require(plan.items.first { $0.sourcePath == fixture.cache })
+    let groupItem = try #require(plan.items.first { $0.sourcePath == fixture.group })
+    try rewriteRestoringModification(fixture.resources)
+    let prepared = service.prepareInstalledOwners(plan: plan)
+    #expect(prepared.owners[cacheItem.id] != nil && prepared.failures[cacheItem.id] == nil)
+    #expect(prepared.owners[groupItem.id] == nil && prepared.failures[groupItem.id] != nil)
+    let dryRefusals = await service.validatePlan(plan)
+    #expect(!dryRefusals.isEmpty && dryRefusals.allSatisfy { $0.path == fixture.group })
+    let partial = await session.makeAvailableUninstallPlan(
+      app: app, selectedRelated: candidates, includePackage: false)
+    let surviving = try #require(partial.plan)
+    #expect(surviving.items.map(\.sourcePath) == [fixture.cache])
+    #expect(!partial.rejections.isEmpty && partial.rejections.allSatisfy { $0.path == fixture.group })
+    #expect(service.prepareInstalledOwners(plan: surviving).failures.isEmpty)
+    #expect(await service.validatePlan(surviving).isEmpty)
+    #expect(reads.withLock { $0 } == 1 && walks.withLock { $0 } == 1)
+    await session.cancel()
+  }
+
+  @Test("An incomplete group universe cannot poison a private exact-ID selection")
+  func mixedPartialOwnershipPreservesStandardSelection() async throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    let external = fixture.home + "/External/LightenQA-unknown.app"
+    try FileManager.default.createDirectory(atPath: external + "/Contents", withIntermediateDirectories: true)
+    try Data("malformed plist".utf8).write(to: URL(fileURLWithPath: external + "/Contents/Info.plist"))
+    let loop = external + "/Contents/LightenQA-unresolved-owner"
+    #expect(symlink(loop, loop) == 0)
+    let walks = Mutex(0)
+    let service = RelatedDataService(
+      homeDirectory: fixture.home, applicationRoots: [fixture.home + "/Applications"], writeVerifiedReceipts: false,
+      signingMetadata: { path in
+        path == fixture.app ? ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [fixture.groupID]) : nil
+      }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+      registration: { ApplicationRegistrationObservation(paths: [external], complete: true) },
+      registeredByID: { _ in ApplicationRegistrationObservation(paths: [], complete: true) },
+      ownershipCollected: { walks.withLock { $0 += 1 } })
+    let context = service.makeContext()
+    #expect(!context.inventory.complete && !context.inventory.ownershipComplete)
+    #expect(context.inventory.ownershipIssues.contains { $0.path == loop && $0.code == ELOOP })
+    #expect(context.inventory.unresolvedApplicationMetadata.contains { $0.path == external })
+    let candidates = await service.discover(context: context)
+    let cache = try #require(candidates.first { $0.path == fixture.cache })
+    let group = try #require(candidates.first { $0.path == fixture.group })
+    #expect(cache.canSelect && !group.canSelect)
+    let app = try #require(service.application(at: fixture.app))
+    let partial = await service.makeAvailableUninstallPlan(
+      app: app, selectedRelated: [group, cache], includePackage: false, context: context)
+    let plan = try #require(partial.plan)
+    #expect(plan.items.map(\.sourcePath) == [fixture.cache])
+    #expect(!partial.rejections.isEmpty && partial.rejections.allSatisfy { $0.path == fixture.group })
+    #expect(service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+    #expect(await service.validatePlan(plan).isEmpty)
+    #expect(walks.withLock { $0 } == 1)
+  }
+
+  @Test("Private context lookup cannot borrow a sibling item binding")
+  func planContextRequiresBoundItem() async throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    let service = fixture.service { _ in ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [fixture.groupID])
+    }
+    let context = service.makeContext()
+    let app = try #require(service.application(at: fixture.app))
+    let candidate = try #require((await service.discover(context: context)).first { $0.path == fixture.cache })
+    let plan = try service.planInstalled(app: app, candidate: candidate)
+    let bindings = ApplicationPlanContexts()
+    bindings.bind(plan, context: context)
+    #expect(bindings.context(for: plan, scope: context.scope, itemID: plan.items[0].id) === context)
+    #expect(bindings.context(for: plan, scope: context.scope, itemID: UUID()) == nil)
+  }
+
 }

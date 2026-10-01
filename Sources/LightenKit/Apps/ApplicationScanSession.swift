@@ -38,22 +38,87 @@ struct ApplicationPathObservation: Sendable {
   }
 }
 
+/// Parsed IDs are reusable only while every full root and Info identity is
+/// unchanged. A changed Info file is parsed again before it can supply an ID.
+final class ApplicationContextMetadata: Sendable {
+  private struct Key: Hashable {
+    let path: String
+    let registered: Bool
+  }
+  private struct Observation: Sendable {
+    let identities: [ApplicationPathObservation]
+    let application: InstalledApplication?
+  }
+  private let entries = Mutex<[Key: Observation]>([:])
+
+  private func identities(at path: String) throws -> [ApplicationPathObservation] {
+    let root = try DescriptorFileSystem.identity(at: path)
+    var observations = [ApplicationPathObservation(path: path, identity: root)]
+    let physical: String
+    if root.kind == .symbolicLink {
+      guard let resolved = realpath(path, nil) else { throw FileSystemFailure.systemCall("realpath", errno) }
+      physical = String(cString: resolved)
+      free(resolved)
+      observations.append(
+        ApplicationPathObservation(path: physical, identity: try DescriptorFileSystem.identity(at: physical)))
+    } else {
+      physical = path
+    }
+    let info = RelatedDataService.infoPlistPath(ofBundleAt: physical)
+    do {
+      observations.append(ApplicationPathObservation(path: info, identity: try DescriptorFileSystem.identity(at: info)))
+    } catch FileSystemFailure.systemCall(_, let code) where code == ENOENT {
+      throw ApplicationMetadataFailure.missingInfoPlist
+    }
+    return observations
+  }
+
+  func application(at path: String, registered: Bool, read: () throws -> InstalledApplication?) throws
+    -> InstalledApplication?
+  {
+    let key = Key(path: path, registered: registered)
+    let current = try identities(at: path)
+    if let cached = entries.withLock({ $0[key] }),
+      cached.identities.count == current.count,
+      zip(cached.identities, current).allSatisfy({ pair in
+        pair.0.path == pair.1.path && pair.0.identity == pair.1.identity
+      })
+    {
+      return cached.application
+    }
+    let application = try read()
+    let finished = try identities(at: path)
+    guard current.count == finished.count,
+      zip(current, finished).allSatisfy({ pair in
+        pair.0.path == pair.1.path && pair.0.identity == pair.1.identity
+      })
+    else { throw FileSystemFailure.changedDuringInspection }
+    entries.withLock { $0[key] = Observation(identities: current, application: application) }
+    return application
+  }
+}
+
 /// Only the service can mint this context. Public inventories and review DTOs
 /// are observations and are never accepted as ownership authority.
 final class AuthenticApplicationContext: Sendable {
   let scope: ApplicationContextScope
   let inventory: BundleInventory
+  let installedListing: BundleInventory
   let lineage: [ApplicationPathObservation]
   let registeredPaths: [String]
   let standardBundleID: String?
+  let metadata: ApplicationContextMetadata
   private let signers = Mutex<[String: ApplicationSignatureCache.Observation]>([:])
 
   init(
     scope: ApplicationContextScope, inventory: BundleInventory, lineage: [ApplicationPathObservation],
-    registeredPaths: [String], standardBundleID: String? = nil
+    registeredPaths: [String], standardBundleID: String? = nil,
+    installedListing: BundleInventory? = nil, metadata: ApplicationContextMetadata? = nil
   ) {
     self.scope = scope
     self.inventory = inventory
+    self.installedListing = installedListing ?? inventory
+    self.metadata = metadata ?? ApplicationContextMetadata()
     var first: [String: ApplicationPathObservation] = [:]
     for observation in lineage where first[observation.path] == nil { first[observation.path] = observation }
     self.lineage = first.values.sorted { $0.path < $1.path }
@@ -83,30 +148,45 @@ final class ApplicationPlanContexts: Sendable {
   static let native = ApplicationPlanContexts()
   private struct Binding: Sendable {
     let plan: ActionPlan
-    let context: AuthenticApplicationContext
+    let contexts: [UUID: AuthenticApplicationContext]
   }
   private let bindings = Mutex<[Binding]>([])
 
   func bind(_ plan: ActionPlan, context: AuthenticApplicationContext) {
+    bind(plan, contexts: Dictionary(plan.items.map { ($0.id, context) }, uniquingKeysWith: { first, _ in first }))
+  }
+
+  func bind(_ plan: ActionPlan, contexts: [UUID: AuthenticApplicationContext]) {
     bindings.withLock { entries in
       entries.removeAll { $0.plan.id == plan.id }
-      entries.append(Binding(plan: plan, context: context))
+      let selected = contexts.filter { entry in plan.items.contains { $0.id == entry.key } }
+      entries.append(Binding(plan: plan, contexts: selected))
       // A very large observation remains usable by its session, but a later
       // execution must freshly validate it instead of retaining unbounded state.
-      if context.lineage.count > 100_000 { entries.removeAll { $0.plan.id == plan.id } }
+      if selected.values.contains(where: { $0.lineage.count > 100_000 }) {
+        entries.removeAll { $0.plan.id == plan.id }
+      }
       func retainedPaths() -> Int {
         var seen: Set<ObjectIdentifier> = []
         return entries.reduce(0) { total, entry in
-          total + (seen.insert(ObjectIdentifier(entry.context)).inserted ? entry.context.lineage.count : 0)
+          total
+            + entry.contexts.values.reduce(0) { count, context in
+              count + (seen.insert(ObjectIdentifier(context)).inserted ? context.lineage.count : 0)
+            }
         }
       }
       while entries.count > 64 || retainedPaths() > 250_000 { entries.removeFirst() }
     }
   }
 
-  func context(for plan: ActionPlan, scope: ApplicationContextScope) -> AuthenticApplicationContext? {
+  func context(for plan: ActionPlan, scope: ApplicationContextScope, itemID: UUID? = nil)
+    -> AuthenticApplicationContext?
+  {
     bindings.withLock { entries in
-      entries.first { $0.plan == plan && $0.context.scope == scope }?.context
+      guard let binding = entries.first(where: { $0.plan == plan }) else { return nil }
+      let context: AuthenticApplicationContext?
+      if let itemID { context = binding.contexts[itemID] } else { context = binding.contexts.values.first }
+      return context?.scope == scope ? context : nil
     }
   }
 }
@@ -121,6 +201,7 @@ public actor ApplicationScanSession {
   public nonisolated let id = UUID()
   private let related: RelatedDataService
   private let uptime: @Sendable () -> TimeInterval
+  private let metadata = ApplicationContextMetadata()
   private var ownership: Task<AuthenticApplicationContext, Never>?
   private var listing: Task<BundleInventory, Never>?
   private var worker: Task<Void, Never>?
@@ -176,7 +257,8 @@ public actor ApplicationScanSession {
     if let base { listing = base } else { listing = await installedListing() }
     if let ownership { return await ownership.value }
     let service = related
-    let task = Task.detached(priority: .utility) { service.makeContext(base: listing) }
+    let metadata = self.metadata
+    let task = Task.detached(priority: .utility) { service.makeContext(base: listing, metadata: metadata) }
     ownership = task
     if cancelled { task.cancel() }
     return await task.value
@@ -237,8 +319,9 @@ public actor ApplicationScanSession {
     } else if related.isExactStandardSelection(app: app, candidates: selectedRelated) {
       let listing = await installedListing()
       let service = related
+      let metadata = self.metadata
       context = await Task.detached(priority: .userInitiated) {
-        service.makeStandardContext(app: app, listing: listing)
+        service.makeStandardContext(app: app, listing: listing, metadata: metadata)
       }.value
     } else {
       context = await self.context()

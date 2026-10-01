@@ -452,6 +452,81 @@ func standardContextIgnoresUnrelatedOwnerChurn(_ change: String) async throws {
   #expect(walks.withLock { $0 } == 1)
 }
 
+@Test("Cached unrelated Info is reparsed when an in-place edit claims the selected ID")
+func cachedSiblingMetadataCannotHideSecondOwner() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let sibling = fixture.appRoot + "/LightenQA-sibling.app"
+  let info = sibling + "/Contents/Info.plist"
+  let unrelatedID = String(fixture.bundleID.dropLast()) + (fixture.bundleID.hasSuffix("0") ? "1" : "0")
+  func bytes(_ id: String) throws -> Data {
+    try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": id], format: .xml, options: 0)
+  }
+  try FileManager.default.createDirectory(atPath: sibling + "/Contents", withIntermediateDirectories: true)
+  try bytes(unrelatedID).write(to: URL(fileURLWithPath: info))
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
+  let context = service.makeContext()
+  let app = try #require(service.application(at: fixture.app))
+  let candidate = try #require((await service.discover(context: context)).first { $0.path == fixture.cache })
+  let selected = await service.makeAvailableUninstallPlan(
+    app: app, selectedRelated: [candidate], includePackage: false, context: context)
+  let plan = try #require(selected.plan)
+  #expect(selected.rejections.isEmpty)
+  #expect(service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+  #expect(service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+  let extraReads = Mutex(0)
+  let reused = try context.metadata.application(at: sibling, registered: false) {
+    extraReads.withLock { $0 += 1 }
+    return service.application(at: sibling)
+  }
+  #expect(reused?.bundleID == unrelatedID && extraReads.withLock { $0 } == 0)
+  var before = stat()
+  #expect(lstat(info, &before) == 0)
+  let replacement = try bytes(fixture.bundleID)
+  #expect(replacement.count == (try Data(contentsOf: URL(fileURLWithPath: info))).count)
+  let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: info))
+  try handle.write(contentsOf: replacement)
+  try handle.close()
+  var times = [before.st_atimespec, before.st_mtimespec]
+  #expect(utimensat(AT_FDCWD, info, &times, 0) == 0)
+  let prepared = service.prepareInstalledOwners(plan: plan)
+  #expect(prepared.owners.isEmpty && prepared.failures.values.contains("ambiguousOwner"))
+  let reparsed = try context.metadata.application(at: sibling, registered: false) {
+    extraReads.withLock { $0 += 1 }
+    return service.application(at: sibling)
+  }
+  #expect(reparsed?.bundleID == fixture.bundleID && extraReads.withLock { $0 } == 0)
+  let retry = await service.makeAvailableUninstallPlan(
+    app: app, selectedRelated: [candidate], includePackage: false, context: context)
+  #expect(retry.plan == nil && !retry.rejections.isEmpty)
+}
+
+@Test("Report-only absence retains the actual incomplete metadata cause")
+func unknownOrphanReportsMetadataCause() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  try FileManager.default.removeItem(atPath: fixture.app)
+  let unknown = fixture.home + "/External/LightenQA-unknown.app"
+  try FileManager.default.createDirectory(atPath: unknown + "/Contents", withIntermediateDirectories: true)
+  try Data("malformed plist".utf8).write(to: URL(fileURLWithPath: unknown + "/Contents/Info.plist"))
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil },
+    registration: { ApplicationRegistrationObservation(paths: [unknown], complete: true) },
+    registeredByID: { _ in ApplicationRegistrationObservation(paths: [], complete: true) })
+  let context = service.makeContext()
+  let candidate = try #require((await service.discover(context: context)).first { $0.path == fixture.cache })
+  #expect(!candidate.canSelect && candidate.reason == .incompleteInventory)
+  let refused = await service.availableOrphanPlan(candidate: candidate, context: context)
+  #expect(refused.plan == nil)
+  #expect(
+    refused.rejections.contains {
+      $0.path == fixture.cache && $0.ruleID?.contains("invalidInfoPlist: " + unknown) == true
+    })
+}
+
 @Test("Mutable ownership data does not invalidate freshly checked orphan absence")
 func orphanAbsenceIgnoresUnrelatedOwnerDirectories() async throws {
   let fixture = try AppsFixture()
@@ -957,6 +1032,11 @@ func sessionLeftoverProofKindsStayDistinct() async throws {
     let outcome = await session.plan(candidate: forged)
     #expect(outcome.plan == nil && outcome.rejections.contains { $0.ruleID == "invalidReceipt" })
   }
+  let unavailable = RelatedDataCandidate(
+    id: orphan.id, path: orphan.path, classification: .uncertain, reason: .recordUnavailable,
+    snapshot: nil, receipt: nil, bundleID: orphan.bundleID)
+  let reported = await session.plan(candidate: unavailable)
+  #expect(reported.plan == nil && reported.rejections.contains { $0.ruleID == "recordUnavailable" })
   await session.cancel()
 }
 
