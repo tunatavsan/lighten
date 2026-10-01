@@ -107,10 +107,11 @@ extension ProtectionPolicy {
       "docker-disk-image": ["com.docker.docker"],
       "orbstack-disk-image": ["dev.kdrag0n.OrbStack"],
     ]
+    let matcher = Self.matcher(homeDirectory: homeDirectory).selecting(Set(identities.keys))
     return Array(
       Set(
         entries.flatMap { entry in
-          rules(for: entry.path, homeDirectory: homeDirectory).flatMap { identities[$0.id] ?? [] }
+          matcher.rules(for: entry.path).flatMap { identities[$0.id] ?? [] }
         })
     ).sorted()
   }
