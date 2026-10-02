@@ -96,6 +96,7 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   #expect(presentation.items.map(\.path) == [accepted.path])
   #expect(Set(presentation.rejectedItems.map(\.path)) == [refused.path, missing])
   #expect(presentation.rejectedItems.contains(rejection))
+  #expect(actions.result == nil && actions.resultRejections.isEmpty)
   #expect(store.selectedDataPaths == [accepted.path, refused.path, missing])
   #expect(store.message == nil)
   #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
@@ -123,9 +124,10 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   store.toggleData(candidate.path, actions: actions)
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending == nil)
-  #expect(store.message?.contains("Quit") == true)
-  #expect(store.message?.contains("Fixture Helper") == false)
-  #expect(store.message?.contains(app) == true)
+  #expect(actions.failure(at: app)?.contains("Quit") == true)
+  #expect(actions.failure(at: app)?.contains("Fixture Helper") == false)
+  #expect(actions.resultRejections.map(\.path) == [app])
+  #expect(actions.result == nil && store.message == nil)
   #expect(store.selectedDataPaths == [candidate.path])
   #expect(!store.preparing)
 }
@@ -150,9 +152,9 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   store.toggleData(candidate.path, actions: actions)
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending == nil)
-  #expect(store.message?.contains("not eligible") == true)
-  #expect(store.message?.contains(candidate.path) == true)
-  #expect(store.message?.contains("Could not prepare app data") == false)
+  #expect(actions.failure(at: candidate.path)?.contains("not eligible") == true)
+  #expect(actions.resultRejections.map(\.path) == [candidate.path])
+  #expect(actions.result == nil && store.message == nil)
 }
 
 private actor AppsAvailableGate {
@@ -173,6 +175,113 @@ private actor AppsAvailableGate {
     request?.resume(returning: outcome)
     request = nil
   }
+}
+
+@Test(
+  "An all-rejected Apps review keeps the selected app with a Finder step and no action record",
+  arguments: [false, true])
+@MainActor func appsAdministratorRefusalIsKeptFeedback(throwsRefusal: Bool) async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let app = root + "/LightenQA-administrator.app"
+  try FileManager.default.createDirectory(atPath: app, withIntermediateDirectories: false)
+  let identity = try DescriptorFileSystem.identity(at: app)
+  let rejection = PlanRejection(.needsAdministrator, path: app)
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    availableUninstallPlanBuilder: { _, _, _ in
+      if throwsRefusal { throw rejection }
+      return .init(plan: nil, rejections: [rejection])
+    }, running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let journalPath = root + "/journal.jsonl"
+  let actions = ActionStore(journal: JSONLActionJournal(path: journalPath))
+  store.reports = [flowReport(path: app, identity: identity)]
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(app, actions: actions)
+  store.togglePackage(actions: actions)
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending == nil && actions.result == nil && actions.resultKind == nil)
+  #expect(actions.resultRejections == [rejection])
+  #expect(actions.completedSummary == String(localized: "No items were removed."))
+  #expect(actions.resultFailures.isEmpty && actions.resultSummaries.isEmpty)
+  #expect(!actions.canUndoLatest && actions.latestTrashPaths.isEmpty)
+  #expect(!FileManager.default.fileExists(atPath: journalPath))
+  #expect(store.selectedReport?.path == app && store.packageSelected && store.packageItemResults.isEmpty)
+  #expect(store.message == nil && actions.message == nil)
+  #expect(try DescriptorFileSystem.identity(at: app) == identity)
+  store.togglePackage(actions: actions)
+  #expect(actions.resultRejections.isEmpty && actions.completedSummary == nil)
+  #expect(actions.failure(at: app) == nil)
+  #expect(store.selectedReport?.path == app)
+}
+
+@Test("Cancelled or changed Apps choices discard a late all-rejected review", arguments: [false, true])
+@MainActor func appsLateRefusalIsDiscarded(cancelTask: Bool) async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let app = root + "/LightenQA-late-refusal.app"
+  let gate = AppsAvailableGate()
+  let store = AppsStore(
+    pictures: flowPictures(root), availableUninstallPlanBuilder: { _, _, _ in await gate.outcome() },
+    running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [flowReport(path: app), flowReport(path: root + "/LightenQA-other.app")]
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(app, actions: actions)
+  store.togglePackage(actions: actions)
+  let preparation = Task { await store.prepareSelectedData(actions: actions) }
+  await gate.waitForArrival()
+  if cancelTask {
+    preparation.cancel()
+  } else {
+    store.select(root + "/LightenQA-other.app", actions: actions)
+  }
+  await gate.finish(.init(plan: nil, rejections: [PlanRejection(.needsAdministrator, path: app)]))
+  await preparation.value
+  #expect(actions.pending == nil && actions.result == nil && actions.resultRejections.isEmpty)
+  #expect(actions.completedSummary == nil && store.message == nil && !store.preparing)
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+}
+
+@Test("A new all-rejected Apps review replaces prior package outcome rows")
+@MainActor func appsKeptFeedbackReplacesPackageRows() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let app = root + "/LightenQA-prior-result.app"
+  let item = PlanItem(
+    id: UUID(), sourcePath: app, inventory: [], ancestors: [], policy: .wholeBundle,
+    applicationBundleID: "qa.lighten.flow")
+  let plan = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [item])
+  let gate = AppsAvailableGate()
+  let store = AppsStore(
+    pictures: flowPictures(root), availableUninstallPlanBuilder: { _, _, _ in await gate.outcome() },
+    running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [flowReport(path: app)]
+  store.runningCheckedIDs = ["qa.lighten.flow"]
+  store.select(app, actions: actions)
+  store.togglePackage(actions: actions)
+  let firstReview = Task { await store.prepareSelectedData(actions: actions) }
+  await gate.waitForArrival()
+  await gate.finish(.init(plan: plan, rejections: []))
+  await firstReview.value
+  #expect(actions.pending?.plan == plan)
+  actions.pending = nil
+  actions.publishExecution(
+    plan: plan,
+    result: ActionResult(
+      planID: plan.id, items: [ItemActionResult(itemID: item.id, outcome: .failed, detail: "userPermissionDenied")]),
+    summaries: [])
+  store.observeResult(actions: actions)
+  #expect(store.packageItemResults.map(\.sourcePath) == [app])
+  let secondReview = Task { await store.prepareSelectedData(actions: actions) }
+  await gate.waitForArrival()
+  await gate.finish(.init(plan: nil, rejections: [PlanRejection(.needsAdministrator, path: app)]))
+  await secondReview.value
+  #expect(store.packageItemResults.isEmpty)
+  #expect(actions.result == nil && actions.resultFailures.isEmpty)
+  #expect(actions.resultRejections == [PlanRejection(.needsAdministrator, path: app)])
+  #expect(store.selectedReport?.path == app && store.packageSelected)
 }
 
 @Test("Changing an Apps choice discards a late available plan and its skipped reasons")
@@ -395,7 +504,8 @@ private actor AppsAvailableGate {
   store.togglePackage(actions: actions)
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending == nil)
-  #expect(store.message?.contains(listed) == true)
+  #expect(actions.resultRejections.map(\.path) == [listed])
+  #expect(actions.result == nil && store.message == nil)
 }
 
 @Test("Discovery caches iOS wrapper metadata before measurements and preserves it in every report")
@@ -926,7 +1036,7 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   store.selectedDataPaths = [candidate.path]
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending == nil)
-  #expect(store.message?.contains(candidate.path) == true)
+  #expect(actions.resultRejections.map(\.path) == [candidate.path])
   store.selectedDataPaths = []
   store.toggleData(candidate.path, actions: actions)
   #expect(store.selectedDataPaths == [candidate.path])
@@ -934,7 +1044,7 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   store.selectedDataPaths = [candidate.path]
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending == nil)
-  #expect(store.message?.contains(candidate.path) == true)
+  #expect(actions.resultRejections.map(\.path) == [candidate.path])
 }
 
 @Test("Revoking a name-only choice discards a late plan even if its path is assigned again")
@@ -1235,4 +1345,72 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   await store.prepareOrphans(actions: actions)
   #expect(actions.pending?.plan.items.map(\.sourcePath) == [remainingPath])
   #expect(actions.pending?.plan.items.first?.userSelection == true)
+}
+
+@Test("A blocked previous picture read does not delay fresh metadata rows")
+@MainActor func appsFreshRowsDoNotWaitForPicture() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let gate = DispatchSemaphore(value: 0)
+  let pictureStarted = AsyncStream<Void>.makeStream()
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let path = root + "/LightenQA-fresh.app"
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    loadPicture: {
+      pictureStarted.continuation.yield(())
+      _ = gate.wait(timeout: .now() + 5)
+      return ResultPicture(
+        observedAt: Date().addingTimeInterval(-60),
+        content: AppsPicture(reports: [flowReport(path: root + "/LightenQA-old.app")], inventoryComplete: true))
+    }, running: AppsClosedSource(), events: { stream })
+  let actions = ActionStore()
+  store.open(actions: actions)
+  var pictureIterator = pictureStarted.stream.makeAsyncIterator()
+  _ = await pictureIterator.next()
+  defer { gate.signal() }
+  continuation.yield(
+    .listed([
+      ApplicationListEntry(path: path, name: "Fresh", bundleID: nil, version: nil, displayRootIdentity: nil)
+    ]))
+  try await waitFlow { store.reports.count == 1 }
+  #expect(store.reports.first?.path == path)
+  #expect(store.pictureRows.isEmpty)
+  #expect(store.listedPublishedAt != nil)
+  #expect(store.openingTiming?.firstRowDrawnAt == nil)
+  #expect(store.openingTiming?.visibleIconsDrawnAt == nil)
+  store.cancelScan()
+  continuation.finish()
+}
+
+@Test("Progressive display rows preserve cached sizes without gaining selection authority")
+@MainActor func appsProgressiveRowsRetainPictureSizes() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let reports = (0..<2).map { flowReport(path: root + "/LightenQA-cached-\($0).app") }
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let store = AppsStore(
+    pictures: flowPictures(root),
+    loadPicture: {
+      ResultPicture(
+        observedAt: Date().addingTimeInterval(-60), content: AppsPicture(reports: reports, inventoryComplete: true))
+    }, running: AppsClosedSource(), events: { stream })
+  let actions = ActionStore()
+  store.open(actions: actions)
+  try await waitFlow { store.pictureRows.count == 2 }
+  let entries = reports.map {
+    ApplicationListEntry(path: $0.path, name: $0.path, bundleID: $0.bundleID, version: nil, displayRootIdentity: nil)
+  }
+  continuation.yield(.listed([entries[0]], isFinalBatch: false))
+  try await waitFlow { store.reports.count == 1 }
+  let firstPublishedAt = try #require(store.listedPublishedAt)
+  continuation.yield(.listed(entries))
+  try await waitFlow { store.reports.count == 2 }
+  #expect(store.listedPublishedAt == firstPublishedAt)
+  #expect(store.reports.map(\.logical) == reports.map(\.logical))
+  #expect(store.reports.allSatisfy { $0.signerTeamID == nil && $0.related.isEmpty && $0.partial })
+  #expect(!store.inventoryComplete)
+  #expect(actions.pending == nil)
+  store.cancelScan()
+  continuation.finish()
 }

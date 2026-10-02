@@ -148,8 +148,8 @@ enum Bench {
       .events(includeAllRelated: true)
     {
       switch event {
-      case .listed(let entries):
-        if listedAt == nil {
+      case .listed(let entries, _):
+        if listedAt == nil, !entries.isEmpty {
           listedAt = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
           firstListedCount = entries.count
         }

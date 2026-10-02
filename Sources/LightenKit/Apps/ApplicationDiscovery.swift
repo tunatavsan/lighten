@@ -48,7 +48,7 @@ public struct ApplicationDiscovery: Sendable {
   typealias Measurement = (logical: ByteAggregate, allocated: ByteAggregate, count: Int, partial: Bool)
   private let related: RelatedDataService
   private let uptime: @Sendable () -> TimeInterval
-  private let lightweightListing: @Sendable () -> [ApplicationListEntry]
+  private let lightweightListing: ApplicationListing.Collector
   private let measurement: @Sendable (String, String) async -> Measurement
 
   public init(
@@ -57,7 +57,9 @@ public struct ApplicationDiscovery: Sendable {
   ) {
     self.related = related
     self.uptime = uptime
-    self.lightweightListing = { ApplicationListing.observe(roots: related.lightweightListingRoots) }
+    self.lightweightListing = { progress in
+      ApplicationListing.observe(roots: related.lightweightListingRoots, progress: progress)
+    }
     self.measurement = Self.measure
   }
 
@@ -69,13 +71,14 @@ public struct ApplicationDiscovery: Sendable {
   ) {
     self.related = related
     self.uptime = uptime
-    self.lightweightListing = lightweightListing
+    self.lightweightListing = { _ in lightweightListing() }
     self.measurement = measurement
   }
 
   public enum Event: Sendable {
     case session(ApplicationScanSession)
-    case listed([ApplicationListEntry])
+    /// Finality is only for the bounded display collector, never inventory or ownership completeness.
+    case listed([ApplicationListEntry], isFinalBatch: Bool = true)
     case inventory(BundleInventory, [ApplicationReport])
     case related(path: String, candidates: [RelatedDataCandidate], ownershipPending: Bool)
     case ownershipReady(BundleInventory)
@@ -136,7 +139,9 @@ public struct ApplicationDiscovery: Sendable {
     uptime: @escaping @Sendable () -> TimeInterval, includeAllRelated: Bool,
     emit: @escaping @Sendable (Event) -> Void
   ) async {
-    let entries = await session.displayListing()
+    let entries = await session.displayListing { entries in
+      emit(.listed(entries, isFinalBatch: false))
+    }
     guard !Task.isCancelled else { return }
     emit(.listed(entries))
     let listing = await session.installedListing()

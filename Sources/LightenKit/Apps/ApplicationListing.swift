@@ -22,15 +22,30 @@ public struct ApplicationListEntry: Sendable, Identifiable {
 }
 
 enum ApplicationListing {
+  typealias Progress = @Sendable ([ApplicationListEntry]) -> Void
+  typealias Collector = @Sendable (Progress?) -> [ApplicationListEntry]
+
   /// Only directory entry metadata and bounded Info.plist files are read.
   /// Unreadable or delayed rows can be filled by subsequent inventory events.
   static func observe(
-    roots: [String], maximumEntries: Int = 50_000, timeBudget: Duration = .milliseconds(750)
+    roots: [String], maximumEntries: Int = 50_000, timeBudget: Duration = .milliseconds(750),
+    progress: Progress? = nil
   ) -> [ApplicationListEntry] {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: timeBudget)
     var rows: [String: ApplicationListEntry] = [:]
     var visited = 0
+    var publishedCount = 0
+    var lastPublishedAt = clock.now
+    func publishProgress() {
+      guard let progress,
+        publishedCount == 0 || rows.count - publishedCount >= 16
+          || lastPublishedAt.duration(to: clock.now) >= .milliseconds(50)
+      else { return }
+      progress(rows.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending })
+      publishedCount = rows.count
+      lastPublishedAt = clock.now
+    }
     func entry(path: String, identity: FileIdentity) -> ApplicationListEntry {
       let fallback = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
       var info: [String: Any] = [:]
@@ -74,6 +89,7 @@ enum ApplicationListing {
         let child = path + "/" + name
         if name.lowercased().hasSuffix(".app"), identity.kind == .directory || identity.kind == .symbolicLink {
           rows[child] = entry(path: child, identity: identity)
+          publishProgress()
         } else if identity.kind == .directory && !ScanService.isPackage(child) {
           let next = openat(fd, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY)
           guard next >= 0 else { continue }

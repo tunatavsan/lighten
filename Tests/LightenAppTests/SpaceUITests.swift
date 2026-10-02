@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import LightenKit
 import Testing
@@ -151,12 +152,14 @@ extension SpaceUITests {
     let presentation = try #require(store.pending)
     #expect(Set(presentation.plan.items.map(\.sourcePath)) == Set([root + "/good.jpg", root + "/fail.bin"]))
     #expect(presentation.rejectedItems.count == 1)
+    #expect(store.result == nil && store.resultRejections.isEmpty)
     #expect(presentation.items.first { $0.path == root + "/good.jpg" }?.warning == .copyUnknown)
     let confirmed = try #require(store.takeConfirmedPlan(presentation))
     await store.executeConfirmed(confirmed)
     #expect(Set(store.basket.keys) == Set([root + "/missing.bin", root + "/fail.bin"]))
     #expect(store.result?.items.filter { $0.outcome == .applied }.count == 1)
     #expect(store.result?.items.filter { $0.outcome == .failed }.count == 1)
+    #expect(store.resultRejections.map(\.path) == [root + "/missing.bin"])
     try FileManager.default.removeItem(atPath: trash + "/good.jpg")
     await store.reloadHistory()
     let missingTrash = try #require(
@@ -169,6 +172,110 @@ extension SpaceUITests {
     #expect(
       SpaceText.trashMissing(turkish: true) == "Bu öğe artık kayıtlı Çöp konumunda değil. Finder’da Çöp’ü kontrol edin."
     )
+  }
+}
+
+extension SpaceUITests {
+  @MainActor
+  @Test("An all-rejected Space review publishes kept paths only when the review is current", arguments: [false, true])
+  func allRejectedBasket(cancelled: Bool) async throws {
+    let fixture = "/private/tmp/LightenQA-" + UUID().uuidString
+    let root = fixture + "/home"
+    try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: fixture) }
+    let journalPath = fixture + "/journal/actions.jsonl"
+    let actions = ActionStore(
+      journal: JSONLActionJournal(path: journalPath), planService: PlanService(homeDirectory: root))
+    let paths = [root + "/first.bin", root + "/second.bin"]
+    for path in paths {
+      try Data([1]).write(to: URL(fileURLWithPath: path))
+      let identity = try DescriptorFileSystem.identity(at: path)
+      actions.basket[path] = BasketEntry(
+        path: path, label: URL(fileURLWithPath: path).lastPathComponent,
+        device: identity.device, inode: identity.inode,
+        logical: ByteAggregate(knownLowerBound: 1, completeTotal: 1), identity: identity)
+      try FileManager.default.removeItem(atPath: path)
+    }
+    let preparation = Task { await actions.prepare(scanRoot: root, runID: nil) }
+    if cancelled { preparation.cancel() }
+    await preparation.value
+    #expect(actions.pending == nil && actions.result == nil && actions.resultKind == nil)
+    #expect(actions.basket.keys.sorted() == paths)
+    #expect(actions.resultFailures.isEmpty && actions.resultSummaries.isEmpty)
+    #expect(actions.message == nil && !actions.busy && !actions.canUndoLatest)
+    #expect(!FileManager.default.fileExists(atPath: journalPath))
+    if cancelled {
+      #expect(actions.resultRejections.isEmpty && actions.completedSummary == nil)
+    } else {
+      #expect(actions.resultRejections.map(\.path) == paths)
+      #expect(actions.completedSummary == String(localized: "No items were removed."))
+      for path in paths { #expect(actions.failure(at: path)?.hasSuffix(path) == true) }
+      actions.remove(paths[0])
+      #expect(actions.resultRejections.isEmpty && actions.completedSummary == nil)
+    }
+  }
+
+  @MainActor
+  @Test(
+    "An administrator preflight refusal replaces stale success without changing History or Undo",
+    .enabled(if: geteuid() != 0))
+  func administratorRefusalPreservesHistory() async throws {
+    let fixture = "/private/tmp/LightenQA-" + UUID().uuidString
+    let root = fixture + "/home"
+    let trash = fixture + "/Trash"
+    for path in [root, trash] {
+      try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+    }
+    defer { try? FileManager.default.removeItem(atPath: fixture) }
+    let journalPath = fixture + "/journal/actions.jsonl"
+    let preferencesName = "qa.lighten." + UUID().uuidString
+    let defaults = try #require(UserDefaults(suiteName: preferencesName))
+    defer { defaults.removePersistentDomain(forName: preferencesName) }
+    let preferences = RemovalPreferences(defaults: defaults, persistentDomainName: preferencesName)
+    preferences.deletionDefault = .trash
+    let actions = ActionStore(
+      journal: JSONLActionJournal(path: journalPath), trash: UIFixtureTrash(directory: trash),
+      planService: PlanService(homeDirectory: root), preferences: preferences,
+      applicationActivity: UIFixtureApplicationActivity())
+    let removable = root + "/good.bin"
+    try Data([1]).write(to: URL(fileURLWithPath: removable))
+    let identity = try DescriptorFileSystem.identity(at: removable)
+    actions.basket[removable] = BasketEntry(
+      path: removable, label: "Good", device: identity.device, inode: identity.inode,
+      logical: ByteAggregate(knownLowerBound: 1, completeTotal: 1), identity: identity)
+    await actions.prepare(scanRoot: root, runID: nil)
+    let selected = try #require(actions.pending)
+    let plan = try #require(actions.takeConfirmedPlan(selected))
+    await actions.executeConfirmed(plan)
+    try #require(actions.result?.items.first?.outcome == .applied)
+    await actions.setHistoryGroupExpanded(plan.id, expanded: true)
+    let historyPlan = try #require(actions.history?.plans.first)
+    try #require(historyPlan.detailsLoaded && historyPlan.canUndo && actions.canUndoLatest)
+    let journalBefore = try Data(contentsOf: URL(fileURLWithPath: journalPath))
+
+    // Read-only system metadata supplies a real foreign-owned root; it is never executed.
+    let protectedPath = "/usr/bin/true"
+    var details = stat()
+    try #require(lstat(protectedPath, &details) == 0 && details.st_uid != geteuid())
+    let protectedIdentity = try DescriptorFileSystem.identity(at: protectedPath)
+    actions.basket[protectedPath] = BasketEntry(
+      path: protectedPath, label: "true", device: protectedIdentity.device, inode: protectedIdentity.inode,
+      logical: ByteAggregate(knownLowerBound: 0, completeTotal: nil), identity: protectedIdentity)
+    await actions.prepare(scanRoot: root, runID: nil)
+    #expect(actions.pending == nil && actions.result == nil && actions.resultKind == nil)
+    #expect(actions.resultRejections == [PlanRejection(.needsAdministrator, path: protectedPath)])
+    #expect(actions.message == nil && actions.completedSummary == String(localized: "No items were removed."))
+    #expect(!actions.canUndoLatest && actions.latestTrashPaths.isEmpty)
+    #expect(actions.history?.plans.map(\.id) == [historyPlan.id])
+    #expect(actions.history?.plans.first?.detailsLoaded == true)
+    #expect(actions.history?.plans.first?.canUndo == true)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: journalPath)) == journalBefore)
+    #expect(try DescriptorFileSystem.identity(at: protectedPath) == protectedIdentity)
+    actions.clearBasket()
+    #expect(actions.resultRejections.isEmpty && actions.completedSummary == nil)
+    await actions.undo(historyPlan)
+    #expect(FileManager.default.fileExists(atPath: removable))
+    #expect(actions.undoResults[historyPlan.id]?.restoredCount == 1)
   }
 }
 

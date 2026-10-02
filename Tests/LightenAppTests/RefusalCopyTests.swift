@@ -36,6 +36,17 @@ import Testing
   }
 }
 
+@Test("Administrator refusals provide one Finder next step without asking for another scan", arguments: [false, true])
+@MainActor func administratorRefusalFinderStep(turkish: Bool) {
+  let copy = FailureText.presentation(PlanRejection(.needsAdministrator, path: "/fixture/Chosen.app"), turkish: turkish)
+  #expect(copy.primaryReason.contains(turkish ? "yönetici yetkisi" : "administrator permission"))
+  #expect(copy.reasons.count == 1 && copy.additionalReasons.isEmpty && copy.unknownCodes.isEmpty)
+  #expect(copy.nextStep.contains(turkish ? "Finder’da Göster" : "Show in Finder"))
+  #expect(!copy.text.localizedCaseInsensitiveContains(turkish ? "tarayın" : "scan"))
+  #expect(!copy.text.localizedCaseInsensitiveContains("history"))
+  #expect(!copy.text.localizedCaseInsensitiveContains("geçmiş"))
+}
+
 @Test(
   "Failure codes have translated reasons and next steps",
   arguments: [

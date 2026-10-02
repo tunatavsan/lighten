@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import LightenKit
 import Observation
+import os
 
 @MainActor @Observable
 final class AppsStore {
@@ -18,6 +19,19 @@ final class AppsStore {
     let publishedAt: ContinuousClock.Instant
   }
 
+  struct OpeningTiming {
+    let requestedAt: ContinuousClock.Instant
+    var firstRowDrawnAt: ContinuousClock.Instant?
+    var visibleIconsDrawnAt: ContinuousClock.Instant?
+    var visibleRowCount = 0
+  }
+
+  @ObservationIgnored private(set) var openingTiming: OpeningTiming?
+  private(set) var openingRevision = 0
+  @ObservationIgnored private var drawnIcons: [String: Bool] = [:]
+  @ObservationIgnored private var openingCheckPending = false
+  @ObservationIgnored private var displayListingFinished = false
+  @ObservationIgnored private let openingLogger = Logger(subsystem: "com.tavsn.lighten", category: "apps-opening")
   @ObservationIgnored private(set) var pictureOpeningTiming: PictureOpeningTiming?
   @ObservationIgnored private let events: @Sendable () -> AsyncStream<ApplicationDiscovery.Event>
   @ObservationIgnored private var scanTask: Task<Void, Never>?
@@ -56,6 +70,8 @@ final class AppsStore {
   @ObservationIgnored private let userPlanner: PlanService
   @ObservationIgnored private let running: any RunningApplicationSource
   @ObservationIgnored private let pictures: ResultPictureStore
+  @ObservationIgnored private let loadPicture: @Sendable () -> ResultPicture<AppsPicture>?
+  @ObservationIgnored private var restoredDisplayRows: [String: AppsPicture.Row] = [:]
   @ObservationIgnored private var opened = false
   var pictureRows: [AppsPicture.Row] = []
   var pictureObservedAt: Date?
@@ -128,6 +144,7 @@ final class AppsStore {
 
   init(
     pictures: ResultPictureStore = ResultPictureStore(),
+    loadPicture: (@Sendable () -> ResultPicture<AppsPicture>?)? = nil,
     uninstallPlanBuilder: (@Sendable (ApplicationReport, [RelatedDataCandidate], Bool) async throws -> ActionPlan)? =
       nil,
     availableUninstallPlanBuilder: AvailableUninstallPlanBuilder? = nil,
@@ -168,6 +185,7 @@ final class AppsStore {
       || uninstallPlanBuilder != nil || planBuilder != nil
       || remainingDataPlanBuilder != nil || orphanPlanBuilder != nil
     self.pictures = pictures
+    self.loadPicture = loadPicture ?? { pictures.load(AppsPicture.self, named: "apps") }
     self.preferences = preferences
     self.userPlanner = userPlanner
     self.running = running
@@ -224,6 +242,54 @@ final class AppsStore {
     listedNames[report.path] ?? URL(fileURLWithPath: report.path).deletingPathExtension().lastPathComponent
   }
 
+  /// A clipped AppKit drawing probe calls this after the row's icon view has drawn.
+  func rowDidDraw(_ path: String, iconReady: Bool, revision: Int) {
+    guard revision == openingRevision, var timing = openingTiming,
+      reports.contains(where: { $0.path == path }) || pictureRows.contains(where: { $0.path == path })
+    else { return }
+    drawnIcons[path] = iconReady
+    timing.visibleRowCount = drawnIcons.count
+    if timing.firstRowDrawnAt == nil {
+      timing.firstRowDrawnAt = .now
+      let elapsed = Self.milliseconds(timing.requestedAt.duration(to: .now))
+      openingLogger.info("Apps opening first-row milliseconds=\(elapsed, privacy: .public)")
+    }
+    openingTiming = timing
+    // Collect every draw callback from this display pass before counting visible icons.
+    guard !openingCheckPending else { return }
+    openingCheckPending = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.openingCheckPending = false
+      self.checkOpeningIcons(revision: self.openingRevision)
+    }
+  }
+
+  func rowLeftDisplay(_ path: String) { drawnIcons[path] = nil }
+
+  private func checkOpeningIcons(revision: Int) {
+    guard revision == openingRevision, displayListingFinished,
+      var timing = openingTiming, timing.visibleIconsDrawnAt == nil, !drawnIcons.isEmpty
+    else { return }
+    let current = Set(reports.map(\.path) + pictureRows.map(\.path))
+    drawnIcons = drawnIcons.filter { current.contains($0.key) }
+    guard !drawnIcons.isEmpty, drawnIcons.values.allSatisfy({ $0 }) else { return }
+    timing.visibleIconsDrawnAt = .now
+    timing.visibleRowCount = drawnIcons.count
+    openingTiming = timing
+    let elapsed = Self.milliseconds(timing.requestedAt.duration(to: .now))
+    let visible = drawnIcons.count
+    let listed = reports.count
+    openingLogger.info(
+      "Apps opening visible-icons milliseconds=\(elapsed, privacy: .public) visible-rows=\(visible, privacy: .public) listed-rows=\(listed, privacy: .public)"
+    )
+  }
+
+  private static func milliseconds(_ duration: Duration) -> Double {
+    let value = duration.components
+    return Double(value.seconds) * 1000 + Double(value.attoseconds) / 1e15
+  }
+
   func rowVisibilityChanged(_ path: String, visible: Bool) {
     visiblePaths.removeAll { $0 == path }
     if visible { visiblePaths.append(path) }
@@ -234,27 +300,33 @@ final class AppsStore {
 
   var selectedReport: ApplicationReport? { reports.first { $0.path == selectedPath } }
 
-  /// Restore display fields first, then obtain independent fresh scan authority.
+  /// Display restoration and fresh discovery run independently. Neither grants action authority.
   func open(actions: ActionStore) {
+    openingRevision += 1
+    openingTiming = OpeningTiming(requestedAt: .now)
+    drawnIcons = [:]
     guard !opened else { return }
     opened = true
     let requestedAt = ContinuousClock.now
+    if scannedAt == nil, !busy { startScan(actions: actions) }
     let openingGeneration = generation
-    let pictures = self.pictures
+    let loadPicture = self.loadPicture
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       let loadStartedAt = ContinuousClock.now
-      let picture = pictures.load(AppsPicture.self, named: "apps")
+      let picture = loadPicture()
       let loadFinishedAt = ContinuousClock.now
       Task(priority: .userInitiated) { @MainActor [weak self] in
         guard let self, self.generation == openingGeneration else { return }
-        if self.reports.isEmpty, !self.busy, let picture {
+        if self.reports.isEmpty, self.busy, self.listedPublishedAt == nil, self.inventoryPublishedAt == nil, let picture
+        {
           self.pictureRows = picture.content.rows
+          self.restoredDisplayRows = Dictionary(
+            picture.content.rows.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
           self.pictureObservedAt = picture.observedAt
           self.needsRescan = true
           self.pictureOpeningTiming = PictureOpeningTiming(
             requestedAt: requestedAt, loadStartedAt: loadStartedAt, loadFinishedAt: loadFinishedAt, publishedAt: .now)
         }
-        if self.scannedAt == nil, !self.busy { self.startScan(actions: actions) }
       }
     }
   }
@@ -286,6 +358,7 @@ final class AppsStore {
     listedNames = [:]
     listedIdentities = [:]
     listedPublishedAt = nil
+    displayListingFinished = false
     visiblePaths = []
     orphanCandidates = []
     retainedAppData = [:]
@@ -316,8 +389,8 @@ final class AppsStore {
             self.session = session
             let visible = self.visiblePaths
             Task { await session.prioritizeVisibleApplications(paths: visible) }
-          case .listed(let entries):
-            let cached = Dictionary(self.pictureRows.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+          case .listed(let entries, let isFinalBatch):
+            let cached = self.restoredDisplayRows
             self.listedNames = Dictionary(entries.map { ($0.path, $0.name) }, uniquingKeysWith: { first, _ in first })
             self.listedIdentities = Dictionary(
               entries.compactMap { entry in
@@ -333,7 +406,12 @@ final class AppsStore {
                 knownItemCount: previous?.knownItemCount ?? 0, partial: true, related: [],
                 manualUninstallerSuggested: false, displayRootIdentity: entry.displayRootIdentity)
             }.filter { !self.displayRemoved($0) }
-            self.listedPublishedAt = .now
+            if !entries.isEmpty, self.listedPublishedAt == nil { self.listedPublishedAt = .now }
+            self.displayListingFinished = isFinalBatch
+            if isFinalBatch {
+              self.openingRevision += 1
+              self.drawnIcons = [:]
+            }
             self.measuringPaths = Set(entries.map(\.path))
             self.pictureRows = []
             self.needsRescan = false
@@ -1026,6 +1104,7 @@ final class AppsStore {
   private func invalidatePreparation(
     actions: ActionStore? = nil, keepPresentedPlanID: Bool = false
   ) {
+    (actions ?? preparedActions)?.clearKeptItems()
     preparationGeneration = UUID()
     preparationTask?.cancel()
     preparationTask = nil
@@ -1136,6 +1215,7 @@ final class AppsStore {
     actions: ActionStore, stillSelected: @escaping @MainActor () -> Bool,
     builder: @escaping @Sendable () async throws -> RelatedDataService.AvailableUninstallPlan
   ) async {
+    actions.clearKeptItems()
     let id = UUID()
     preparationGeneration = id
     preparing = true
@@ -1150,18 +1230,19 @@ final class AppsStore {
       let task = Task(priority: .userInitiated) { @concurrent in try await builder() }
       preparationTask = task
       let outcome = try await task.value
-      guard preparationGeneration == id, stillSelected(), !task.isCancelled, !actions.busy else {
+      guard preparationGeneration == id, stillSelected(), !task.isCancelled, !Task.isCancelled, !actions.busy else {
         return
       }
       ownershipRefusalEvidence = outcome.refusalEvidence
       guard let plan = outcome.plan else {
-        message =
-          outcome.rejections.isEmpty
-          ? String(localized: "Select the app or eligible related data")
-          : outcome.rejections.map(Self.refusalText).joined(separator: "\n")
+        if outcome.rejections.isEmpty {
+          message = String(localized: "Select the app or eligible related data")
+        } else {
+          showKeptItems(outcome.rejections, actions: actions)
+        }
         return
       }
-      guard preparationGeneration == id, stillSelected(), !actions.busy else { return }
+      guard preparationGeneration == id, stillSelected(), !Task.isCancelled, !actions.busy else { return }
       let summaries = plan.items.map { item in
         let size = PlanItemSize.measure(item)
         let selectedByName = explicitlySelectedUnproven[item.sourcePath] != nil
@@ -1185,7 +1266,7 @@ final class AppsStore {
           logicalBytes: size.logical, allocatedBytes: size.allocated)
       }
       let running = await actions.containsRunningApplications(plan)
-      guard preparationGeneration == id, stillSelected(), !actions.busy else { return }
+      guard preparationGeneration == id, stillSelected(), !Task.isCancelled, !actions.busy else { return }
       actions.present(plan: plan, items: summaries, rejectedItems: outcome.rejections, hasRunningApplications: running)
       guard actions.pending?.id == plan.id else { return }
       presentedPaths = Dictionary(uniqueKeysWithValues: plan.items.map { ($0.id, $0.sourcePath) })
@@ -1206,14 +1287,24 @@ final class AppsStore {
       observedResultID = nil
       message = nil
     } catch let refused as PlanRejections {
-      if preparationGeneration == id { message = refused.rejections.map(Self.refusalText).joined(separator: "\n") }
+      if preparationGeneration == id, stillSelected(), !Task.isCancelled, !actions.busy {
+        showKeptItems(refused.rejections, actions: actions)
+      }
     } catch let refused as PlanRejection {
-      if preparationGeneration == id { message = Self.refusalText(refused) }
+      if preparationGeneration == id, stillSelected(), !Task.isCancelled, !actions.busy {
+        showKeptItems([refused], actions: actions)
+      }
     } catch {
-      if preparationGeneration == id {
+      if preparationGeneration == id, stillSelected(), !Task.isCancelled, !actions.busy {
         message = FailureText.describe(error)
       }
     }
+  }
+
+  private func showKeptItems(_ rejections: [PlanRejection], actions: ActionStore) {
+    actions.publishKeptItems(rejections)
+    packageItemResults = []
+    message = nil
   }
 
   private nonisolated static func userSelection(_ candidate: RelatedDataCandidate) -> UserSelection {
@@ -1230,10 +1321,6 @@ final class AppsStore {
       warnings: example.map { [UserSelectionWarning(examplePath: $0)] } ?? [],
       applicationPackagePaths: ActionStore.observedApplicationPackagePaths(
         in: candidate.snapshot?.entries.map(\.path) ?? [], under: candidate.path))
-  }
-
-  private static func refusalText(_ rejection: PlanRejection) -> String {
-    SpaceText.rejection(rejection)
   }
 
 }

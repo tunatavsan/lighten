@@ -200,28 +200,40 @@ struct ActionFeedbackView: View {
             .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         }
         if !actions.resultFailures.isEmpty || !actions.resultRejections.isEmpty {
-          DisclosureGroup(
-            actions.unverifiedResultCount > 0
-              ? String(localized: "Items needing review") : String(localized: "Items that stayed in place")
-          ) {
-            ForEach(actions.resultRejections, id: \.path) { rejection in
-              FailureReasonView(presentation: FailureText.presentation(rejection), path: rejection.path)
+          if actions.result == nil {
+            Text(String(localized: "Items that stayed in place"))
+              .font(.system(size: 11, weight: .medium))
+            failureReasons
+          } else {
+            DisclosureGroup(
+              actions.unverifiedResultCount > 0
+                ? String(localized: "Items needing review") : String(localized: "Items that stayed in place")
+            ) {
+              failureReasons
             }
-            ForEach(actions.resultFailures, id: \.itemID) { item in
-              if let presentation = item.presentation {
-                FailureReasonView(presentation: presentation, path: item.path)
-              } else {
-                Text(item.detail).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-                  .fixedSize(horizontal: false, vertical: true).help(item.path)
-              }
-            }
+            .font(.system(size: 11))
           }
-          .font(.system(size: 11))
         }
       }
       .accessibilityElement(children: .contain)
       .accessibilityIdentifier("action.completed-result")
       .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .bottom)))
+    }
+  }
+
+  private var failureReasons: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      ForEach(actions.resultRejections, id: \.path) { rejection in
+        FailureReasonView(presentation: FailureText.presentation(rejection), path: rejection.path)
+      }
+      ForEach(actions.resultFailures, id: \.itemID) { item in
+        if let presentation = item.presentation {
+          FailureReasonView(presentation: presentation, path: item.path)
+        } else {
+          Text(item.detail).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+            .fixedSize(horizontal: false, vertical: true).help(item.path)
+        }
+      }
     }
   }
 }

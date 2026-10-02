@@ -91,6 +91,7 @@ final class ActionStore {
   @ObservationIgnored private var alternatePlanID: UUID?
   @ObservationIgnored private var claimedSummaries: [ActionItemSummary] = []
   @ObservationIgnored private var claimedRejections: [PlanRejection] = []
+  @ObservationIgnored private var basketRevision = 0
   @ObservationIgnored var onDisplayChange: (@MainActor (ActionDisplayChange) -> Void)?
   @ObservationIgnored var onDisplayDiscrepancy: (@MainActor (ActionDisplayChange) -> Void)?
   @ObservationIgnored private var verificationTask: Task<Void, Never>?
@@ -128,7 +129,14 @@ final class ActionStore {
     self.historyService = historyService ?? ActionHistory(journal: journal)
   }
 
-  var basket: [String: BasketEntry] = [:]
+  var basket: [String: BasketEntry] = [:] {
+    didSet {
+      guard basket != oldValue else { return }
+      basketRevision += 1
+      pending = nil
+      clearKeptItems()
+    }
+  }
   var pending: ActionPresentation?
   var result: ActionResult?
   var resultKind: ActionKind?
@@ -222,8 +230,10 @@ final class ActionStore {
   /// Captures chosen roots without walking their descendants.
   func prepare(scanRoot: String, runID: UUID?) async {
     guard !basket.isEmpty, !busy, !preparingAlternate else { return }
+    clearKeptItems()
     busy = true
     defer { busy = false }
+    let revision = basketRevision
     let chosen = Array(basket.values)
     let outcome = await planService.makeAvailableUserSelectionPlan(
       selections: chosen.map {
@@ -233,9 +243,9 @@ final class ActionStore {
           warnings: $0.warningPaths.map { UserSelectionWarning(examplePath: $0) },
           applicationPackagePaths: $0.applicationPackagePaths)
       }, kind: preferences.deletionDefault.kind, runID: runID ?? UUID())
+    guard revision == basketRevision, !Task.isCancelled else { return }
     guard let plan = outcome.plan else {
-      pending = nil
-      message = outcome.rejections.map { SpaceText.rejection($0) }.joined(separator: "\n")
+      publishKeptItems(outcome.rejections)
       return
     }
     let summary = plan.items.map { item in
@@ -248,6 +258,7 @@ final class ActionStore {
         warningPaths: item.userSelectionWarnings?.map(\.examplePath) ?? [])
     }
     let running = await containsRunningApplications(plan)
+    guard revision == basketRevision, !Task.isCancelled else { return }
     busy = false
     present(plan: plan, items: summary, rejectedItems: outcome.rejections, hasRunningApplications: running)
     message = nil
@@ -263,6 +274,29 @@ final class ActionStore {
     return false
   }
 
+  /// A refusal is a kept-item outcome, without claiming an execution or writing History.
+  func publishKeptItems(_ rejections: [PlanRejection]) {
+    guard !rejections.isEmpty else { return }
+    verificationTask?.cancel()
+    verificationTask = nil
+    pending = nil
+    result = nil
+    resultKind = nil
+    resultSummaries = []
+    resultFailures = []
+    resultRejections = rejections
+    message = nil
+  }
+
+  /// Selection changes expire preflight feedback while preserving completed actions and History.
+  func clearKeptItems() {
+    guard result == nil else { return }
+    resultKind = nil
+    resultSummaries = []
+    resultFailures = []
+    resultRejections = []
+  }
+
   /// Other modules supply their own guarded plan and reason summary.
   func present(
     plan: ActionPlan, items: [ActionItemSummary],
@@ -272,6 +306,7 @@ final class ActionStore {
     guard !busy, Set(plan.items.map(\.id)) == Set(items.map(\.id)),
       !preparingAlternate || pending?.plan.id == alternatePlanID
     else { return }
+    clearKeptItems()
     let plannedItems = Dictionary(plan.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     pending = ActionPresentation(
       plan: plan,
@@ -569,6 +604,7 @@ final class ActionStore {
   }
 
   private func finishVerification(_ change: ActionDisplayChange, mismatches: [String], unknown: [String]) {
+    guard !Task.isCancelled else { return }
     if !mismatches.isEmpty {
       message =
         String(localized: "The files changed after the action. Refreshing the displayed results.")

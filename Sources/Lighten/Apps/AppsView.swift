@@ -237,7 +237,10 @@ struct AppsView: View {
               VStack(alignment: .leading, spacing: 2) {
                 appRow(app)
                   .onAppear { store.rowVisibilityChanged(app.path, visible: true) }
-                  .onDisappear { store.rowVisibilityChanged(app.path, visible: false) }
+                  .onDisappear {
+                    store.rowVisibilityChanged(app.path, visible: false)
+                    store.rowLeftDisplay(app.path)
+                  }
                 if let reason = actions.failure(at: app.path) {
                   Text(reason).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
                     .fixedSize(horizontal: false, vertical: true)
@@ -266,7 +269,10 @@ struct AppsView: View {
           }
         ) { row in
           HStack(spacing: 10) {
-            ApplicationIconView(path: row.path)
+            ApplicationIconView(path: row.path, drawRevision: store.openingRevision) {
+              [revision = store.openingRevision] ready in
+              store.rowDidDraw(row.path, iconReady: ready, revision: revision)
+            }
             VStack(alignment: .leading, spacing: 3) {
               Text(URL(fileURLWithPath: row.path).deletingPathExtension().lastPathComponent)
                 .font(.system(size: 12, weight: .medium))
@@ -278,6 +284,7 @@ struct AppsView: View {
               .font(.system(size: 11)).monospacedDigit()
           }
           .accessibilityElement(children: .combine)
+          .onDisappear { store.rowLeftDisplay(row.path) }
         }
       }
       .padding(.vertical, 10)
@@ -376,7 +383,10 @@ struct AppsView: View {
       showingCompactDetail = true
     } label: {
       HStack(spacing: 10) {
-        ApplicationIconView(path: app.path)
+        ApplicationIconView(path: app.path, drawRevision: store.openingRevision) {
+          [revision = store.openingRevision] ready in
+          store.rowDidDraw(app.path, iconReady: ready, revision: revision)
+        }
         VStack(alignment: .leading, spacing: 3) {
           Text(store.displayName(app))
             .font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)

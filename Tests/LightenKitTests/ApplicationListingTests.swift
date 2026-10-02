@@ -53,6 +53,27 @@ struct ApplicationListingTests {
     #expect(rows.first { $0.path == linkedPackage }?.displayRootIdentity?.kind == .symbolicLink)
   }
 
+  @Test("Metadata progress delivers an early nonempty row and retains every final row")
+  func progressiveRowsPreserveListing() throws {
+    let fixture = try Fixture()
+    defer { fixture.cleanup() }
+    let paths = try (0..<40).map { try fixture.app("app-\($0)", id: "qa.lighten.app\($0)") }
+    let batches = Mutex<[[ApplicationListEntry]]>([])
+    let rows = ApplicationListing.observe(roots: [fixture.roots]) { batch in
+      batches.withLock { $0.append(batch) }
+    }
+    let progress = batches.withLock { $0 }
+    let first = try #require(progress.first)
+    #expect(first.count == 1)
+    #expect(Set(rows.map(\.path)) == Set(paths))
+    #expect(progress.count >= 3)
+    for batch in progress {
+      #expect(!batch.isEmpty)
+      #expect(Set(batch.map(\.path)).isSubset(of: Set(rows.map(\.path))))
+      #expect(batch.allSatisfy { $0.bundleID != nil && $0.version == "2.3" })
+    }
+  }
+
   @Test("The first listed rows arrive while the expensive registration provider is blocked")
   func listingPrecedesHeavyProviders() async throws {
     let fixture = try Fixture()
@@ -90,7 +111,7 @@ struct ApplicationListingTests {
     _ = await providerStarted.stream.first { _ in true }
     providerGate.signal()
     await session.cancel()
-    guard case .listed(let rows) = first else {
+    guard case .listed(let rows, _) = first else {
       Issue.record("Info-only listing was not the first published data")
       return
     }

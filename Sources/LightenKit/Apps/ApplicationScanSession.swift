@@ -396,7 +396,7 @@ public actor ApplicationScanSession {
   public nonisolated let id = UUID()
   private let related: RelatedDataService
   private let uptime: @Sendable () -> TimeInterval
-  private let lightweightListing: @Sendable () -> [ApplicationListEntry]
+  private let lightweightListing: ApplicationListing.Collector
   private let measurement: @Sendable (String, String) async -> ApplicationDiscovery.Measurement
   private let metadata = ApplicationContextMetadata()
   private var ownership: Task<AuthenticApplicationContext, Never>?
@@ -414,14 +414,16 @@ public actor ApplicationScanSession {
 
   init(
     related: RelatedDataService, uptime: @escaping @Sendable () -> TimeInterval,
-    lightweightListing: (@Sendable () -> [ApplicationListEntry])? = nil,
+    lightweightListing: ApplicationListing.Collector? = nil,
     measurement: @escaping @Sendable (String, String) async -> ApplicationDiscovery.Measurement = ApplicationDiscovery
       .measure
   ) {
     self.related = related
     self.uptime = uptime
     self.lightweightListing =
-      lightweightListing ?? { ApplicationListing.observe(roots: related.lightweightListingRoots) }
+      lightweightListing ?? { progress in
+        ApplicationListing.observe(roots: related.lightweightListingRoots, progress: progress)
+      }
     self.measurement = measurement
   }
 
@@ -452,10 +454,12 @@ public actor ApplicationScanSession {
     return pair.stream
   }
 
-  func displayListing() async -> [ApplicationListEntry] {
+  func displayListing(
+    progress: @escaping @Sendable ([ApplicationListEntry]) -> Void = { _ in }
+  ) async -> [ApplicationListEntry] {
     if let displayListingTask { return await displayListingTask.value }
     let listing = lightweightListing
-    let task = Task.detached(priority: .userInitiated) { listing() }
+    let task = Task.detached(priority: .userInitiated) { listing(progress) }
     displayListingTask = task
     if cancelled { task.cancel() }
     return await task.value
