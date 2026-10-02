@@ -4,6 +4,24 @@ import Testing
 
 @testable import Lighten
 
+@Test("Related-list drawing rejects partial row waves and counts only the clipped detail viewport")
+func relatedViewportRequiresCompleteGeometry() {
+  let paths: Set<String> = ["first", "second", "third"]
+  let viewport = CGRect(x: 0, y: 0, width: 300, height: 400)
+  let first = CGRect(x: 0, y: 300, width: 280, height: 60)
+  let second = CGRect(x: 0, y: 370, width: 280, height: 60)
+  let third = CGRect(x: 0, y: 440, width: 280, height: 60)
+  let partial = RelatedListViewportSnapshot(frames: ["first": first], candidatePaths: paths, viewport: viewport)
+  #expect(!partial.isComplete)
+  let complete = RelatedListViewportSnapshot(
+    frames: ["first": first, "second": second, "third": third], candidatePaths: paths, viewport: viewport)
+  #expect(complete.isComplete && complete.visibleCount == 2)
+  let offscreen = RelatedListViewportSnapshot(
+    frames: ["first": first, "second": second, "third": third], candidatePaths: paths,
+    viewport: CGRect(x: 0, y: 0, width: 300, height: 200))
+  #expect(!offscreen.isComplete && offscreen.visibleCount == 0)
+}
+
 private actor IconLoads {
   var count = 0
   func load(_ path: String) -> Data {

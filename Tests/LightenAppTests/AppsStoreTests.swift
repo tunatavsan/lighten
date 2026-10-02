@@ -219,6 +219,160 @@ private actor SelectedAppReviewGate {
   }
 }
 
+private actor SelectedRunningGate: RunningApplicationSource {
+  private var continuation: CheckedContinuation<Bool?, Never>?
+  private var released = false
+  func isRunning(bundleID: String) async -> Bool? {
+    if released { return false }
+    return await withCheckedContinuation { continuation = $0 }
+  }
+  func release() {
+    released = true
+    continuation?.resume(returning: false)
+    continuation = nil
+  }
+}
+
+@Test("Shallow empty results draw and package preparation works while running status and sizes are stalled")
+@MainActor func appsShallowDrawAndPreparationPrecedeRunningCheck() async throws {
+  let path = "/Applications/LightenQA-independent.app"
+  let app = InstalledApplication(bundleID: "qa.lighten.independent", path: path, version: "1")
+  let metadata = selectedAppReport(path, bundleID: app.bundleID)
+  let gate = SelectedAppReviewGate()
+  let running = SelectedRunningGate()
+  let plan = ActionPlan(
+    snapshotRunID: UUID(), kind: .trash,
+    items: [
+      PlanItem(
+        id: UUID(), sourcePath: path, inventory: [], ancestors: [], policy: .wholeBundle,
+        applicationBundleID: app.bundleID)
+    ])
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    availableUninstallPlanBuilder: { _, _, _ in
+      RelatedDataService.AvailableUninstallPlan(plan: plan, rejections: [])
+    }, selectedReview: { path, progress in try await gate.review(path: path, progress: progress) },
+    running: running, events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [metadata]
+  store.select(path, actions: actions)
+  let started = try #require(store.selectedReviewRequestedAt)
+  await gate.waitForRequests(1)
+  await gate.publish(ApplicationRelatedReview(application: app, candidates: [], phase: .shallow), request: 0)
+  await waitForApps { store.selectedShallowComplete }
+  #expect(store.selectedReviewRequestedAt == started)
+  #expect(store.selectedReviewPending)
+  #expect(store.runningCheckedIDs.isEmpty)
+  let viewport = CGRect(x: 0, y: 0, width: 300, height: 500)
+  store.selectedListDidDraw(
+    RelatedListViewportSnapshot(frames: [:], candidatePaths: [], viewport: viewport),
+    revision: store.selectedDrawRevision)
+  #expect(store.selectedListDrawnAt == nil)
+  store.selectedListDidDraw(
+    RelatedListViewportSnapshot(
+      frames: [RelatedListViewportSnapshot.emptyResultID: CGRect(x: 0, y: 280, width: 250, height: 20)],
+      candidatePaths: [], viewport: viewport), revision: store.selectedDrawRevision)
+  #expect(store.selectedListDrawnAt != nil)
+  store.togglePackage(actions: actions)
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending?.plan == plan)
+  #expect(store.selectedReviewPending && store.runningCheckedIDs.isEmpty)
+  await gate.finish(ApplicationRelatedReview(application: app, candidates: [], phase: .initialComplete), request: 0)
+  await store.waitForSelectedReview()
+  await running.release()
+}
+
+@Test("Late automatic evidence and package toggles honor an explicit related-data deselection")
+@MainActor func appsLateEvidencePreservesDeselection() async throws {
+  let name = "LightenQA-" + UUID().uuidString
+  let defaults = try #require(UserDefaults(suiteName: name))
+  defer { defaults.removePersistentDomain(forName: name) }
+  let preferences = RemovalPreferences(defaults: defaults, persistentDomainName: name)
+  preferences.automaticallySelectRelatedData = true
+  let path = "/Applications/LightenQA-deselection.app"
+  let app = InstalledApplication(bundleID: "qa.lighten.deselection", path: path, version: "1")
+  let candidate = selectedAppCandidate("/tmp/LightenQA-deselection-cache")
+  let gate = SelectedAppReviewGate()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    selectedReview: { path, progress in try await gate.review(path: path, progress: progress) },
+    preferences: preferences, running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [selectedAppReport(path, bundleID: app.bundleID)]
+  store.select(path, actions: actions)
+  await gate.waitForRequests(1)
+  let update = ApplicationRelatedReview(application: app, candidates: [candidate], ownershipPending: false)
+  await gate.publish(update, request: 0)
+  await waitForApps { store.selectedReport?.related.count == 1 }
+  store.togglePackage(actions: actions)
+  #expect(store.selectedDataPaths == [candidate.path])
+  store.toggleData(candidate.path, actions: actions)
+  #expect(store.selectedDataPaths.isEmpty)
+  await gate.publish(update, request: 0)
+  await gate.finish(update, request: 0)
+  await store.waitForSelectedReview()
+  #expect(store.selectedDataPaths.isEmpty)
+  store.togglePackage(actions: actions)
+  store.togglePackage(actions: actions)
+  #expect(store.selectedDataPaths.isEmpty)
+  store.toggleData(candidate.path, actions: actions)
+  #expect(store.selectedDataPaths == [candidate.path])
+}
+
+@Test("Explicit name-only choices retain the same observed root across size and evidence upgrades")
+@MainActor func appsShallowChoiceRetainsObservedRoot() async throws {
+  let temporary = try #require(realpath(NSTemporaryDirectory(), nil))
+  defer { free(temporary) }
+  let root = String(cString: temporary) + "/LightenQA-" + UUID().uuidString
+  try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: false)
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let identity = try DescriptorFileSystem.identity(at: root)
+  let app = InstalledApplication(
+    bundleID: "qa.lighten.choice", path: "/Applications/LightenQA-choice.app", version: "1")
+  var shallow = RelatedDataCandidate(
+    id: root, path: root, classification: .unprovenNameOnly, reason: .nameOnly, snapshot: nil, receipt: nil)
+  shallow.displayRootIdentity = identity
+  shallow.matchStrength = .weak
+  shallow.explicitManualChoiceAvailable = true
+  let gate = SelectedAppReviewGate()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    selectedReview: { path, progress in try await gate.review(path: path, progress: progress) },
+    running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [selectedAppReport(app.path, bundleID: app.bundleID)]
+  store.select(app.path, actions: actions)
+  await gate.waitForRequests(1)
+  await gate.publish(ApplicationRelatedReview(application: app, candidates: [shallow], phase: .shallow), request: 0)
+  await waitForApps { store.selectedShallowComplete }
+  store.toggleData(root, actions: actions)
+  let entry = ScanEntry(parentID: nil, path: root, identity: identity, issues: [], readable: true)
+  let snapshot = ScanSnapshot(rootPath: root, volumeDevice: identity.device, entries: [entry], nodes: [])
+  var measured = RelatedDataCandidate(
+    id: root, path: root, classification: .unprovenNameOnly, reason: .nameOnly, snapshot: snapshot, receipt: nil)
+  measured.matchStrength = .weak
+  measured.explicitManualChoiceAvailable = true
+  await gate.publish(
+    ApplicationRelatedReview(application: app, candidates: [measured], phase: .measuring(completed: 1, total: 1)),
+    request: 0)
+  await waitForApps { store.selectedReport?.related.first?.snapshot != nil }
+  #expect(store.selectedDataPaths == [root])
+  #expect(measured.defaultSelected == false)
+  let enriched = RelatedDataCandidate(
+    id: root, path: root, classification: .installed, reason: .installed, snapshot: snapshot, receipt: nil)
+  await gate.publish(
+    ApplicationRelatedReview(application: app, candidates: [enriched], ownershipPending: false, phase: .enriched),
+    request: 0)
+  await waitForApps { store.selectedReport?.related.first?.classification == .installed }
+  #expect(store.selectedDataPaths == [root])
+  await gate.finish(
+    ApplicationRelatedReview(application: app, candidates: [measured], phase: .initialComplete), request: 0)
+  await store.waitForSelectedReview()
+  #expect(store.selectedReport?.related.first?.classification == .installed)
+  #expect(store.selectedDataPaths == [root])
+  #expect(!store.selectedEvidencePending)
+}
+
 private func selectedAppReport(_ path: String, bundleID: String, bytes: Int64 = 0) -> ApplicationReport {
   ApplicationReport(
     path: path, bundleID: bundleID, version: "1", signerTeamID: nil,

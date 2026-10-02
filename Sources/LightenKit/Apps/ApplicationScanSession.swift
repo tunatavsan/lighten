@@ -3,21 +3,31 @@ import Foundation
 import Synchronization
 
 public struct ApplicationRelatedReview: Sendable {
+  public enum Phase: Sendable, Equatable {
+    case legacy
+    case shallow
+    case measuring(completed: Int, total: Int)
+    case initialComplete
+    case enriched
+  }
   public let application: InstalledApplication
   public let candidates: [RelatedDataCandidate]
   public let signerTeamID: String?
   public let ownershipPending: Bool
   public let registrationReport: ApplicationRegistrationReport?
+  public let phase: Phase
 
   public init(
     application: InstalledApplication, candidates: [RelatedDataCandidate], signerTeamID: String? = nil,
-    ownershipPending: Bool = true, registrationReport: ApplicationRegistrationReport? = nil
+    ownershipPending: Bool = true, registrationReport: ApplicationRegistrationReport? = nil,
+    phase: Phase = .legacy
   ) {
     self.application = application
     self.candidates = candidates
     self.signerTeamID = signerTeamID
     self.ownershipPending = ownershipPending
     self.registrationReport = registrationReport
+    self.phase = phase
   }
 }
 
@@ -405,6 +415,10 @@ public actor ApplicationScanSession {
   private var worker: Task<Void, Never>?
   private var relatedCandidates: Task<[RelatedDataCandidate], Never>?
   private var enrichments: [Task<Void, Never>] = []
+  private var initialReviews: [Task<ApplicationRelatedReview, Never>] = []
+  private var selectedReviewID: UUID?
+  private var selectedInitial: Task<ApplicationRelatedReview, Never>?
+  private var selectedEnrichment: Task<Void, Never>?
   private var continuation: AsyncStream<ApplicationDiscovery.Event>.Continuation?
   private let activity = ApplicationSessionActivity()
   private var cancelled = false
@@ -525,33 +539,66 @@ public actor ApplicationScanSession {
   }
 
   public func relatedReview(
-    path: String, progress: (@Sendable (ApplicationRelatedReview) -> Void)? = nil
+    path: String, requestID: UUID = UUID(), progress: (@Sendable (ApplicationRelatedReview) -> Void)? = nil
   ) async throws -> ApplicationRelatedReview? {
     try Task.checkCancellation()
     guard !cancelled else { throw CancellationError() }
+    selectedInitial?.cancel()
+    selectedEnrichment?.cancel()
+    selectedReviewID = requestID
     let service = related
     // Metadata only: neither package measurement nor owner collection precedes
     // the selected application's first standard-domain observation.
     guard let app = service.application(at: path) else { return nil }
     let activity = self.activity
-    let review = await service.initialReview(for: app) { review in
-      if activity.active.withLock({ $0 }), !Task.isCancelled { progress?(review) }
+    let shallowReady = AsyncStream<Void>.makeStream()
+    let initial = Task.detached(priority: .userInitiated) {
+      defer { shallowReady.continuation.finish() }
+      return await service.initialReview(for: app) { review in
+        if activity.active.withLock({ $0 }), !Task.isCancelled { progress?(review) }
+        if review.phase == .shallow {
+          shallowReady.continuation.yield(())
+          shallowReady.continuation.finish()
+        }
+      }
     }
-    try Task.checkCancellation()
-    guard !cancelled else { throw CancellationError() }
+    initialReviews.append(initial)
+    selectedInitial = initial
+    if initialReviews.count > 32 { initialReviews.removeFirst().cancel() }
     let task = Task.detached(priority: .utility) { [weak self] in
       guard let self else { return }
+      var ready = shallowReady.stream.makeAsyncIterator()
+      guard await ready.next() != nil, !Task.isCancelled else { return }
       let context = await self.context()
       guard !Task.isCancelled, await self.isActive else { return }
       let enriched = await service.review(for: app, context: context)
+      // Computing evidence is independent of sizing. Publish it last so an
+      // older measurement wave cannot replace newer ownership evidence.
+      _ = await initial.value
       guard !Task.isCancelled, await self.isActive else { return }
       progress?(enriched)
       await self.publish(
         .related(path: path, candidates: enriched.candidates, ownershipPending: enriched.ownershipPending))
     }
     enrichments.append(task)
+    selectedEnrichment = task
     if enrichments.count > 32 { enrichments.removeFirst().cancel() }
+    let review = await withTaskCancellationHandler {
+      await initial.value
+    } onCancel: {
+      initial.cancel()
+      task.cancel()
+    }
+    try Task.checkCancellation()
+    guard !cancelled else { throw CancellationError() }
     return review
+  }
+
+  public func cancelSelectedReview(requestID: UUID) {
+    guard selectedReviewID == requestID else { return }
+    selectedInitial?.cancel()
+    selectedEnrichment?.cancel()
+    selectedReviewID = nil
   }
 
   public func makeAvailableUninstallPlan(
@@ -639,6 +686,8 @@ public actor ApplicationScanSession {
     listing?.cancel()
     displayListingTask?.cancel()
     relatedCandidates?.cancel()
+    for task in initialReviews { task.cancel() }
+    initialReviews.removeAll()
     for task in enrichments { task.cancel() }
     let pending = enrichments
     enrichments.removeAll()

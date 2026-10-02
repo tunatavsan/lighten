@@ -57,23 +57,21 @@ struct SpaceView: View {
         breadcrumb
         Divider()
         GeometryReader { geometry in
-          let sidePaneMinimumWidth: CGFloat = 280
-          let sidePaneIdealWidth: CGFloat = 310
-          let splitDividerWidth: CGFloat = 1
+          let sidePaneWidth: CGFloat = 310
+          let dividerWidth: CGFloat = 1
           Group {
             if geometry.size.width < 760 {
               compactPane
             } else {
-              HSplitView {
+              HStack(alignment: .top, spacing: 0) {
                 mapColumn.frame(
-                  minWidth: 410,
-                  idealWidth: max(410, geometry.size.width - sidePaneIdealWidth - splitDividerWidth),
-                  maxWidth: max(410, geometry.size.width - sidePaneMinimumWidth - splitDividerWidth),
-                  maxHeight: .infinity,
+                  width: max(0, geometry.size.width - sidePaneWidth - dividerWidth),
+                  height: max(0, geometry.size.height),
                   alignment: .topLeading)
+                Divider().frame(width: dividerWidth)
                 sidePane.frame(
-                  minWidth: sidePaneMinimumWidth, idealWidth: sidePaneIdealWidth, maxWidth: 390,
-                  maxHeight: .infinity, alignment: .topLeading)
+                  width: sidePaneWidth, height: max(0, geometry.size.height),
+                  alignment: .topLeading)
               }
               .frame(
                 width: max(0, geometry.size.width), height: max(0, geometry.size.height),

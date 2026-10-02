@@ -30,12 +30,14 @@ final class AppsStore {
   private(set) var openingRevision = 0
   @ObservationIgnored private var displayListingFinished = false
   @ObservationIgnored private let openingLogger = Logger(subsystem: "com.tavsn.lighten", category: "apps-opening")
+  @ObservationIgnored private let relatedLogger = Logger(subsystem: "com.tavsn.lighten", category: "apps-related")
   @ObservationIgnored private(set) var pictureOpeningTiming: PictureOpeningTiming?
   @ObservationIgnored private let events: @Sendable () -> AsyncStream<ApplicationDiscovery.Event>
   @ObservationIgnored private var scanTask: Task<Void, Never>?
   @ObservationIgnored private var generation = UUID()
   @ObservationIgnored private var session: ApplicationScanSession?
   @ObservationIgnored private var selectedReviewTask: Task<Void, Never>?
+  @ObservationIgnored private var selectedRunningTask: Task<Void, Never>?
   @ObservationIgnored private var selectedReviewToken = UUID()
   @ObservationIgnored private let selectedReview: SelectedReview?
   @ObservationIgnored private let relatedService: RelatedDataService
@@ -49,6 +51,16 @@ final class AppsStore {
   private(set) var displayRevision = 0
   private(set) var ownershipPendingPaths: Set<String> = []
   private(set) var selectedReviewPending = false
+  private(set) var selectedEvidencePending = false
+  private(set) var selectedShallowComplete = false
+  private(set) var selectedMeasurementProgress: (completed: Int, total: Int)?
+  private(set) var selectedDrawRevision = 0
+  private(set) var selectedListDrawnAt: ContinuousClock.Instant?
+  private(set) var selectedEnrichedListDrawnAt: ContinuousClock.Instant?
+  private(set) var ownershipCollectionFinished = false
+  @ObservationIgnored private var selectedEvidenceFinished = false
+  @ObservationIgnored private var selectedReviewPhaseRank = -1
+  @ObservationIgnored private var explicitlyDeselectedDataPaths: Set<String> = []
   private(set) var backgroundStartedAt: ContinuousClock.Instant?
   private(set) var inventoryPublishedAt: ContinuousClock.Instant?
   private(set) var backgroundFinishedAt: ContinuousClock.Instant?
@@ -328,6 +340,7 @@ final class AppsStore {
     ownershipRefusalEvidence = []
     navigationGeneration = UUID()
     ownershipPendingPaths = []
+    ownershipCollectionFinished = false
     backgroundStartedAt = .now
     inventoryPublishedAt = nil
     backgroundFinishedAt = nil
@@ -410,6 +423,7 @@ final class AppsStore {
           case .related(let path, let candidates, let ownershipPending):
             self.publishRelated(path: path, candidates: candidates, ownershipPending: ownershipPending)
           case .ownershipReady(let inventory):
+            self.ownershipCollectionFinished = true
             self.inventoryComplete = inventory.complete
             self.externalVolumesUnchecked =
               inventory.registrationReport?.externalVolumesUnchecked ?? self.externalVolumesUnchecked
@@ -506,6 +520,15 @@ final class AppsStore {
 
   func select(_ path: String) {
     guard !needsRescan, pictureRows.isEmpty, !dropping else { return }
+    selectedReviewRequestedAt = .now
+    selectedDrawRevision += 1
+    selectedListDrawnAt = nil
+    selectedEnrichedListDrawnAt = nil
+    selectedShallowComplete = false
+    selectedEvidenceFinished = false
+    selectedReviewPhaseRank = -1
+    selectedMeasurementProgress = nil
+    explicitlyDeselectedDataPaths = []
     navigationGeneration = UUID()
     ownershipRefusalEvidence = []
     selectedPath = path
@@ -524,10 +547,15 @@ final class AppsStore {
   func waitForSelectedReview() async { await selectedReviewTask?.value }
 
   private func cancelSelectedReview() {
+    let previous = selectedReviewToken
+    if let session { Task { await session.cancelSelectedReview(requestID: previous) } }
     selectedReviewToken = UUID()
     selectedReviewTask?.cancel()
     selectedReviewTask = nil
+    selectedRunningTask?.cancel()
+    selectedRunningTask = nil
     selectedReviewPending = false
+    selectedEvidencePending = false
   }
 
   private func requestSelectedReview(_ path: String) {
@@ -541,11 +569,11 @@ final class AppsStore {
     let token = UUID()
     selectedReviewToken = token
     let scanGeneration = generation
-    selectedReviewRequestedAt = .now
     selectedPackageReadyAt = nil
     selectedReviewPublishedAt = nil
     selectedReviewReadyAt = nil
     selectedReviewPending = true
+    selectedEvidencePending = activeSession != nil
     let running = self.running
     let bundleID = selectedReport?.bundleID
     if let bundleID {
@@ -553,7 +581,7 @@ final class AppsStore {
       runningIDs.remove(bundleID)
       runningUnknownIDs.remove(bundleID)
     }
-    selectedReviewTask = Task(priority: .userInitiated) { @concurrent in
+    selectedRunningTask = Task(priority: .userInitiated) { @concurrent in
       if let bundleID {
         let status = await running.isRunning(bundleID: bundleID)
         await MainActor.run {
@@ -564,6 +592,8 @@ final class AppsStore {
           if status == nil { self.runningUnknownIDs.insert(bundleID) }
         }
       }
+    }
+    selectedReviewTask = Task(priority: .userInitiated) { @concurrent in
       guard !Task.isCancelled else { return }
       let progress: @Sendable (ApplicationRelatedReview) -> Void = { update in
         Task { @MainActor in
@@ -576,14 +606,18 @@ final class AppsStore {
         if let review {
           result = try await review(path, progress)
         } else if let activeSession {
-          result = try await activeSession.relatedReview(path: path, progress: progress)
+          result = try await activeSession.relatedReview(path: path, requestID: token, progress: progress)
         } else {
           result = nil
         }
         guard !Task.isCancelled else { return }
         await MainActor.run {
           guard self.acceptsReview(path: path, token: token, generation: scanGeneration) else { return }
-          if let result { self.publishReview(result, path: path, ready: true) }
+          if let result {
+            self.publishReview(result, path: path, ready: true)
+          } else {
+            self.selectedEvidencePending = false
+          }
           self.selectedReviewPending = false
           self.selectedReviewTask = nil
         }
@@ -593,6 +627,7 @@ final class AppsStore {
           self.selectedReviewPending = false
           self.selectedReviewTask = nil
           self.message = FailureText.describe(error)
+          self.selectedEvidencePending = false
         }
       }
     }
@@ -611,7 +646,33 @@ final class AppsStore {
       message = String(localized: "The application changed. Refresh Apps before reviewing it.")
       return
     }
+    let rank: Int?
+    switch review.phase {
+    case .legacy: rank = nil
+    case .shallow: rank = 0
+    case .measuring(let completed, _): rank = completed + 1
+    case .initialComplete: rank = Int.max - 1
+    case .enriched: rank = Int.max
+    }
+    if let rank {
+      guard rank >= selectedReviewPhaseRank else { return }
+      selectedReviewPhaseRank = rank
+    }
     externalVolumesUnchecked = review.registrationReport?.externalVolumesUnchecked ?? externalVolumesUnchecked
+    switch review.phase {
+    case .legacy: break
+    case .shallow:
+      selectedShallowComplete = true
+    case .measuring(let completed, let total):
+      selectedShallowComplete = true
+      selectedMeasurementProgress = (completed, total)
+    case .initialComplete:
+      selectedShallowComplete = true
+      selectedMeasurementProgress = nil
+    case .enriched:
+      selectedEvidencePending = false
+      selectedEvidenceFinished = true
+    }
     publishRelated(
       path: path, candidates: review.candidates, ownershipPending: review.ownershipPending)
     if let index = reports.firstIndex(where: { $0.path == path }) {
@@ -627,7 +688,34 @@ final class AppsStore {
       reports[index] = updated
     }
     selectedReviewPublishedAt = selectedReviewPublishedAt ?? .now
+    selectedDrawRevision += 1
     if ready { selectedReviewReadyAt = selectedReviewReadyAt ?? .now }
+  }
+
+  func selectedListDidDraw(_ snapshot: RelatedListViewportSnapshot, revision: Int) {
+    guard !needsRescan, pictureRows.isEmpty, revision == selectedDrawRevision, selectedShallowComplete,
+      snapshot.isComplete,
+      let report = selectedReport, let started = selectedReviewRequestedAt,
+      snapshot.candidatePaths == Set(report.related.map(\.path))
+    else { return }
+    let now = ContinuousClock.now
+    if selectedListDrawnAt == nil {
+      selectedListDrawnAt = now
+      let duration = started.duration(to: now)
+      let ms = Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
+      let phase = selectedEvidenceFinished ? "enriched" : "shallow"
+      relatedLogger.info(
+        "selected-list ms=\(ms, privacy: .public) visible-rows=\(snapshot.visibleCount, privacy: .public) candidates=\(snapshot.candidatePaths.count, privacy: .public) phase=\(phase, privacy: .public)"
+      )
+    }
+    if selectedEvidenceFinished, selectedEnrichedListDrawnAt == nil {
+      selectedEnrichedListDrawnAt = now
+      let duration = started.duration(to: now)
+      let ms = Double(duration.components.seconds) * 1000 + Double(duration.components.attoseconds) / 1e15
+      relatedLogger.info(
+        "selected-enriched-list ms=\(ms, privacy: .public) visible-rows=\(snapshot.visibleCount, privacy: .public) candidates=\(snapshot.candidatePaths.count, privacy: .public)"
+      )
+    }
   }
 
   private func publishRelated(path: String, candidates: [RelatedDataCandidate], ownershipPending: Bool) {
@@ -639,22 +727,37 @@ final class AppsStore {
       ? incoming + reports[index].related.filter { !incomingPaths.contains($0.path) && !displayRemoved($0) }
       : incoming
     if selectedPath == path {
+      selectedDrawRevision += 1
       let invalidated = explicitlySelectedUnproven.keys.filter { selected in
         guard let original = explicitlySelectedUnproven[selected],
           let fresh = reports[index].related.first(where: { $0.path == selected })
         else { return true }
-        return !Self.sameUnprovenObservation(original, fresh)
+        return fresh.classification == .unprovenNameOnly
+          ? !Self.sameUnprovenObservation(original, fresh) : !Self.sameDisplayedRoot(original, fresh)
       }
       for selected in invalidated {
         selectedDataPaths.remove(selected)
         explicitlySelectedUnproven.removeValue(forKey: selected)
+      }
+      for selected in Array(explicitlySelectedUnproven.keys) {
+        if let fresh = reports[index].related.first(where: { $0.path == selected }) {
+          if fresh.classification == .unprovenNameOnly {
+            explicitlySelectedUnproven[selected] = fresh
+          } else {
+            explicitlySelectedUnproven.removeValue(forKey: selected)
+          }
+        }
       }
       if !invalidated.isEmpty {
         invalidatePreparation(actions: preparedActions)
         message = String(localized: "An item you selected by name changed. Review it and select it again.")
       }
       if packageSelected && !ownershipPending && preferences.automaticallySelectRelatedData {
-        selectedDataPaths.formUnion(reports[index].related.filter { automaticSelectionAllowed($0) }.map(\.path))
+        selectedDataPaths.formUnion(
+          reports[index].related.filter {
+            automaticSelectionAllowed($0) && !explicitlyDeselectedDataPaths.contains($0.path)
+          }
+          .map(\.path))
       }
     }
     relatedReviewedPaths.insert(path)
@@ -684,7 +787,9 @@ final class AppsStore {
     packageSelected.toggle()
     if packageSelected && preferences.automaticallySelectRelatedData {
       selectedDataPaths.formUnion(
-        report.related.filter { candidate in automaticSelectionAllowed(candidate) }.map(\.path))
+        report.related.filter { candidate in
+          automaticSelectionAllowed(candidate) && !explicitlyDeselectedDataPaths.contains(candidate.path)
+        }.map(\.path))
     }
   }
 
@@ -748,8 +853,10 @@ final class AppsStore {
     else { return }
     if selectedDataPaths.contains(path) {
       selectedDataPaths.remove(path)
+      explicitlyDeselectedDataPaths.insert(path)
       explicitlySelectedUnproven.removeValue(forKey: path)
     } else {
+      explicitlyDeselectedDataPaths.remove(path)
       selectedDataPaths.insert(path)
       if candidate.classification == .unprovenNameOnly { explicitlySelectedUnproven[path] = candidate }
     }
@@ -757,6 +864,7 @@ final class AppsStore {
 
   /// Leaving the screen keeps a running scan going; only prepared plans expire.
   func deactivate(actions: ActionStore) {
+    selectedDrawRevision += 1
     dropGeneration = UUID()
     navigationGeneration = UUID()
     dropping = false
@@ -949,10 +1057,24 @@ final class AppsStore {
   ) -> Bool {
     guard current.classification == .unprovenNameOnly, current.reason == .nameOnly,
       current.explicitManualChoiceAvailable, current.refusalEvidence.isEmpty,
-      let oldRoot = original.snapshot?.entries.first(where: { $0.path == original.path })?.identity,
+      let oldRoot = original.snapshot?.entries.first(where: { $0.path == original.path })?.identity
+        ?? original.displayRootIdentity,
       let newRoot = current.snapshot?.entries.first(where: { $0.path == current.path })?.identity
+        ?? current.displayRootIdentity
     else { return false }
     return original.path == current.path && oldRoot == newRoot
+  }
+
+  private nonisolated static func sameDisplayedRoot(_ original: RelatedDataCandidate, _ current: RelatedDataCandidate)
+    -> Bool
+  {
+    guard original.path == current.path,
+      let old = original.snapshot?.entries.first(where: { $0.path == original.path })?.identity
+        ?? original.displayRootIdentity,
+      let fresh = current.snapshot?.entries.first(where: { $0.path == current.path })?.identity
+        ?? current.displayRootIdentity
+    else { return false }
+    return old == fresh
   }
 
   func retainedReason(_ candidate: RelatedDataCandidate, turkish: Bool? = nil) -> FailurePresentation? {
@@ -1299,7 +1421,7 @@ final class AppsStore {
       ? candidate.path
       : SelectionWarning.example(in: candidate.snapshot?.entries.map(\.path) ?? [candidate.path])
     return UserSelection(
-      path: candidate.path, expectedIdentity: root?.identity, observedSize: size,
+      path: candidate.path, expectedIdentity: root?.identity ?? candidate.displayRootIdentity, observedSize: size,
       warnings: example.map { [UserSelectionWarning(examplePath: $0)] } ?? [],
       applicationPackagePaths: ActionStore.observedApplicationPackagePaths(
         in: candidate.snapshot?.entries.map(\.path) ?? [], under: candidate.path))

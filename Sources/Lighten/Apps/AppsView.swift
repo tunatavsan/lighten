@@ -62,12 +62,14 @@ struct AppsView: View {
         if store.busy {
           HStack(spacing: 8) {
             ProgressView().controlSize(.small)
-            Text("\(store.measuredCount) \(String(localized: "applications measured"))")
+            Text("\(store.measuredCount) / \(store.reports.count) \(String(localized: "applications measured"))")
               .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
             if !store.reports.isEmpty {
               Text(
                 store.measuringPaths.isEmpty
-                  ? String(localized: "Reviewing related data")
+                  ? (store.ownershipCollectionFinished
+                    ? String(localized: "Finalizing application list")
+                    : String(localized: "Checking installed application ownership"))
                   : String(localized: "Remaining sizes are being measured")
               )
               .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
@@ -513,6 +515,10 @@ struct AppsView: View {
       }
       .padding(14)
     }
+    .modifier(
+      RelatedListViewport(
+        candidatePaths: Set(app.related.map(\.path)), revision: store.selectedDrawRevision,
+        didDraw: { snapshot, revision in store.selectedListDidDraw(snapshot, revision: revision) }))
   }
 
   private func metadataRow(_ title: String, _ value: String) -> some View {
@@ -587,16 +593,28 @@ struct AppsView: View {
         Text(
           store.needsRescan
             ? String(localized: "Scan again to review related data")
-            : store.selectedReviewPending
+            : store.selectedReviewPending && !store.selectedShallowComplete
               ? String(localized: "Related data is being reviewed")
               : String(localized: "No matching standard data locations found")
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        .anchorPreference(key: RelatedRowPreferenceKey.self, value: .bounds) {
+          store.selectedShallowComplete ? [RelatedListViewportSnapshot.emptyResultID: $0] : [:]
+        }
       }
-      if store.ownershipPendingPaths.contains(app.path) {
+      if let progress = store.selectedMeasurementProgress {
+        Text(
+          String.localizedStringWithFormat(
+            String(localized: "Measuring related data: %lld / %lld"), Int64(progress.completed), Int64(progress.total))
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      }
+      if store.selectedEvidencePending || store.ownershipPendingPaths.contains(app.path) {
         Label(
-          String(localized: "Checking which apps use the shared folder. You can review other items now."),
-          systemImage: "clock"
+          store.selectedEvidencePending
+            ? String(localized: "Checking association evidence. You can review selected items now.")
+            : String(localized: "Some associations could not be verified. Your explicit choices remain available."),
+          systemImage: store.selectedEvidencePending ? "clock" : "info.circle"
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       }
@@ -737,6 +755,7 @@ struct AppsView: View {
       }
     }
     .accessibilityElement(children: .contain)
+    .anchorPreference(key: RelatedRowPreferenceKey.self, value: .bounds) { [candidate.path: $0] }
   }
 
   private func canSelect(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> Bool {
@@ -756,5 +775,83 @@ struct AppsView: View {
   private func sizeText(_ app: ApplicationReport) -> String {
     if app.partial && app.logical.knownLowerBound == 0 { return String(localized: "Unknown") }
     return format(app.logical.completeTotal ?? app.logical.knownLowerBound)
+  }
+}
+
+nonisolated struct RelatedRowPreferenceKey: PreferenceKey {
+  static var defaultValue: [String: Anchor<CGRect>] { [:] }
+  static func reduce(value: inout [String: Anchor<CGRect>], nextValue: () -> [String: Anchor<CGRect>]) {
+    value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+  }
+}
+
+nonisolated struct RelatedListViewportSnapshot: Sendable, Equatable {
+  static let emptyResultID = "empty-related-result"
+  let candidatePaths: Set<String>
+  let visibleCount: Int
+  let isComplete: Bool
+
+  init(frames: [String: CGRect], candidatePaths: Set<String>, viewport: CGRect) {
+    self.candidatePaths = candidatePaths
+    func visible(_ frame: CGRect) -> Bool {
+      let intersection = frame.intersection(viewport)
+      return !intersection.isNull && intersection.width > 0 && intersection.height > 0
+    }
+    visibleCount = candidatePaths.filter { frames[$0].map(visible) == true }.count
+    if candidatePaths.isEmpty {
+      isComplete = !viewport.isEmpty && frames[Self.emptyResultID].map(visible) == true
+    } else {
+      // Detail rows use a non-lazy stack. Require the entire candidate geometry
+      // wave, then count only rows intersecting the clipped scroll viewport.
+      isComplete =
+        !viewport.isEmpty && visibleCount > 0
+        && candidatePaths.allSatisfy { frames[$0].map { !$0.isEmpty && !$0.isNull } == true }
+    }
+  }
+}
+
+private struct RelatedListViewport: ViewModifier {
+  let candidatePaths: Set<String>
+  let revision: Int
+  let didDraw: (RelatedListViewportSnapshot, Int) -> Void
+
+  func body(content: Content) -> some View {
+    content.overlayPreferenceValue(RelatedRowPreferenceKey.self) { anchors in
+      GeometryReader { geometry in
+        let snapshot = RelatedListViewportSnapshot(
+          frames: anchors.mapValues { geometry[$0] }, candidatePaths: candidatePaths,
+          viewport: CGRect(origin: .zero, size: geometry.size))
+        RelatedListDrawProbe(snapshot: snapshot, revision: revision, didDraw: didDraw).allowsHitTesting(false)
+      }
+    }
+  }
+}
+
+private struct RelatedListDrawProbe: NSViewRepresentable {
+  let snapshot: RelatedListViewportSnapshot
+  let revision: Int
+  let didDraw: (RelatedListViewportSnapshot, Int) -> Void
+
+  func makeNSView(context: Context) -> Probe { Probe() }
+  func updateNSView(_ view: Probe, context: Context) {
+    view.didDraw = didDraw
+    if view.snapshot != snapshot || view.revision != revision {
+      view.snapshot = snapshot
+      view.revision = revision
+      view.needsDisplay = true
+    }
+  }
+
+  final class Probe: NSView {
+    var snapshot: RelatedListViewportSnapshot?
+    var revision = -1
+    var didDraw: ((RelatedListViewportSnapshot, Int) -> Void)?
+    override var isOpaque: Bool { false }
+    override func draw(_ dirtyRect: NSRect) {
+      guard window != nil, !isHiddenOrHasHiddenAncestor, let snapshot else { return }
+      let callback = didDraw
+      let revision = revision
+      DispatchQueue.main.async { callback?(snapshot, revision) }
+    }
   }
 }

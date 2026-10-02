@@ -921,6 +921,40 @@
         }
       }
     },
+    "Checking association evidence. You can review selected items now.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking association evidence. You can review selected items now."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişki kanıtları denetleniyor. Seçtiğiniz öğeleri şimdi gözden geçirebilirsiniz."
+          }
+        }
+      }
+    },
+    "Checking installed application ownership": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking installed application ownership"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yüklü uygulamaların sahipliği denetleniyor"
+          }
+        }
+      }
+    },
     "Checking removed app data": {
       "localizations": {
         "en": {
@@ -949,22 +983,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu uygulamanın verileri denetleniyor. Uygulamanın kendisini şimdi inceleyebilirsiniz."
-          }
-        }
-      }
-    },
-    "Checking which apps use the shared folder. You can review other items now.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checking which apps use the shared folder. You can review other items now."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Paylaşılan klasörü hangi uygulamaların kullandığı denetleniyor. Diğer öğeleri şimdi inceleyebilirsiniz."
           }
         }
       }
@@ -1766,6 +1784,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Dosyalar değişti veya doğrulanamadı. Yeniden tarayın."
+          }
+        }
+      }
+    },
+    "Finalizing application list": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finalizing application list"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama listesi tamamlanıyor"
           }
         }
       }
@@ -2615,6 +2650,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ölçülüyor"
+          }
+        }
+      }
+    },
+    "Measuring related data: %lld / %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Measuring related data: %lld / %lld"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişkili veri ölçülüyor: %lld / %lld"
           }
         }
       }
@@ -4124,22 +4176,6 @@
         }
       }
     },
-    "Reviewing related data": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reviewing related data"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İlgili veriler inceleniyor"
-          }
-        }
-      }
-    },
     "Scan": {
       "localizations": {
         "en": {
@@ -4953,6 +4989,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bazı alanlar ölçülemediği için boyut bir alt sınırdır. Klasörü Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Some associations could not be verified. Your explicit choices remain available.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some associations could not be verified. Your explicit choices remain available."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı ilişkiler doğrulanamadı. Açık seçimlerinizi kullanmaya devam edebilirsiniz."
           }
         }
       }

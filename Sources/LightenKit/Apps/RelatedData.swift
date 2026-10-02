@@ -1,5 +1,32 @@
 import Darwin
 import Foundation
+import Synchronization
+
+/// Native signing and process APIs can wait on libdispatch internally. Keep
+/// that blocking work off Swift's cooperative executor and bound concurrency.
+private enum ApplicationEvidenceWork {
+  private static let queue = DispatchQueue(label: "com.tavsn.lighten.application-evidence", qos: .utility)
+  final class Cancellation: Sendable {
+    private let cancelled = Mutex(false)
+    var isCancelled: Bool { cancelled.withLock { $0 } }
+    func cancel() { cancelled.withLock { $0 = true } }
+  }
+
+  static func perform<Value: Sendable>(
+    cancelledValue: Value, _ work: @escaping @Sendable (Cancellation) -> Value
+  ) async -> Value {
+    let cancellation = Cancellation()
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        queue.async {
+          continuation.resume(returning: cancellation.isCancelled ? cancelledValue : work(cancellation))
+        }
+      }
+    } onCancel: {
+      cancellation.cancel()
+    }
+  }
+}
 
 public struct InstalledApplication: Sendable, Equatable {
   public let bundleID: String
@@ -96,6 +123,8 @@ public struct RelatedDataCandidate: Sendable, Identifiable {
   public var explicitManualChoiceAvailable: Bool = false
   /// All observed proof kinds, independent of the first display provenance.
   public var evidenceKinds: [RelatedDataProvenanceKind] = []
+  /// Root metadata for display and explicit user choice, never an ownership grant.
+  public var displayRootIdentity: FileIdentity? = nil
 
   public var canSelect: Bool {
     (classification == .installed || classification == .historicallyVerifiedAbsent
@@ -186,6 +215,7 @@ public struct RelatedDataService: Sendable {
   private let ownershipCollected: @Sendable () -> Void
   private let nativeRead: (@Sendable (String) -> Void)?
   private let liveData: @Sendable () -> ApplicationLiveDataObservation
+  private let relatedMeasurement: @Sendable (String, String) async -> ApplicationDiscovery.Measurement
   private var contextScope: ApplicationContextScope {
     ApplicationContextScope(home: homeDirectory, applicationRoots: applicationRoots, ownershipRoots: ownershipRoots)
   }
@@ -223,6 +253,7 @@ public struct RelatedDataService: Sendable {
     self.ownershipCollected = {}
     self.nativeRead = nil
     self.liveData = { .observe() }
+    self.relatedMeasurement = ApplicationDiscovery.measure
   }
 
   init(
@@ -239,7 +270,9 @@ public struct RelatedDataService: Sendable {
     nativeRead: (@Sendable (String) -> Void)? = nil,
     liveData: @escaping @Sendable () -> ApplicationLiveDataObservation = {
       ApplicationLiveDataObservation(records: [], complete: true)
-    }
+    },
+    relatedMeasurement: @escaping @Sendable (String, String) async -> ApplicationDiscovery.Measurement =
+      ApplicationDiscovery.measure
   ) {
     self.homeDirectory = homeDirectory
     self.applicationRoots = applicationRoots
@@ -254,6 +287,7 @@ public struct RelatedDataService: Sendable {
     self.ownershipCollected = ownershipCollected
     self.nativeRead = nativeRead
     self.liveData = liveData
+    self.relatedMeasurement = relatedMeasurement
   }
 
   public func inventory() -> BundleInventory { makeContext().inventory }
@@ -1182,7 +1216,8 @@ public struct RelatedDataService: Sendable {
   }
 
   private func signatures(
-    inventory: BundleInventory, context: AuthenticApplicationContext, selected: InstalledApplication? = nil
+    inventory: BundleInventory, context: AuthenticApplicationContext, selected: InstalledApplication? = nil,
+    cancelled: @Sendable () -> Bool = { false }
   ) -> [String: ApplicationSigningMetadata] {
     var result: [String: ApplicationSigningMetadata] = [:]
     let owners = inventory.ownershipCandidates.filter { !$0.path.hasPrefix("/System/") }
@@ -1191,6 +1226,7 @@ public struct RelatedDataService: Sendable {
       result[physical] = signingMetadata(physical, context: context)
       result[selected.path] = result[physical]
       for owner in owners where owner.packagePath == selected.path {
+        if Task.isCancelled || cancelled() { return result }
         result[owner.path] = signingMetadata(owner.path, context: context)
       }
       let hasGroupData = result.values.flatMap(\.groupIdentifiers).contains {
@@ -1199,24 +1235,32 @@ public struct RelatedDataService: Sendable {
       }
       if !hasGroupData { return result }
     }
-    for owner in owners { result[owner.path] = signingMetadata(owner.path, context: context) }
+    for owner in owners {
+      if Task.isCancelled || cancelled() { return result }
+      result[owner.path] = signingMetadata(owner.path, context: context)
+    }
     return result
   }
 
-  private func ownedDataClaims(_ context: AuthenticApplicationContext) -> [String: [ApplicationOwnedDataEvidence]] {
+  private func ownedDataClaims(
+    _ context: AuthenticApplicationContext, cancelled: @Sendable () -> Bool = { false }
+  ) -> [String: [ApplicationOwnedDataEvidence]] {
     if let observed = context.observedDataClaims() { return observed }
     var result: [String: [ApplicationOwnedDataEvidence]] = [:]
     var seen: Set<String> = []
     var sources: [String: ApplicationPathObservation] = [:]
     var issues: [ApplicationAuxiliaryIssue] = []
     for app in context.inventory.applications {
+      if Task.isCancelled || cancelled() { return result }
       let physical = app.linkTarget ?? app.path
       guard !Self.isCachedApplication(physical, homeDirectory: homeDirectory), seen.insert(physical).inserted else {
         continue
       }
+      let exclusive = vendorIsExclusive(app: app, context: context, cancelled: cancelled)
+      if Task.isCancelled || cancelled() { return result }
       let observed = context.metadata.ownedData.discover(
-        app: app, home: homeDirectory, vendorExclusive: vendorIsExclusive(app: app, context: context),
-        liveData: liveData)
+        app: app, home: homeDirectory, vendorExclusive: exclusive, liveData: liveData)
+      if Task.isCancelled || cancelled() { return result }
       for source in observed.sources where sources[source.path] == nil { sources[source.path] = source }
       issues += observed.issues
       for evidence in observed.evidence where evidence.bundleID == app.bundleID {
@@ -1224,12 +1268,15 @@ public struct RelatedDataService: Sendable {
         context.recordDataEvidence(evidence)
       }
     }
+    if Task.isCancelled || cancelled() { return result }
     context.recordDataClaims(
       result, sources: sources.values.sorted { $0.path < $1.path }, issues: issues)
     return context.observedDataClaims() ?? result
   }
 
-  private func vendorIsExclusive(app: InstalledApplication, context: AuthenticApplicationContext) -> Bool {
+  private func vendorIsExclusive(
+    app: InstalledApplication, context: AuthenticApplicationContext, cancelled: @Sendable () -> Bool = { false }
+  ) -> Bool {
     guard context.inventory.ownershipComplete,
       let vendor = app.bundleID.split(separator: ".").dropFirst().first.map(String.init), vendor.count > 1,
       !ApplicationAuxiliaryEvidenceProducer.isGeneralToolDirectory(vendor),
@@ -1239,6 +1286,7 @@ public struct RelatedDataService: Sendable {
     let selected = app.linkTarget ?? app.path
     let prefix = app.bundleID.split(separator: ".").prefix(2).joined(separator: ".") + "."
     for other in context.inventory.applications {
+      if Task.isCancelled || cancelled() { return false }
       let physical = other.linkTarget ?? other.path
       guard physical != selected, !Self.isCachedApplication(physical, homeDirectory: homeDirectory) else { continue }
       if other.bundleID.lowercased().hasPrefix(prefix.lowercased()) { return false }
@@ -1328,35 +1376,144 @@ public struct RelatedDataService: Sendable {
     else { throw RelatedFailure.ambiguousOwner }
   }
 
+  /// Shallow filename associations are display observations. They do not use
+  /// signatures, processes, receipts, recursive sizes, or an owner universe.
+  func shallowCandidates(for app: InstalledApplication) -> [RelatedDataCandidate] {
+    var identifiers: Set<String> = [app.bundleID.lowercased()]
+    var names: Set<String> = [URL(fileURLWithPath: app.path).deletingPathExtension().lastPathComponent.lowercased()]
+    func readNames(_ package: String) {
+      let info = Self.infoPlistPath(ofBundleAt: package)
+      guard let bytes = try? SecureMetadataFile.read(path: info, limit: 1024 * 1024, ownerOnly: false),
+        let plist = try? PropertyListSerialization.propertyList(from: bytes, format: nil) as? [String: Any]
+      else { return }
+      if let id = plist["CFBundleIdentifier"] as? String { identifiers.insert(id.lowercased()) }
+      for key in ["CFBundleName", "CFBundleDisplayName", "CFBundleExecutable"] {
+        if let name = plist[key] as? String, name.count >= 4 { names.insert(name.lowercased()) }
+      }
+    }
+    let package = app.linkTarget ?? app.path
+    readNames(package)
+    let frameworks = package + "/Contents/Frameworks"
+    if let root = try? DescriptorFileSystem.identity(at: frameworks),
+      let children = try? DescriptorFileSystem.children(at: frameworks, expected: root)
+    {
+      for child in children where child.hasSuffix(".app") { readNames(frameworks + "/" + child) }
+    }
+    let words = names.flatMap { $0.split(separator: " ").map(String.init) }.filter { $0.count >= 4 }
+    names.formUnion(words)
+    let family = app.bundleID.split(separator: ".").prefix(2).joined(separator: ".").lowercased()
+    let vendor = app.bundleID.split(separator: ".").dropFirst().first.map { String($0).lowercased() }
+    let namedVendor = vendor.map { names.contains($0) } ?? false
+    func matches(_ name: String) -> Bool {
+      let value = name.lowercased()
+      if identifiers.contains(where: { value == $0 || value.hasPrefix($0 + ".") || value.hasPrefix($0 + "-") }) {
+        return true
+      }
+      // A shared vendor or a team-prefixed ID is only a possible association.
+      if namedVendor, app.bundleID.split(separator: ".").count >= 3, value.hasPrefix(family + ".") { return true }
+      if identifiers.contains(where: { value.contains("." + $0) }) { return true }
+      return names.contains { name in
+        guard let range = value.range(of: name) else { return false }
+        let before = value[..<range.lowerBound].last
+        let after = value[range.upperBound...].first
+        return (before == nil || before?.isLetter == false)
+          && (after == nil || after?.isLetter == false)
+      }
+    }
+    var parents: Set<String> = [homeDirectory + "/Library"]
+    for library in [homeDirectory + "/Library", "/Library"] {
+      for directory in [
+        "Application Support", "Caches", "Preferences", "Containers", "Group Containers", "Saved Application State",
+        "LaunchAgents", "LaunchDaemons", "Logs", "HTTPStorages", "WebKit", "Cookies", "Application Scripts",
+        "Preferences/ByHost", "Application Support/CrashReporter", "Logs/CrashReporter",
+        "Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments",
+      ] { parents.insert(library + "/" + directory) }
+    }
+    if homeDirectory == NSHomeDirectory() {
+      let native = ApplicationReferenceDirectories.currentUser()
+      if (try? native.validate()) != nil { parents.formUnion([native.cache, native.temporary].compactMap { $0 }) }
+    }
+    var observed: [String: RelatedDataCandidate] = [:]
+    func inspect(_ parent: String, inspectChildren: Bool) {
+      guard !Task.isCancelled, let root = try? DescriptorFileSystem.identity(at: parent), root.kind == .directory,
+        let children = try? DescriptorFileSystem.children(at: parent, expected: root)
+      else { return }
+      for child in children {
+        if Task.isCancelled { return }
+        let path = parent + "/" + child
+        let associated = matches(child)
+        guard associated || inspectChildren else { continue }
+        guard let identity = try? DescriptorFileSystem.identity(at: path) else { continue }
+        if associated {
+          var candidate = RelatedDataCandidate(
+            id: path, path: path, classification: .unprovenNameOnly, reason: .nameOnly, snapshot: nil, receipt: nil)
+          candidate.bundleID = app.bundleID
+          candidate.matchStrength = .weak
+          candidate.explicitManualChoiceAvailable = true
+          candidate.displayRootIdentity = identity
+          observed[path] = candidate
+        }
+        // One extra shallow level finds named logs and vendor data, without
+        // walking directory interiors or producing deletion authority.
+        if inspectChildren, identity.kind == .directory { inspect(path, inspectChildren: false) }
+      }
+    }
+    for parent in parents.sorted() {
+      inspect(
+        parent, inspectChildren: parent.hasSuffix("/Application Support") || parent.hasSuffix("/Logs"))
+    }
+    return observed.values.sorted { $0.path < $1.path }
+  }
+
   func initialReview(
     for app: InstalledApplication, progress: (@Sendable (ApplicationRelatedReview) -> Void)?
   ) async -> ApplicationRelatedReview {
+    let shallow = shallowCandidates(for: app)
+    guard !Task.isCancelled else { return ApplicationRelatedReview(application: app, candidates: []) }
+    progress?(ApplicationRelatedReview(application: app, candidates: shallow, phase: .shallow))
+    let merged: @Sendable ([RelatedDataCandidate]) -> [RelatedDataCandidate] = { measured in
+      let paths = Set(measured.map(\.path))
+      return (measured + shallow.filter { !paths.contains($0.path) }).sorted { $0.path < $1.path }
+    }
     let listing = BundleInventory(applications: [app], unidentifiedPaths: [], complete: false, observedAt: Date())
     let candidates = await discover(inventory: listing, only: app, signatures: [:], allowReceipts: false) { partial in
-      progress?(ApplicationRelatedReview(application: app, candidates: partial))
+      progress?(
+        ApplicationRelatedReview(
+          application: app, candidates: merged(partial),
+          phase: .measuring(completed: partial.filter { $0.observation != nil }.count, total: partial.count)))
     }
-    return ApplicationRelatedReview(application: app, candidates: candidates)
+    return ApplicationRelatedReview(application: app, candidates: merged(candidates), phase: .initialComplete)
   }
 
   func review(for app: InstalledApplication, context: AuthenticApplicationContext) async -> ApplicationRelatedReview {
     guard let physical = application(at: app.linkTarget ?? app.path), physical.bundleID == app.bundleID,
       let selected = try? selectedContext(app: physical, base: context)
-    else { return ApplicationRelatedReview(application: app, candidates: [], ownershipPending: true) }
-    let signatures = signatures(inventory: selected.inventory, context: selected, selected: physical)
+    else { return ApplicationRelatedReview(application: app, candidates: [], ownershipPending: true, phase: .enriched) }
+    let signatures = await ApplicationEvidenceWork.perform(cancelledValue: [:]) { cancellation in
+      self.signatures(
+        inventory: selected.inventory, context: selected, selected: physical, cancelled: { cancellation.isCancelled })
+    }
+    guard !Task.isCancelled else { return ApplicationRelatedReview(application: app, candidates: []) }
+    let candidates = await discover(
+      inventory: selected.inventory, only: physical, signatures: signatures,
+      authenticatedContext: selected, allowReceipts: false)
+    let paths = Set(candidates.map(\.path))
     return ApplicationRelatedReview(
       application: app,
-      candidates: await discover(
-        inventory: selected.inventory, only: physical, signatures: signatures,
-        authenticatedContext: selected, allowReceipts: false),
+      candidates: candidates + shallowCandidates(for: physical).filter { !paths.contains($0.path) },
       signerTeamID: signatures[physical.path]?.teamID,
       ownershipPending: !selected.inventory.ownershipComplete,
-      registrationReport: selected.inventory.registrationReport)
+      registrationReport: selected.inventory.registrationReport, phase: .enriched)
   }
 
   func discover(context: AuthenticApplicationContext) async -> [RelatedDataCandidate] {
-    await discover(
+    let signatures = await ApplicationEvidenceWork.perform(cancelledValue: [:]) { cancellation in
+      self.signatures(inventory: context.inventory, context: context, cancelled: { cancellation.isCancelled })
+    }
+    guard !Task.isCancelled else { return [] }
+    return await discover(
       inventory: context.inventory, only: nil,
-      signatures: signatures(inventory: context.inventory, context: context), authenticatedContext: context,
+      signatures: signatures, authenticatedContext: context,
       allowReceipts: false)
   }
 
@@ -1373,16 +1530,35 @@ public struct RelatedDataService: Sendable {
     let standardInventoryComplete = standardInventoryIsComplete(apps)
     let receipts = (try? loadReceipts()) ?? []
     let receiptStoreHealthy = (try? loadReceipts()) != nil
-    let signatures =
-      suppliedSignatures
-      ?? Dictionary(
-        apps.ownershipCandidates.compactMap { owner -> (String, ApplicationSigningMetadata)? in
-          signingMetadata(owner.path).map { (owner.path, $0) }
-        },
-        uniquingKeysWith: { first, _ in first })
-    let ownedClaims = authenticatedContext.map(ownedDataClaims) ?? [:]
-    let dataSourcesValid = authenticatedContext.map { (try? $0.validateDataSources()) != nil } ?? false
-    let liveSnapshot = authenticatedContext?.metadata.ownedData.liveObservation(using: liveData)
+    let signatures: [String: ApplicationSigningMetadata]
+    if let suppliedSignatures {
+      signatures = suppliedSignatures
+    } else {
+      signatures = await ApplicationEvidenceWork.perform(cancelledValue: [:]) { cancellation in
+        Dictionary(
+          apps.ownershipCandidates.compactMap { owner -> (String, ApplicationSigningMetadata)? in
+            guard !cancellation.isCancelled else { return nil }
+            return self.signingMetadata(owner.path).map { (owner.path, $0) }
+          },
+          uniquingKeysWith: { first, _ in first })
+      }
+    }
+    guard !Task.isCancelled else { return [] }
+    let evidence: ([String: [ApplicationOwnedDataEvidence]], Bool, ApplicationLiveDataObservation?)
+    if let context = authenticatedContext {
+      evidence = await ApplicationEvidenceWork.perform(cancelledValue: ([:], false, nil)) { cancellation in
+        let claims = self.ownedDataClaims(context, cancelled: { cancellation.isCancelled })
+        guard !cancellation.isCancelled else { return (claims, false, nil) }
+        return (
+          claims, (try? context.validateDataSources()) != nil,
+          context.metadata.ownedData.liveObservation(using: self.liveData)
+        )
+      }
+    } else {
+      evidence = ([:], false, nil)
+    }
+    guard !Task.isCancelled else { return [] }
+    let (ownedClaims, dataSourcesValid, liveSnapshot) = evidence
     var candidates: [RelatedDataCandidate] = []
     for issue in authenticatedContext?.observedDataIssues() ?? [] {
       guard let id = issue.bundleID, issue.provenanceKind == .installerReceipt,
@@ -1676,6 +1852,7 @@ public struct RelatedDataService: Sendable {
         id: path, path: path, classification: classification, reason: reason,
         snapshot: nil, receipt: receipt)
       candidate.bundleID = bundleID
+      candidate.displayRootIdentity = identity
       candidate.matchStrength = strength
       candidate.modifiedAt = identity?.modificationSeconds.map { Date(timeIntervalSince1970: TimeInterval($0)) }
       candidate.refusalEvidence = evidence
@@ -1686,6 +1863,7 @@ public struct RelatedDataService: Sendable {
       candidate.explicitManualChoiceAvailable = classification == .unprovenNameOnly && evidence.isEmpty
       pending.append(candidate)
     }
+    if !Task.isCancelled { progress?(candidates + pending) }
     let measured = await withTaskGroup(of: (Int, RelatedDataCandidate).self) { group in
       var results = pending
       var next = 0
@@ -1696,7 +1874,7 @@ public struct RelatedDataService: Sendable {
         next += 1
         group.addTask {
           var result = candidate
-          let measurement = await ApplicationDiscovery.measure(path: candidate.path, homeDirectory: homeDirectory)
+          let measurement = await relatedMeasurement(candidate.path, homeDirectory)
           result.observation = RelatedDataObservation(
             logical: measurement.logical, allocated: measurement.allocated,
             knownItemCount: measurement.count, partial: measurement.partial)
@@ -1732,7 +1910,7 @@ public struct RelatedDataService: Sendable {
       for _ in 0..<4 { enqueue() }
       while let (index, result) = await group.next() {
         results[index] = result
-        if !Task.isCancelled { progress?(results.filter { $0.observation != nil }) }
+        if !Task.isCancelled { progress?(results) }
         enqueue()
       }
       return results

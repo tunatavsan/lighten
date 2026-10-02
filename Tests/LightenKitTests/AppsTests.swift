@@ -66,6 +66,129 @@ private struct AppsRunning: RunningApplicationSource {
   func isRunning(bundleID: String) async -> Bool? { value }
 }
 
+private actor RelatedMeasurementGate {
+  private var pending: [CheckedContinuation<ApplicationDiscovery.Measurement, Never>] = []
+  private var arrival: CheckedContinuation<Void, Never>?
+  private var released = false
+  func measure() async -> ApplicationDiscovery.Measurement {
+    if released {
+      return (
+        ByteAggregate(knownLowerBound: 0, completeTotal: 0), ByteAggregate(knownLowerBound: 0, completeTotal: 0), 0,
+        false
+      )
+    }
+    return await withCheckedContinuation { continuation in
+      pending.append(continuation)
+      arrival?.resume()
+      arrival = nil
+    }
+  }
+  func waitUntilStarted() async {
+    if !pending.isEmpty { return }
+    await withCheckedContinuation { arrival = $0 }
+  }
+  func release() {
+    released = true
+    for continuation in pending {
+      continuation.resume(
+        returning: (
+          ByteAggregate(knownLowerBound: 0, completeTotal: 0), ByteAggregate(knownLowerBound: 0, completeTotal: 0), 0,
+          false
+        ))
+    }
+    pending.removeAll()
+  }
+}
+
+@Test("Complete shallow associations are visible before stalled sizes, signatures, or process evidence")
+func selectedShallowListPrecedesMeasurement() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let support = fixture.home + "/Library/Application Support/Fixture2"
+  let crash = fixture.home + "/Library/Application Support/CrashReporter/Fixture_" + UUID().uuidString + ".plist"
+  let recent =
+    fixture.home
+    + "/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments/"
+    + fixture.bundleID + ".sfl4"
+  for path in [support, (crash as NSString).deletingLastPathComponent, (recent as NSString).deletingLastPathComponent] {
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+  }
+  try Data().write(to: URL(fileURLWithPath: crash))
+  try Data().write(to: URL(fileURLWithPath: recent))
+  let nativeReads = Mutex(0)
+  let gate = RelatedMeasurementGate()
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in
+      nativeReads.withLock { $0 += 1 }
+      return nil
+    },
+    liveData: {
+      nativeReads.withLock { $0 += 1 }
+      return ApplicationLiveDataObservation(records: [], complete: true)
+    },
+    relatedMeasurement: { _, _ in await gate.measure() })
+  let app = try #require(service.application(at: fixture.app))
+  let updates = AsyncStream<ApplicationRelatedReview>.makeStream()
+  let finished = Mutex(false)
+  let review = Task {
+    let result = await service.initialReview(for: app) { updates.continuation.yield($0) }
+    finished.withLock { $0 = true }
+    return result
+  }
+  defer { Task { await gate.release() } }
+  var iterator = updates.stream.makeAsyncIterator()
+  let shallow = try #require(await iterator.next())
+  #expect(shallow.phase == .shallow)
+  #expect(Set(shallow.candidates.map(\.path)).isSuperset(of: [fixture.cache, support, crash, recent]))
+  #expect(shallow.candidates.allSatisfy { $0.snapshot == nil && $0.displayRootIdentity != nil && !$0.defaultSelected })
+  await gate.waitUntilStarted()
+  #expect(!finished.withLock { $0 })
+  #expect(nativeReads.withLock { $0 } == 0)
+  await gate.release()
+  let measured = await review.value
+  #expect(measured.candidates.first { $0.path == fixture.cache }?.defaultSelected == true)
+  #expect(measured.candidates.first { $0.path == support }?.defaultSelected == false)
+  #expect(nativeReads.withLock { $0 } == 0)
+}
+
+@Test("Stalled native evidence leaves explicit root planning schedulable and cancelled reads are skipped")
+func nativeEvidenceDoesNotBlockUserSelection() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let started = AsyncStream<Void>.makeStream()
+  let release = DispatchSemaphore(value: 0)
+  let nativeReads = Mutex(0)
+  let insideSwiftTask = Mutex(false)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in
+      nativeReads.withLock { $0 += 1 }
+      insideSwiftTask.withLock { $0 = withUnsafeCurrentTask { $0 != nil } }
+      started.continuation.yield(())
+      _ = release.wait(timeout: .now() + 5)
+      return nil
+    })
+  let app = try #require(service.application(at: fixture.app))
+  let context = service.makeContext()
+  let evidence = Task { await service.review(for: app, context: context) }
+  defer { release.signal() }
+  var iterator = started.stream.makeAsyncIterator()
+  _ = await iterator.next()
+  let queued = Task { await service.review(for: app, context: context) }
+  queued.cancel()
+  let selection = await PlanService(homeDirectory: fixture.home).makeAvailableUserSelectionPlan(
+    selections: [UserSelection(path: fixture.app), UserSelection(path: fixture.cache)])
+  #expect(selection.plan?.items.count == 2)
+  #expect(selection.rejections.isEmpty)
+  #expect(!insideSwiftTask.withLock { $0 })
+  evidence.cancel()
+  release.signal()
+  _ = await evidence.value
+  _ = await queued.value
+  #expect(nativeReads.withLock { $0 } == 1)
+}
+
 @Test("Package sizes are exact, including protected interiors summed from metadata")
 func appSizeIsExactWithoutBudget() async throws {
   let fixture = try AppsFixture()
