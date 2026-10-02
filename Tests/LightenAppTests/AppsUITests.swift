@@ -95,3 +95,71 @@ func applicationIconCacheBoundsBytesAndMisses() async {
   #expect(bitmap.samplesPerPixel == 4)
   #expect(data.count < 64 * 64 * 4 + 1024)
 }
+
+private func viewportRows(
+  count: Int, offset: CGFloat = 0, missing: Set<Int> = [], unready: Set<Int> = []
+) -> [String: ApplicationViewportSnapshot.Row] {
+  Dictionary(
+    uniqueKeysWithValues: (0..<count).filter { !missing.contains($0) }.map { index in
+      (
+        "app-\(index)",
+        .init(
+          frame: CGRect(x: 0, y: CGFloat(index) * 55 + offset, width: 300, height: 50),
+          iconReady: !unready.contains(index))
+      )
+    })
+}
+
+@Test("The drawn viewport includes all eleven visible rows while excluding lazy prefetch")
+func applicationViewportExcludesPrefetch() {
+  let ordered = (0..<85).map { "app-\($0)" }
+  let snapshot = ApplicationViewportSnapshot(
+    rows: viewportRows(count: 22, unready: [15]), orderedPaths: ordered,
+    viewport: CGRect(x: 0, y: 0, width: 300, height: 590))
+  #expect(snapshot.visiblePaths == Set(ordered.prefix(11)))
+  #expect(snapshot.iconsReady)
+  let clipped = ApplicationViewportSnapshot(
+    rows: viewportRows(count: 22, unready: [10]), orderedPaths: ordered,
+    viewport: CGRect(x: 0, y: 0, width: 300, height: 552))
+  #expect(clipped.visiblePaths == Set(ordered.prefix(11)))
+  #expect(!clipped.iconsReady)
+}
+
+@Test("Partial geometry waves and a late eleventh icon cannot claim viewport completion")
+func applicationViewportWaitsForEveryRow() {
+  let ordered = (0..<85).map { "app-\($0)" }
+  let viewport = CGRect(x: 0, y: 0, width: 300, height: 590)
+  let early = ApplicationViewportSnapshot(rows: viewportRows(count: 5), orderedPaths: ordered, viewport: viewport)
+  #expect(early.visibleRows.count == 5 && !early.iconsReady)
+  let hole = ApplicationViewportSnapshot(
+    rows: viewportRows(count: 22, missing: [6]), orderedPaths: ordered, viewport: viewport)
+  #expect(!hole.iconsReady)
+  let late = ApplicationViewportSnapshot(
+    rows: viewportRows(count: 22, unready: [10]), orderedPaths: ordered, viewport: viewport)
+  #expect(late.visibleRows.count == 11 && !late.iconsReady)
+  let finished = ApplicationViewportSnapshot(
+    rows: viewportRows(count: 22), orderedPaths: ordered, viewport: viewport)
+  #expect(finished.visibleRows.count == 11 && finished.iconsReady)
+}
+
+@Test("Scrolling, resizing, and short lists use the current complete clipped snapshot")
+func applicationViewportTracksViewportChanges() {
+  let ordered = (0..<22).map { "app-\($0)" }
+  let scrolled = ApplicationViewportSnapshot(
+    rows: viewportRows(count: 22, offset: -275), orderedPaths: ordered,
+    viewport: CGRect(x: 0, y: 0, width: 300, height: 590))
+  #expect(scrolled.visiblePaths == Set(ordered[5..<16]))
+  #expect(scrolled.iconsReady)
+  let resized = ApplicationViewportSnapshot(
+    rows: viewportRows(count: 22, unready: [15]), orderedPaths: ordered,
+    viewport: CGRect(x: 0, y: 0, width: 300, height: 850))
+  #expect(resized.visiblePaths == Set(ordered.prefix(16)))
+  #expect(!resized.iconsReady)
+  let short = ApplicationViewportSnapshot(
+    rows: viewportRows(count: 2), orderedPaths: Array(ordered.prefix(2)),
+    viewport: CGRect(x: 0, y: 0, width: 300, height: 590))
+  #expect(short.visibleRows.count == 2 && short.iconsReady)
+  let empty = ApplicationViewportSnapshot(
+    rows: viewportRows(count: 22), orderedPaths: ordered, viewport: .zero)
+  #expect(empty.visibleRows.isEmpty && !empty.iconsReady)
+}

@@ -57,14 +57,18 @@ struct SpaceView: View {
         breadcrumb
         Divider()
         GeometryReader { geometry in
-          if geometry.size.width < 760 {
-            compactPane
-          } else {
-            HSplitView {
-              mapColumn.frame(minWidth: 410)
-              sidePane.frame(minWidth: 280, idealWidth: 310, maxWidth: 390)
+          Group {
+            if geometry.size.width < 760 {
+              compactPane
+            } else {
+              HSplitView {
+                mapColumn.frame(minWidth: 410)
+                sidePane.frame(minWidth: 280, idealWidth: 310, maxWidth: 390)
+              }
             }
           }
+          .frame(width: max(0, geometry.size.width), height: max(0, geometry.size.height))
+          .clipped()
         }
       } else {
         ContentUnavailableView(
@@ -304,6 +308,7 @@ struct SpaceView: View {
         }
       }
       .background(LightenStyle.surface)
+      .clipped()
       VStack(alignment: .leading, spacing: 6) {
         ViewThatFits(in: .horizontal) {
           HStack(spacing: 10) {
@@ -660,9 +665,17 @@ struct SpaceView: View {
           }
         }
         .scrollIndicators(.hidden)
+        .frame(height: 30)
         .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: actions.basket.count)
       }
-      ActionFeedbackView(actions: actions)
+      if actions.completedSummary != nil {
+        ScrollView(.vertical) {
+          ActionFeedbackView(actions: actions)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(height: feedbackViewportHeight)
+        .accessibilityIdentifier("space.feedback-viewport")
+      }
       if let message = store.displayMessage {
         Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
           .fixedSize(horizontal: false, vertical: true)
@@ -671,6 +684,13 @@ struct SpaceView: View {
     .padding(.horizontal, 20).padding(.vertical, 10)
     .background(LightenStyle.canvas)
     .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: actions.result?.planID)
+  }
+
+  private var feedbackViewportHeight: CGFloat {
+    if actions.result == nil && !actions.resultRejections.isEmpty {
+      return min(180, 44 + 88 * CGFloat(actions.resultRejections.count))
+    }
+    return 84
   }
 
 }

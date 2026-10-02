@@ -28,8 +28,6 @@ final class AppsStore {
 
   @ObservationIgnored private(set) var openingTiming: OpeningTiming?
   private(set) var openingRevision = 0
-  @ObservationIgnored private var drawnIcons: [String: Bool] = [:]
-  @ObservationIgnored private var openingCheckPending = false
   @ObservationIgnored private var displayListingFinished = false
   @ObservationIgnored private let openingLogger = Logger(subsystem: "com.tavsn.lighten", category: "apps-opening")
   @ObservationIgnored private(set) var pictureOpeningTiming: PictureOpeningTiming?
@@ -242,47 +240,33 @@ final class AppsStore {
     listedNames[report.path] ?? URL(fileURLWithPath: report.path).deletingPathExtension().lastPathComponent
   }
 
-  /// A clipped AppKit drawing probe calls this after the row's icon view has drawn.
-  func rowDidDraw(_ path: String, iconReady: Bool, revision: Int) {
-    guard revision == openingRevision, var timing = openingTiming,
-      reports.contains(where: { $0.path == path }) || pictureRows.contains(where: { $0.path == path })
-    else { return }
-    drawnIcons[path] = iconReady
-    timing.visibleRowCount = drawnIcons.count
+  /// Receives one complete snapshot from the scroll viewport's drawing pass.
+  func viewportDidDraw(_ snapshot: ApplicationViewportSnapshot, revision: Int) {
+    guard revision == openingRevision, var timing = openingTiming, !snapshot.visibleRows.isEmpty else { return }
+    timing.visibleRowCount = snapshot.visibleRows.count
     if timing.firstRowDrawnAt == nil {
       timing.firstRowDrawnAt = .now
       let elapsed = Self.milliseconds(timing.requestedAt.duration(to: .now))
       openingLogger.info("Apps opening first-row milliseconds=\(elapsed, privacy: .public)")
     }
-    openingTiming = timing
-    // Collect every draw callback from this display pass before counting visible icons.
-    guard !openingCheckPending else { return }
-    openingCheckPending = true
-    DispatchQueue.main.async { [weak self] in
-      guard let self else { return }
-      self.openingCheckPending = false
-      self.checkOpeningIcons(revision: self.openingRevision)
+    if displayListingFinished, timing.visibleIconsDrawnAt == nil, snapshot.iconsReady {
+      timing.visibleIconsDrawnAt = .now
+      let elapsed = Self.milliseconds(timing.requestedAt.duration(to: .now))
+      let visible = snapshot.visibleRows.count
+      let listed = snapshot.listedRowCount
+      openingLogger.info(
+        "Apps opening visible-icons milliseconds=\(elapsed, privacy: .public) visible-rows=\(visible, privacy: .public) listed-rows=\(listed, privacy: .public)"
+      )
     }
+    openingTiming = timing
   }
 
-  func rowLeftDisplay(_ path: String) { drawnIcons[path] = nil }
-
-  private func checkOpeningIcons(revision: Int) {
-    guard revision == openingRevision, displayListingFinished,
-      var timing = openingTiming, timing.visibleIconsDrawnAt == nil, !drawnIcons.isEmpty
-    else { return }
-    let current = Set(reports.map(\.path) + pictureRows.map(\.path))
-    drawnIcons = drawnIcons.filter { current.contains($0.key) }
-    guard !drawnIcons.isEmpty, drawnIcons.values.allSatisfy({ $0 }) else { return }
-    timing.visibleIconsDrawnAt = .now
-    timing.visibleRowCount = drawnIcons.count
-    openingTiming = timing
-    let elapsed = Self.milliseconds(timing.requestedAt.duration(to: .now))
-    let visible = drawnIcons.count
-    let listed = reports.count
-    openingLogger.info(
-      "Apps opening visible-icons milliseconds=\(elapsed, privacy: .public) visible-rows=\(visible, privacy: .public) listed-rows=\(listed, privacy: .public)"
-    )
+  func viewportVisibilityChanged(_ paths: Set<String>) {
+    visiblePaths = paths.sorted()
+    let visible = visiblePaths
+    Task { await ApplicationIconCache.shared.prioritize(paths: visible) }
+    guard let session else { return }
+    Task { await session.prioritizeVisibleApplications(paths: visible) }
   }
 
   private static func milliseconds(_ duration: Duration) -> Double {
@@ -304,7 +288,6 @@ final class AppsStore {
   func open(actions: ActionStore) {
     openingRevision += 1
     openingTiming = OpeningTiming(requestedAt: .now)
-    drawnIcons = [:]
     guard !opened else { return }
     opened = true
     let requestedAt = ContinuousClock.now
@@ -410,7 +393,6 @@ final class AppsStore {
             self.displayListingFinished = isFinalBatch
             if isFinalBatch {
               self.openingRevision += 1
-              self.drawnIcons = [:]
             }
             self.measuringPaths = Set(entries.map(\.path))
             self.pictureRows = []

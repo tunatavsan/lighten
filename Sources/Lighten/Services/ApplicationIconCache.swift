@@ -74,6 +74,12 @@ actor ApplicationIconCache {
     }
   }
 
+  /// A changed viewport promotes pending visible icons without widening the worker limit.
+  func prioritize(paths: [String]) {
+    let visible = Set(paths)
+    queue = queue.filter { visible.contains($0) } + queue.filter { !visible.contains($0) }
+  }
+
   private func startLoads() {
     while activeLoads < maximumConcurrentLoads, !queue.isEmpty {
       let path = queue.removeFirst()

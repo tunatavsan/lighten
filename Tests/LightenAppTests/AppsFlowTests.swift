@@ -1414,3 +1414,52 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   store.cancelScan()
   continuation.finish()
 }
+
+@Test("Drawing partial or incomplete viewport snapshots cannot complete Apps icon timing")
+@MainActor func appsOpeningRequiresCompleteDrawnViewport() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let store = AppsStore(pictures: flowPictures(root), running: AppsClosedSource(), events: { stream })
+  let actions = ActionStore()
+  store.open(actions: actions)
+  let requestedAt = try #require(store.openingTiming?.requestedAt)
+  let paths = (0..<85).map { root + "/LightenQA-\($0).app" }
+  continuation.yield(
+    .listed(
+      paths.map {
+        ApplicationListEntry(path: $0, name: $0, bundleID: nil, version: nil, displayRootIdentity: nil)
+      }))
+  try await waitFlow { store.reports.count == 85 }
+  #expect(store.openingTiming?.firstRowDrawnAt == nil)
+  #expect(store.openingTiming?.visibleIconsDrawnAt == nil)
+  let viewport = CGRect(x: 0, y: 0, width: 300, height: 590)
+  func snapshot(_ count: Int, lateIcon: Bool = false) -> ApplicationViewportSnapshot {
+    ApplicationViewportSnapshot(
+      rows: Dictionary(
+        uniqueKeysWithValues: (0..<count).map { index in
+          (
+            paths[index],
+            .init(
+              frame: CGRect(x: 0, y: CGFloat(index) * 55, width: 300, height: 50),
+              iconReady: !(lateIcon && index == 10))
+          )
+        }), orderedPaths: paths, viewport: viewport)
+  }
+  store.viewportDidDraw(snapshot(0), revision: store.openingRevision)
+  #expect(store.openingTiming?.firstRowDrawnAt == nil)
+  store.viewportDidDraw(snapshot(5), revision: store.openingRevision)
+  #expect(store.openingTiming?.firstRowDrawnAt != nil)
+  #expect(store.openingTiming?.visibleIconsDrawnAt == nil)
+  store.viewportDidDraw(snapshot(22, lateIcon: true), revision: store.openingRevision)
+  #expect(store.openingTiming?.visibleRowCount == 11)
+  #expect(store.openingTiming?.visibleIconsDrawnAt == nil)
+  store.viewportDidDraw(snapshot(22), revision: store.openingRevision - 1)
+  #expect(store.openingTiming?.visibleIconsDrawnAt == nil)
+  store.viewportDidDraw(snapshot(22), revision: store.openingRevision)
+  #expect(store.openingTiming?.visibleIconsDrawnAt != nil)
+  #expect(store.openingTiming?.visibleRowCount == 11)
+  #expect(store.openingTiming?.requestedAt == requestedAt)
+  store.cancelScan()
+  continuation.finish()
+}

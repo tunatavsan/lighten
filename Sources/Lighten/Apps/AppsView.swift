@@ -6,6 +6,7 @@ struct AppsView: View {
   @Bindable var store: AppsStore
   @Bindable var actions: ActionStore
   @State private var searchText = ""
+  @State private var visibleListPaths: Set<String> = []
   @State private var showingCompactDetail = false
   @State private var expandedOrphans: Set<String> = []
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -236,15 +237,15 @@ struct AppsView: View {
             ForEach(filtered) { app in
               VStack(alignment: .leading, spacing: 2) {
                 appRow(app)
-                  .onAppear { store.rowVisibilityChanged(app.path, visible: true) }
-                  .onDisappear {
-                    store.rowVisibilityChanged(app.path, visible: false)
-                    store.rowLeftDisplay(app.path)
-                  }
                 if let reason = actions.failure(at: app.path) {
                   Text(reason).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
                     .fixedSize(horizontal: false, vertical: true)
                 }
+              }
+              .transformAnchorPreference(key: ApplicationRowPreferenceKey.self, value: .bounds) { values, anchor in
+                var row = values[app.path] ?? ApplicationRowPreference()
+                row.bounds = anchor
+                values[app.path] = row
               }
               .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.96)))
             }
@@ -253,6 +254,7 @@ struct AppsView: View {
           .padding(.vertical, 10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .modifier(listViewport(paths: filtered.map(\.path)))
       }
     }
   }
@@ -269,10 +271,7 @@ struct AppsView: View {
           }
         ) { row in
           HStack(spacing: 10) {
-            ApplicationIconView(path: row.path, drawRevision: store.openingRevision) {
-              [revision = store.openingRevision] ready in
-              store.rowDidDraw(row.path, iconReady: ready, revision: revision)
-            }
+            ApplicationIconView(path: row.path, isVisible: visibleListPaths.contains(row.path))
             VStack(alignment: .leading, spacing: 3) {
               Text(URL(fileURLWithPath: row.path).deletingPathExtension().lastPathComponent)
                 .font(.system(size: 12, weight: .medium))
@@ -284,12 +283,34 @@ struct AppsView: View {
               .font(.system(size: 11)).monospacedDigit()
           }
           .accessibilityElement(children: .combine)
-          .onDisappear { store.rowLeftDisplay(row.path) }
+          .transformAnchorPreference(key: ApplicationRowPreferenceKey.self, value: .bounds) { values, anchor in
+            var value = values[row.path] ?? ApplicationRowPreference()
+            value.bounds = anchor
+            values[row.path] = value
+          }
         }
       }
       .padding(.vertical, 10)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .modifier(
+      listViewport(
+        paths: store.pictureRows.filter {
+          searchText.isEmpty || $0.path.localizedStandardContains(searchText)
+            || $0.bundleID?.localizedStandardContains(searchText) == true
+        }.map(\.path)))
+  }
+
+  private func listViewport(paths: [String]) -> ApplicationListViewport {
+    ApplicationListViewport(
+      orderedPaths: paths, revision: store.openingRevision,
+      visibilityChanged: { paths in
+        visibleListPaths = paths
+        store.viewportVisibilityChanged(paths)
+      },
+      didDraw: { [revision = store.openingRevision] snapshot in
+        store.viewportDidDraw(snapshot, revision: revision)
+      })
   }
 
   private var orphanSection: some View {
@@ -383,10 +404,7 @@ struct AppsView: View {
       showingCompactDetail = true
     } label: {
       HStack(spacing: 10) {
-        ApplicationIconView(path: app.path, drawRevision: store.openingRevision) {
-          [revision = store.openingRevision] ready in
-          store.rowDidDraw(app.path, iconReady: ready, revision: revision)
-        }
+        ApplicationIconView(path: app.path, isVisible: visibleListPaths.contains(app.path))
         VStack(alignment: .leading, spacing: 3) {
           Text(store.displayName(app))
             .font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
