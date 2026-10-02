@@ -57,17 +57,33 @@ struct SpaceView: View {
         breadcrumb
         Divider()
         GeometryReader { geometry in
+          let sidePaneMinimumWidth: CGFloat = 280
+          let sidePaneIdealWidth: CGFloat = 310
+          let splitDividerWidth: CGFloat = 1
           Group {
             if geometry.size.width < 760 {
               compactPane
             } else {
               HSplitView {
-                mapColumn.frame(minWidth: 410)
-                sidePane.frame(minWidth: 280, idealWidth: 310, maxWidth: 390)
+                mapColumn.frame(
+                  minWidth: 410,
+                  idealWidth: max(410, geometry.size.width - sidePaneIdealWidth - splitDividerWidth),
+                  maxWidth: max(410, geometry.size.width - sidePaneMinimumWidth - splitDividerWidth),
+                  maxHeight: .infinity,
+                  alignment: .topLeading)
+                sidePane.frame(
+                  minWidth: sidePaneMinimumWidth, idealWidth: sidePaneIdealWidth, maxWidth: 390,
+                  maxHeight: .infinity, alignment: .topLeading)
               }
+              .frame(
+                width: max(0, geometry.size.width), height: max(0, geometry.size.height),
+                alignment: .topLeading)
             }
           }
-          .frame(width: max(0, geometry.size.width), height: max(0, geometry.size.height))
+          .frame(
+            width: max(0, geometry.size.width), height: max(0, geometry.size.height),
+            alignment: .topLeading
+          )
           .clipped()
         }
       } else {
@@ -280,7 +296,7 @@ struct SpaceView: View {
   private var mapColumn: some View {
     let appearance = store.appearanceToken
     let ready = store.layout != nil
-    return VStack(spacing: 0) {
+    return VStack(alignment: .leading, spacing: 0) {
       GeometryReader { geometry in
         ZStack(alignment: .topLeading) {
           if let layout = store.layout {
@@ -288,7 +304,7 @@ struct SpaceView: View {
               .transition(mapTransition)
           }
         }
-        .frame(width: geometry.size.width, height: geometry.size.height)
+        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         .animation(navigationAnimation, value: store.layout?.tiles.map(\.id))
         .task(
           id:
@@ -335,7 +351,9 @@ struct SpaceView: View {
       }
       .font(.system(size: 10))
       .padding(.horizontal, 12).padding(.vertical, 8)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
   }
 
   private func legendSwatch(_ color: Color, _ title: String) -> some View {
