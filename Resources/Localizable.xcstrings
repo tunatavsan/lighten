@@ -331,6 +331,23 @@
         }
       }
     },
+    "%lld items you can review": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld items you can review"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İncelenebilecek %lld öğe"
+          }
+        }
+      }
+    },
     "%lld other hard links retain this file's data": {
       "localizations": {
         "en": {
@@ -343,6 +360,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Diğer %lld sabit bağlantı bu dosyanın verisini koruyor"
+          }
+        }
+      }
+    },
+    "%lld reasons": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld reasons"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld neden"
+          }
+        }
+      }
+    },
+    "%lld selected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld selected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld seçili"
           }
         }
       }
@@ -1460,6 +1511,23 @@
         }
       }
     },
+    "Categories": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Categories"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kategoriler"
+          }
+        }
+      }
+    },
     "Changed": {
       "extractionState": "manual",
       "localizations": {
@@ -1957,6 +2025,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bulut dosyaları indirilmemiş ve ölçülmemiş. Önce Finder’da indirin."
+          }
+        }
+      }
+    },
+    "Collapsed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapsed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Daraltıldı"
           }
         }
       }
@@ -2651,6 +2736,23 @@
         }
       }
     },
+    "Expanded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expanded"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Genişletildi"
+          }
+        }
+      }
+    },
     "Explore space": {
       "localizations": {
         "en": {
@@ -2871,6 +2973,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "İncelenmesi gereken dosyalar"
+          }
+        }
+      }
+    },
+    "Find caches and leftovers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find caches and leftovers"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önbellekleri ve artıkları bul"
           }
         }
       }
@@ -4209,22 +4328,6 @@
         }
       }
     },
-    "More categories": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "More categories"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Diğer kategoriler"
-          }
-        }
-      }
-    },
     "More information": {
       "extractionState": "manual",
       "localizations": {
@@ -4704,6 +4807,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Taranmadı"
+          }
+        }
+      }
+    },
+    "Not selected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili değil"
           }
         }
       }
@@ -6654,22 +6774,6 @@
         }
       }
     },
-    "Scan to inspect candidate areas": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scan to inspect candidate areas"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aday alanları incelemek için tara"
-          }
-        }
-      }
-    },
     "Scanning": {
       "localizations": {
         "en": {
@@ -6922,6 +7026,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulamayı, verisini ya da ikisini birden seçin"
+          }
+        }
+      }
+    },
+    "Selected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili"
           }
         }
       }
@@ -7615,6 +7736,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bazı öğeler geri yüklenemedi. Nedenini Geçmiş’te inceleyin."
+          }
+        }
+      }
+    },
+    "Some locations could not be read": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some locations could not be read"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı konumlar okunamadı"
           }
         }
       }
@@ -8566,6 +8704,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu öğeler macOS Çöp Sepeti’ne taşınır. Çöp Sepeti Lighten dışında boşaltılmadan alan açılmaz."
+          }
+        }
+      }
+    },
+    "These items stay out of a cleaning plan. Each one shows why.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These items stay out of a cleaning plan. Each one shows why."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğeler temizleme planına girmez. Her birinin nedeni yanında."
           }
         }
       }
@@ -9661,6 +9816,23 @@
         }
       }
     },
+    "Why": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Why"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neden"
+          }
+        }
+      }
+    },
     "Working in the background": {
       "localizations": {
         "en": {
@@ -9753,22 +9925,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "ve %lld neden daha"
-          }
-        }
-      }
-    },
-    "candidates": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "candidates"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "aday"
           }
         }
       }
@@ -9978,22 +10134,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "macOS sistem birimi"
-          }
-        }
-      }
-    },
-    "selected": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "selected"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "seçili"
           }
         }
       }
