@@ -214,7 +214,7 @@ private struct MemoryCard: View {
 }
 
 /// Three steps of memory pressure, the current one lit.
-private struct PressureScale: View {
+struct PressureScale: View {
   let pressure: MemoryPressure
 
   var body: some View {

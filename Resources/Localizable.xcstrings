@@ -5343,6 +5343,23 @@
         }
       }
     },
+    "Open Lighten": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Lighten"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten’ı aç"
+          }
+        }
+      }
+    },
     "Open System Settings → Privacy & Security → Full Disk Access, or quit and reopen Lighten manually.": {
       "localizations": {
         "en": {
@@ -7479,6 +7496,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Seçim değişti. Kaldırma incelemesine devam etmek için bir öğe seçin."
+          }
+        }
+      }
+    },
+    "Settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Settings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ayarlar"
           }
         }
       }

@@ -6,6 +6,7 @@ import SwiftUI
 @main
 struct LightenApp: App {
   @State private var model: LightenModel
+  @AppStorage(MenuBarPreference.key) private var showsMenuBarExtra = false
 
   init() {
     guard Bundle.main.bundleIdentifier == LightenIdentity.bundleIdentifier else {
@@ -26,6 +27,13 @@ struct LightenApp: App {
     .windowResizability(.contentMinSize)
     .windowToolbarStyle(.unified)
     Settings { LightenSettingsView(access: model.access).appliesAppearancePreference() }
+    MenuBarExtra(isInserted: $showsMenuBarExtra) {
+      MenuBarPanel(model: model, overview: model.menuBarOverview)
+        .environment(\.fullDiskAccessMonitor, model.access)
+    } label: {
+      Image("MenuBarGlyph").accessibilityLabel(Text(verbatim: "Lighten"))
+    }
+    .menuBarExtraStyle(.window)
   }
 }
 

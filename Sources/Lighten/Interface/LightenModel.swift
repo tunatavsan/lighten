@@ -13,6 +13,8 @@ final class LightenModel {
   let access = FullDiskAccessMonitor()
   let onboarding = OnboardingPreferences()
   let overview = OverviewStore()
+  /// The menu bar panel samples on its own while it is open, so it never stops the window's Overview.
+  let menuBarOverview = OverviewStore()
   let space = SpaceStore()
   let actions = ActionStore()
   let clean = CleanStore()
