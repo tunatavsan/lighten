@@ -460,7 +460,9 @@ func relatedReceiptRoundTrip() async throws {
     format: .xml, options: 0)
   try plist.write(to: URL(fileURLWithPath: contents + "/Info.plist"))
   try Data("fixture".utf8).write(to: URL(fileURLWithPath: related + "/data"))
-  let service = RelatedDataService(homeDirectory: fixture.home, applicationRoots: [appRoot])
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [appRoot],
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   let first = await service.discover()
   #expect(first.first { $0.path == related }?.classification == .installed)
   #expect(first.first { $0.path == similar }?.classification == .uncertain)
@@ -517,7 +519,9 @@ func relatedReceiptRejectsChangedObjectAndPartialInventory() async throws {
     fromPropertyList: ["CFBundleIdentifier": id],
     format: .xml, options: 0)
   try plist.write(to: URL(fileURLWithPath: contents + "/Info.plist"))
-  let service = RelatedDataService(homeDirectory: fixture.home, applicationRoots: [appRoot])
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [appRoot],
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   _ = await service.discover()
   let unclassified = appRoot + "/Unclassified.app"
   try FileManager.default.createSymbolicLink(atPath: unclassified, withDestinationPath: "/missing-app")

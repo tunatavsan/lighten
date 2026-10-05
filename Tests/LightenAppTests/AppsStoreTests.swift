@@ -1653,6 +1653,159 @@ private func appsBasketPlan(_ paths: [String]) -> ActionPlan {
   await store.waitForScan()
 }
 
+@Test("A basket app finishes its sharing evidence after another app receives focus")
+@MainActor func appsBasketPreservesUnfocusedEvidenceJob() async throws {
+  let paths = ["/Applications/LightenQA-evidence-a.app", "/Applications/LightenQA-evidence-b.app"]
+  let apps = paths.enumerated().map {
+    InstalledApplication(bundleID: "qa.lighten.evidence.\($0.offset)", path: $0.element, version: nil)
+  }
+  let candidate = selectedAppCandidate("/fixture/LightenQA-evidence-a-data")
+  let shared = RelatedDataCandidate(
+    id: candidate.id, path: candidate.path, classification: .shared, reason: .sharedInstalledData,
+    snapshot: candidate.snapshot, receipt: nil, evidenceKinds: [.bundleIdentifier])
+  let reviews = SelectedAppReviewGate()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    selectedReview: { path, progress in try await reviews.review(path: path, progress: progress) },
+    basketPlanBuilder: { selections, _ in
+      #expect(Set(selections.map(\.path)) == Set(paths))
+      return .init(plan: appsBasketPlan(paths), rejections: [])
+    },
+    preferences: try appsAutomaticPreferences(), running: ClosedAppSource())
+  let actions = ActionStore()
+  store.reports = apps.map { selectedAppReport($0.path, bundleID: $0.bundleID) }
+  store.selectApp(paths[0], actions: actions)
+  await reviews.waitForRequests(1)
+  await reviews.publish(
+    ApplicationRelatedReview(application: apps[0], candidates: [candidate], phase: .initialComplete), request: 0)
+  #expect(await appsEventually { store.selectedDataPaths == [candidate.path] })
+  store.selectApp(paths[1], intent: .toggle, actions: actions)
+  await reviews.waitForRequests(2)
+  await reviews.finish(
+    ApplicationRelatedReview(application: apps[0], candidates: [shared], ownershipPending: false, phase: .enriched),
+    request: 0)
+  #expect(await appsEventually { store.reports[0].related.first?.classification == .shared })
+  #expect(!store.isAutomaticallySelected(shared, app: store.reports[0]))
+  await store.prepareBasket(actions: actions)
+  #expect(Set(actions.pending?.plan.items.map(\.sourcePath) ?? []) == Set(paths))
+  #expect(store.message?.contains("LightenQA-evidence-b") == true)
+  #expect(actions.pending?.reviewNotes.contains { $0.contains("LightenQA-evidence-b") } == true)
+  await reviews.finish(
+    ApplicationRelatedReview(application: apps[1], candidates: [], ownershipPending: false, phase: .enriched),
+    request: 1)
+  await store.waitForSelectedReview()
+}
+
+@Test(
+  "Only final automatic evidence enters a plan while manual paths survive unfinished and failed evidence",
+  arguments: [
+    ("initial", false, false), ("initial", false, true),
+    ("initial", true, false), ("initial", true, true),
+    ("scoped", false, false), ("scoped", false, true),
+    ("scoped", true, false), ("scoped", true, true),
+    ("timeout", false, false), ("timeout", false, true),
+    ("timeout", true, false), ("timeout", true, true),
+  ])
+@MainActor func appsUnfinishedAutomaticPlanKeepsManualChoice(_ scenario: (String, Bool, Bool)) async throws {
+  let (phase, basket, manual) = scenario
+  let path = "/Applications/LightenQA-plan-finality.app"
+  let app = InstalledApplication(bundleID: "qa.lighten.plan.finality", path: path, version: nil)
+  let candidate = selectedAppCandidate("/fixture/LightenQA-plan-finality-data")
+  let expected = manual ? [path, candidate.path] : [path]
+  let plan = ActionPlan(
+    snapshotRunID: UUID(), kind: .trash,
+    items: [
+      PlanItem(
+        id: UUID(), sourcePath: path, inventory: [], ancestors: [], policy: .wholeBundle,
+        applicationBundleID: app.bundleID)
+    ]
+      + (manual
+        ? [
+          PlanItem(
+            id: UUID(), sourcePath: candidate.path, inventory: [], ancestors: [], policy: .relatedTrash)
+        ] : []))
+  let reviews = SelectedAppReviewGate()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    availableUninstallPlanBuilder: { _, candidates, includePackage in
+      #expect(includePackage && candidates.map(\.path) == (manual ? [candidate.path] : []))
+      return .init(plan: plan, rejections: [])
+    },
+    selectedReview: { path, progress in try await reviews.review(path: path, progress: progress) },
+    basketPlanBuilder: { selections, _ in
+      #expect(Set(selections.map(\.path)) == Set(expected))
+      return .init(plan: plan, rejections: [])
+    },
+    preferences: try appsAutomaticPreferences(), running: ClosedAppSource())
+  let actions = ActionStore()
+  store.reports = [selectedAppReport(path, bundleID: app.bundleID)]
+  store.selectApp(path, actions: actions)
+  await reviews.waitForRequests(1)
+  await reviews.publish(
+    ApplicationRelatedReview(application: app, candidates: [candidate], phase: .initialComplete), request: 0)
+  #expect(await appsEventually { store.selectedDataPaths == [candidate.path] })
+  if manual {
+    store.toggleData(candidate.path, actions: actions)
+    store.toggleData(candidate.path, actions: actions)
+  }
+  if phase != "initial" {
+    await reviews.publish(
+      ApplicationRelatedReview(
+        application: app, candidates: [candidate], phase: .enriched,
+        globalEvidencePending: phase == "scoped", globalEvidenceUnavailable: phase == "timeout"), request: 0)
+    if phase == "scoped" {
+      #expect(await appsEventually { store.selectedEvidencePending })
+    } else {
+      #expect(await appsEventually { store.message?.contains("ownership checks could not finish") == true })
+    }
+  }
+  if basket {
+    #expect(store.canReviewBasket(actions: actions))
+    await store.prepareBasket(actions: actions)
+  } else {
+    #expect(store.canReviewSelectedData(actions: actions))
+    await store.prepareSelectedData(actions: actions)
+  }
+  #expect(Set(actions.pending?.plan.items.map(\.sourcePath) ?? []) == Set(expected))
+  #expect(store.message?.contains("LightenQA-plan-finality") == true)
+  #expect(store.message?.contains("Automatically selected files were left out") == true)
+  #expect(actions.pending?.reviewNotes.contains { $0.contains("LightenQA-plan-finality") } == true)
+  await reviews.finish(
+    ApplicationRelatedReview(application: app, candidates: [candidate], ownershipPending: false, phase: .enriched),
+    request: 0)
+  await store.waitForSelectedReview()
+}
+
+@Test("A late initial completion cannot replace a scoped sharing veto or select the row again")
+@MainActor func appsLateInitialCompletionPreservesScopedVeto() async throws {
+  let path = "/Applications/LightenQA-phase-order.app"
+  let app = InstalledApplication(bundleID: "qa.lighten.phase.order", path: path, version: nil)
+  let candidate = selectedAppCandidate("/fixture/LightenQA-phase-order-data")
+  let shared = RelatedDataCandidate(
+    id: candidate.id, path: candidate.path, classification: .shared, reason: .sharedInstalledData,
+    snapshot: candidate.snapshot, receipt: nil, evidenceKinds: [.bundleIdentifier])
+  let reviews = SelectedAppReviewGate()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    selectedReview: { path, progress in try await reviews.review(path: path, progress: progress) },
+    preferences: try appsAutomaticPreferences(), running: ClosedAppSource())
+  store.reports = [selectedAppReport(path, bundleID: app.bundleID)]
+  store.selectApp(path, actions: ActionStore())
+  await reviews.waitForRequests(1)
+  await reviews.publish(
+    ApplicationRelatedReview(application: app, candidates: [candidate], phase: .initialComplete), request: 0)
+  #expect(await appsEventually { store.selectedDataPaths == [candidate.path] })
+  await reviews.publish(
+    ApplicationRelatedReview(
+      application: app, candidates: [shared], phase: .enriched, globalEvidencePending: true), request: 0)
+  #expect(await appsEventually { store.selectedReport?.related.first?.classification == .shared })
+  await reviews.finish(
+    ApplicationRelatedReview(application: app, candidates: [candidate], phase: .initialComplete), request: 0)
+  await store.waitForSelectedReview()
+  #expect(store.selectedReport?.related.first?.classification == .shared)
+  #expect(store.selectedDataPaths.isEmpty && store.selectedEvidencePending)
+}
+
 @Test("Scoped selection keeps global checking visible and failed completion supplies a named terminal note")
 @MainActor func appsScopedEvidenceRemainsPendingUntilTerminalReview() async throws {
   let path = "/Applications/LightenQA-scoped-pending.app"

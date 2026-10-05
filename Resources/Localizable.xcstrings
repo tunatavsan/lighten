@@ -137,6 +137,22 @@
         }
       }
     },
+    "%lld additional hard links. File data remains while another link exists.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld additional hard links. File data remains while another link exists."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld ek sabit bağlantı. Başka bağlantı varken dosya verisi korunur."
+          }
+        }
+      }
+    },
     "%lld app data items selected automatically": {
       "localizations": {
         "en": {
@@ -186,6 +202,22 @@
         }
       }
     },
+    "%lld duplicate copies": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld duplicate copies"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld ikiz kopya"
+          }
+        }
+      }
+    },
     "%lld files compared": {
       "localizations": {
         "en": {
@@ -218,22 +250,6 @@
         }
       }
     },
-    "%lld groups": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld groups"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld grup"
-          }
-        }
-      }
-    },
     "%lld groups could not be verified. Details": {
       "localizations": {
         "en": {
@@ -250,18 +266,18 @@
         }
       }
     },
-    "%lld groups · %lld copies · %@": {
+    "%lld groups · %lld copies": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lld groups · %lld copies · %@"
+            "value": "%lld groups · %lld copies"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lld grup · %lld kopya · %@"
+            "value": "%lld grup · %lld kopya"
           }
         }
       }
@@ -326,6 +342,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "%lld öğe kapsam dışında · %lld klasör · %lld yalnızca buluttaki dosya"
+          }
+        }
+      }
+    },
+    "%lld other hard links retain this file's data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld other hard links retain this file's data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diğer %lld sabit bağlantı bu dosyanın verisini koruyor"
           }
         }
       }
@@ -806,6 +838,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulama verisi kontrolü tüm öğeler bulunmadan durdu. Listeyi tamamlamak için yeniden tarayın."
+          }
+        }
+      }
+    },
+    "App data checks could not finish. Automatically selected files were left out.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App data checks could not finish. Automatically selected files were left out."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisi kontrolleri tamamlanamadı. Otomatik seçilen dosyalar onaya dahil edilmedi."
+          }
+        }
+      }
+    },
+    "App data checks have not finished. Automatically selected files were left out.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App data checks have not finished. Automatically selected files were left out."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisi kontrolleri henüz bitmedi. Otomatik seçilen dosyalar onaya dahil edilmedi."
           }
         }
       }
@@ -1909,6 +1973,38 @@
         }
       }
     },
+    "Copy file size: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy file size: %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyaların dosya boyutu: %@"
+          }
+        }
+      }
+    },
+    "Copy file size: at least %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy file size: at least %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyaların dosya boyutu: en az %@"
+          }
+        }
+      }
+    },
     "Copy path": {
       "localizations": {
         "en": {
@@ -2979,6 +3075,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Gizli klasörler, geliştirici klasörleri, önbellekler ve paket içerikleri atlanır. Ev klasörü taramaları Library klasörünü de atlar."
+          }
+        }
+      }
+    },
+    "Hide history details": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide history details"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geçmiş ayrıntılarını gizle"
           }
         }
       }
@@ -5326,6 +5438,22 @@
         }
       }
     },
+    "Previous result": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous result"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki sonuç"
+          }
+        }
+      }
+    },
     "Previous result · refreshing before actions": {
       "localizations": {
         "en": {
@@ -5627,6 +5755,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Yakın zamanda değişen öğeler korunur. Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Reclaimable space: Unknown": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reclaimable space: Unknown"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Boşalacak alan: Bilinmiyor"
           }
         }
       }
@@ -5996,6 +6140,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulamaların yeniden oluşturabildiği önbellek ve geçici dosyaları, ayrıca kaldırılmış uygulamalardan kalan verileri inceleyin."
+          }
+        }
+      }
+    },
+    "Review notes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review notes"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İnceleme notları"
           }
         }
       }
@@ -6736,6 +6896,38 @@
         }
       }
     },
+    "Selected copy file size": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected copy file size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen kopyaların dosya boyutu"
+          }
+        }
+      }
+    },
+    "Selected copy file size: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected copy file size: %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen kopyaların dosya boyutu: %@"
+          }
+        }
+      }
+    },
     "Selected for removal": {
       "localizations": {
         "en": {
@@ -6817,6 +7009,22 @@
         }
       }
     },
+    "Shared APFS storage cannot be measured here. Moving copies to Trash does not free space yet.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shared APFS storage cannot be measured here. Moving copies to Trash does not free space yet."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paylaşılan APFS alanı burada ölçülemiyor. Kopyaları Çöp’e taşımak henüz alan boşaltmaz."
+          }
+        }
+      }
+    },
     "Shared Group Containers may contain data from several apps. Inspect the folder in Finder.": {
       "localizations": {
         "en": {
@@ -6845,6 +7053,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Çöp’ü Finder’da göster"
+          }
+        }
+      }
+    },
+    "Show history details": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show history details"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geçmiş ayrıntılarını göster"
           }
         }
       }
@@ -6958,22 +7182,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Boyut ölçülmedi"
-          }
-        }
-      }
-    },
-    "Size of selected copies": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Size of selected copies"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Seçili kopyaların boyutu"
           }
         }
       }
@@ -9382,6 +9590,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "öğe kaldırıldı"
+          }
+        }
+      }
+    },
+    "iCloud Drive copies are not removed here. Manage them in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iCloud Drive copies are not removed here. Manage them in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iCloud Drive kopyaları burada silinmez. Finder’da yönetin."
           }
         }
       }

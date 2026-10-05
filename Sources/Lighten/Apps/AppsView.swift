@@ -882,6 +882,11 @@ struct AppsView: View {
     if kinds.contains(.configuredDirectory) {
       return String(localized: "Not selected automatically: this folder may contain your documents.")
     }
+    if candidate.reason == .nameOnly || candidate.classification == .unprovenNameOnly
+      || (!kinds.isEmpty && kinds.allSatisfy { $0 == .executableName })
+    {
+      return String(localized: "Not selected automatically: only the name matches this app.")
+    }
     if store.ownershipPendingPaths.contains(app.path) || candidate.reason == .ownershipUnavailable {
       return String(localized: "Not selected automatically: Lighten could not confirm which app uses it.")
     }

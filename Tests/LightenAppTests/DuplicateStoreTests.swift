@@ -807,3 +807,98 @@ private actor DuplicateObservationGate {
   #expect(store.excludedDirectoryCount == 1 && store.cloudOnlyCount == 1 && store.unreadableCount == 1)
   #expect(store.excludedRoot == nil && store.estimatedFreedBytes == nil)
 }
+
+@Test("Live and cached duplicate summaries count extra eligible copies and omit every keeper")
+@MainActor func duplicateSummariesOmitKeepers() async throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  let eligible = selectionReport(fixture: fixture, groupCount: 2)
+  let reviewOnly = selectionReport(fixture: fixture, mixedSubsets: true)
+  let report = DuplicateReport(
+    snapshot: eligible.snapshot, groups: eligible.groups + reviewOnly.groups,
+    skippedCount: 0, partial: false, comparisonCount: 3)
+  let observedAt = Date(timeIntervalSince1970: 100)
+  let picture = ResultPicture(observedAt: observedAt, content: DuplicatePicture(report))
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences,
+    pictures: fixture.pictures)
+  store.report = report
+  store.tool.phase = .ready
+  #expect(store.toolSummary.count == 4)
+  #expect(store.toolSummary.logicalBytes == 8_000_000)
+  #expect(store.targets.isEmpty)
+  let cold = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences,
+    pictures: fixture.pictures, loadPicture: { picture })
+  cold.open()
+  await cold.waitForPicture()
+  #expect(cold.toolSummary == ToolSummary(count: 4, logicalBytes: 8_000_000, observedAt: observedAt))
+  #expect(cold.estimatedFreedBytes == nil)
+}
+
+@Test("Duplicate summaries saturate file sizes without manufacturing a free-space measurement")
+@MainActor func duplicateSummarySaturatesObservedFileSize() throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  let members = (0..<3).map {
+    DuplicatePicture.Member(path: fixture.root + "/\($0)", eligibility: .eligible)
+  }
+  let picture = DuplicatePicture(
+    rootPath: fixture.root,
+    groups: [.init(logicalBytes: Int64.max, members: members), .init(logicalBytes: 1, members: members)],
+    scannedCount: 6, comparisonCount: 2, skippedCount: 0, partial: true)
+  let summary = DuplicateStore.summary(for: picture)
+  #expect(summary.count == 4 && summary.logicalBytes == Int64.max && summary.partial)
+}
+
+@Test("A selected hard-linked copy names surviving links and keeps reclaimed storage unknown")
+@MainActor func duplicateSelectedHardLinkHasNoFreedSpaceClaim() async throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  let included = fixture.root + "/included"
+  try FileManager.default.createDirectory(atPath: included, withIntermediateDirectories: true)
+  let bytes = Data(repeating: 7, count: 2 * 1024 * 1024)
+  for name in ["a", "b"] { try bytes.write(to: URL(fileURLWithPath: included + "/" + name)) }
+  #expect(link(included + "/a", fixture.root + "/surviving-link") == 0)
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences,
+    pictures: fixture.pictures)
+  store.startScan(folder: included)
+  await store.waitForScan()
+  let group = try #require(store.report?.groups.first)
+  let keeper = try #require(group.members.first { $0.entry.identity?.linkCount == 1 })
+  let linked = try #require(group.members.first { $0.entry.identity?.linkCount == 2 })
+  store.chooseKeeper(keeper.id, for: group, actions: fixture.actions())
+  #expect(store.targets == [linked.id])
+  #expect(store.additionalHardLinkCount == 1)
+  #expect(store.selectedLogicalBytes == Int64(bytes.count))
+  #expect(store.estimatedFreedBytes == nil)
+  #expect(store.toolSummary.count == 1 && store.toolSummary.logicalBytes == Int64(bytes.count))
+  #expect(FileManager.default.fileExists(atPath: fixture.root + "/surviving-link"))
+  await store.waitForPictureSaves()
+}
+
+@Test("Native APFS clones with measured allocations never become a reclaimed-storage estimate")
+@MainActor func duplicateNativeCloneHasNoFreedSpaceClaim() async throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  let original = fixture.root + "/original"
+  let clone = fixture.root + "/clone"
+  let bytes = Data(repeating: 9, count: 2 * 1024 * 1024)
+  try bytes.write(to: URL(fileURLWithPath: original))
+  #expect(clonefile(original, clone, 0) == 0)
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences,
+    pictures: fixture.pictures)
+  store.startScan(folder: fixture.root)
+  await store.waitForScan()
+  let group = try #require(store.report?.groups.first)
+  #expect(group.members.count == 2)
+  #expect(Set(group.members.compactMap { $0.entry.identity?.inode }).count == 2)
+  #expect(group.members.allSatisfy { ($0.entry.identity?.allocatedBytes ?? 0) > 0 })
+  store.reduceToOne(actions: fixture.actions())
+  #expect(store.selectedCopyCount == 1 && store.selectedLogicalBytes == Int64(bytes.count))
+  #expect(store.estimatedFreedBytes == nil)
+  #expect(store.toolSummary.count == 1 && store.toolSummary.logicalBytes == Int64(bytes.count))
+  await store.waitForPictureSaves()
+}

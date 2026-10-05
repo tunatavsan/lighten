@@ -82,6 +82,8 @@ struct ApplicationAuxiliaryIssue: Sendable {
 struct ApplicationAuxiliaryDiscovery: Sendable {
   var evidence: [ApplicationAuxiliaryEvidence] = []
   var issues: [ApplicationAuxiliaryIssue] = []
+  var sources: [ApplicationPathObservation] = []
+  var complete = true
 }
 
 /// Only native producers in this file can construct the bound observations.
@@ -187,6 +189,7 @@ final class ApplicationDataEvidenceCache: Sendable {
     let evidence: [ApplicationOwnedDataEvidence]
     let issues: [ApplicationAuxiliaryIssue]
     let sources: [ApplicationPathObservation]
+    var complete = true
   }
   private struct Entry: Sendable {
     let observations: [ApplicationPathObservation]
@@ -195,7 +198,11 @@ final class ApplicationDataEvidenceCache: Sendable {
   }
   private let entries = Mutex<[String: Entry]>([:])
   private let receipts = Mutex<ApplicationInstallerReceipts?>(nil)
-  private let live = Mutex<ApplicationLiveDataObservation?>(nil)
+  private struct LiveEntry: Sendable {
+    let observation: ApplicationLiveDataObservation
+    let sampledAt: TimeInterval
+  }
+  private let live = Mutex<LiveEntry?>(nil)
 
   private func observations(_ path: String, home: String, bundleID: String) throws -> [ApplicationPathObservation] {
     let paths = [
@@ -220,12 +227,16 @@ final class ApplicationDataEvidenceCache: Sendable {
   }
 
   func liveObservation(
-    using read: @Sendable () -> ApplicationLiveDataObservation = { .observe() }
+    using read: @Sendable () -> ApplicationLiveDataObservation = { .observe() }, fresh: Bool = false,
+    uptime: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
   ) -> ApplicationLiveDataObservation {
     live.withLock { cached in
-      if let cached { return cached }
+      let now = uptime()
+      if !fresh, let cached, now >= cached.sampledAt, now - cached.sampledAt < 1 {
+        return cached.observation
+      }
       let observed = read()
-      cached = observed
+      cached = LiveEntry(observation: observed, sampledAt: uptime())
       return observed
     }
   }
@@ -239,7 +250,8 @@ final class ApplicationDataEvidenceCache: Sendable {
   ) -> Discovery {
     let path = app.linkTarget ?? app.path
     if let cached = entries.withLock({ $0[path] }),
-      cached.vendorExclusive == vendorExclusive,
+      cached.vendorExclusive == vendorExclusive, cached.discovery.complete,
+      !cached.discovery.evidence.contains(where: { $0.provenance.kind == .liveProcess }),
       cached.observations.allSatisfy({ (try? $0.validate()) != nil })
     {
       return cached.discovery
@@ -275,7 +287,7 @@ final class ApplicationDataEvidenceCache: Sendable {
           evidence.nodes.filter { $0.path != evidence.dataPath }.map {
             ApplicationPathObservation(path: $0.path, identity: $0.identity)
           } + evidence.receiptSources
-        } + reference.sources
+        } + auxiliary.sources + reference.sources
       let mutableDataParents = Set(["Application Support", "Caches", "Logs"].map { home + "/Library/" + $0 })
       let result = Discovery(
         evidence: framework.evidence.map(ApplicationOwnedDataEvidence.framework)
@@ -283,7 +295,8 @@ final class ApplicationDataEvidenceCache: Sendable {
         issues: framework.issues.filter { $0.reason != .unsupportedFramework }.map {
           ApplicationAuxiliaryIssue(path: $0.path, detail: String(describing: $0.reason) + ": " + $0.detail)
         } + auxiliary.issues + referenceIssues,
-        sources: before.filter { !mutableDataParents.contains($0.path) } + sourceObservations)
+        sources: before.filter { !mutableDataParents.contains($0.path) } + sourceObservations,
+        complete: auxiliary.complete)
       let after = try observations(path, home: home, bundleID: app.bundleID)
       guard before.count == after.count,
         zip(before, after).allSatisfy({ $0.path == $1.path && $0.identity == $1.identity })
@@ -296,7 +309,8 @@ final class ApplicationDataEvidenceCache: Sendable {
       return result
     } catch {
       return Discovery(
-        evidence: [], issues: [ApplicationAuxiliaryIssue(path: path, detail: String(describing: error))], sources: [])
+        evidence: [], issues: [ApplicationAuxiliaryIssue(path: path, detail: String(describing: error))], sources: [],
+        complete: false)
     }
   }
 }
@@ -405,22 +419,77 @@ enum ApplicationAuxiliaryEvidenceProducer {
         result.issues.append(ApplicationAuxiliaryIssue(path: path, detail: String(describing: error)))
       }
     }
+    struct IdentifierSource {
+      let identifier: String
+      let info: String
+      let references: [String]
+    }
+    var identifiers = [IdentifierSource(identifier: app.bundleID, info: info, references: [])]
+    var visited = 0
+    func helpers(_ parent: String, depth: Int) {
+      guard depth < 8, visited < 4096 else { return }
+      let identity = try? DescriptorFileSystem.identity(at: parent)
+      result.sources.append(ApplicationPathObservation(path: parent, identity: identity))
+      guard let identity, identity.kind == .directory,
+        let names = try? DescriptorFileSystem.children(at: parent, expected: identity)
+      else { return }
+      for name in names {
+        guard visited < 4096, !Task.isCancelled else { return }
+        visited += 1
+        let path = parent + "/" + name
+        guard (try? DescriptorFileSystem.identity(at: path))?.kind == .directory else { continue }
+        if name.lowercased().hasSuffix(".app") {
+          guard let helper = try? ApplicationPackagePlanning.metadata(at: path),
+            let identifier = helper.observation.bundleIdentifier,
+            RelatedDataService.validBundleID(identifier), identifier.hasPrefix(app.bundleID + ".")
+          else { continue }
+          let source = path + "/" + helper.observation.infoRelativePath
+          identifiers.append(
+            IdentifierSource(identifier: identifier, info: source, references: [parent, path]))
+          result.sources.append(
+            ApplicationPathObservation(path: source, identity: helper.observation.infoIdentity))
+        } else {
+          // Framework resources are not helper namespaces. Nested directories
+          // in the dedicated helper roots remain bounded and no-follow.
+          guard !name.lowercased().hasSuffix(".framework") else { continue }
+          helpers(path, depth: depth + 1)
+        }
+      }
+    }
+    for parent in [
+      "/Contents/Frameworks", "/Contents/Helpers", "/Contents/Library/LoginItems",
+      "/Contents/Library/LaunchServices", "/Contents/XPCServices",
+    ] { helpers(package + parent, depth: 0) }
     for library in [homeDirectory + "/Library", "/Library"] {
-      for (directory, suffix) in [("Application Scripts", ""), ("Cookies", ".binarycookies")] {
-        let path = library + "/" + directory + "/" + app.bundleID + suffix
-        if (try? DescriptorFileSystem.identity(at: path)) != nil { add(path, kind: .bundleIdentifier) }
-      }
-      for directory in ["Caches", "Application Support", "WebKit", "HTTPStorages", "Logs"] where library == "/Library" {
-        let path = library + "/" + directory + "/" + app.bundleID
-        if (try? DescriptorFileSystem.identity(at: path)) != nil { add(path, kind: .bundleIdentifier) }
-      }
-      let parent = library + "/Preferences/ByHost"
-      if let root = try? DescriptorFileSystem.identity(at: parent),
-        let names = try? DescriptorFileSystem.children(at: parent, expected: root)
-      {
-        for name in names where name.hasPrefix(app.bundleID + ".") && name.hasSuffix(".plist") {
-          let uuid = String(name.dropFirst(app.bundleID.count + 1).dropLast(6))
-          if UUID(uuidString: uuid) != nil { add(parent + "/" + name, kind: .bundleIdentifier) }
+      for owner in identifiers {
+        for (directory, suffix) in [
+          ("Application Scripts", ""), ("Cookies", ".binarycookies"), ("Preferences", ".plist"),
+          ("Caches", ""), ("Application Support", ""), ("WebKit", ""), ("HTTPStorages", ""),
+          ("Logs", ""), ("Containers", ""), ("Saved Application State", ".savedState"),
+        ] {
+          if owner.identifier == app.bundleID,
+            !["Application Scripts", "Cookies"].contains(directory),
+            library != "/Library"
+              || !["Caches", "Application Support", "WebKit", "HTTPStorages", "Logs"].contains(directory)
+          {
+            continue
+          }
+          let path = library + "/" + directory + "/" + owner.identifier + suffix
+          if (try? DescriptorFileSystem.identity(at: path)) != nil {
+            add(path, kind: .bundleIdentifier, source: owner.info, references: owner.references)
+          }
+        }
+        let parent = library + "/Preferences/ByHost"
+        if let root = try? DescriptorFileSystem.identity(at: parent),
+          let names = try? DescriptorFileSystem.children(at: parent, expected: root)
+        {
+          for name in names where name.hasPrefix(owner.identifier + ".") && name.hasSuffix(".plist") {
+            let suffix = String(name.dropFirst(owner.identifier.count + 1).dropLast(6))
+            let uuid = suffix.hasPrefix("ShipIt.") ? String(suffix.dropFirst(7)) : suffix
+            if UUID(uuidString: uuid) != nil {
+              add(parent + "/" + name, kind: .bundleIdentifier, source: owner.info, references: owner.references)
+            }
+          }
         }
       }
       for directory in ["LaunchAgents", "LaunchDaemons"] {
@@ -444,6 +513,7 @@ enum ApplicationAuxiliaryEvidenceProducer {
       }
     }
     let preferences = homeDirectory + "/Library/Preferences/" + app.bundleID + ".plist"
+    let preferenceIdentity = try? DescriptorFileSystem.identity(at: preferences)
     if let bytes = try? SecureMetadataFile.read(path: preferences, limit: 1024 * 1024, ownerOnly: false),
       let dictionary = try? PropertyListSerialization.propertyList(from: bytes, format: nil) as? [String: Any]
     {
@@ -482,6 +552,12 @@ enum ApplicationAuxiliaryEvidenceProducer {
         }
       }
       directories(dictionary, depth: 0)
+    } else if preferenceIdentity != nil {
+      result.complete = false
+      result.issues.append(
+        ApplicationAuxiliaryIssue(
+          path: preferences, detail: "preferences-source-unavailable", bundleID: app.bundleID,
+          provenanceKind: .configuredDirectory))
     }
     let vendor = app.bundleID.split(separator: ".").dropFirst().first.map(String.init)
     if let vendor, vendor.count > 1, vendorExclusive, !isGeneralToolDirectory(vendor) {
@@ -837,8 +913,9 @@ final class ApplicationInstallerReceipts: Sendable {
       let plist = receiptDirectory + "/" + identifier + ".plist"
       let bom = receiptDirectory + "/" + identifier + ".bom"
       do {
-        if let record = cached[identifier] {
-          for source in record.sources { try source.validate() }
+        if let record = cached[identifier], record.entry != nil,
+          record.sources.allSatisfy({ (try? $0.validate()) != nil })
+        {
           return record
         }
         guard withinBudget, Self.validIdentifier(identifier) else { throw RelatedFailure.incompleteInventory }
@@ -948,7 +1025,7 @@ final class ApplicationInstallerReceipts: Sendable {
 
   private func directoryCensus() -> Census {
     census.withLock { cached in
-      if let cached { return cached }
+      if let cached, cached.complete, cached.sources.allSatisfy({ (try? $0.validate()) != nil }) { return cached }
       var result = Census(complete: complete && namespaceIsCurrent)
       var bytes = 0
       var observations: [String: ApplicationPathObservation] = [:]

@@ -83,11 +83,12 @@ final class DuplicateStore: ToolSummaryProviding {
   private(set) var preparationRefusals: [DuplicatePlanRefusal] = []
   var excludedDirectoryCount: Int { report?.excludedDirectoryCount ?? 0 }
   var cloudOnlyCount: Int { report?.cloudOnlyCount ?? 0 }
+  var additionalHardLinkCount: Int { report?.additionalHardLinkCount ?? 0 }
   var unreadableCount: Int { report?.unreadableCount ?? 0 }
   var excludedRoot: DuplicateScanExclusion? { report?.excludedRoot }
   /// File allocation cannot establish APFS shared extents, so this is never a free-space estimate.
   var estimatedFreedBytes: Int64? { nil }
-  var selectedSizeLabel: String { String(localized: "Size of selected copies") }
+  var selectedSizeLabel: String { String(localized: "Selected copy file size") }
 
   var homeDirectory: String { userPlanner.homeDirectory }
 
@@ -210,16 +211,26 @@ final class DuplicateStore: ToolSummaryProviding {
   }
 
   var toolSummary: ToolSummary {
-    let content = picture?.content ?? report.map(DuplicatePicture.init)
-    let bytes =
-      content?.groups.reduce(Int64(0)) { total, group in
-        let (amount, overflow) = group.logicalBytes.multipliedReportingOverflow(by: Int64(group.members.count))
-        let (sum, sumOverflow) = total.addingReportingOverflow(amount)
-        return overflow || sumOverflow ? Int64.max : sum
-      } ?? 0
+    guard let content = picture?.content ?? report.map(DuplicatePicture.init) else { return ToolSummary() }
+    let summary = Self.summary(for: content, observedAt: picture?.observedAt ?? scannedAt)
     return ToolSummary(
-      count: content?.groups.count ?? 0, logicalBytes: bytes,
-      observedAt: picture?.observedAt ?? scannedAt, partial: content?.partial == true || phase == .partial)
+      count: summary.count, logicalBytes: summary.logicalBytes,
+      observedAt: summary.observedAt, partial: summary.partial || phase == .partial)
+  }
+
+  /// Counts extra eligible copies, retaining one per group. Bytes describe file size, not reclaimable storage.
+  nonisolated static func summary(for content: DuplicatePicture, observedAt: Date? = nil) -> ToolSummary {
+    var count = 0
+    var bytes: Int64 = 0
+    for group in content.groups where group.members.allSatisfy({ $0.eligibility == .eligible }) {
+      let extraCopies = max(0, group.members.count - 1)
+      let (nextCount, countOverflow) = count.addingReportingOverflow(extraCopies)
+      count = countOverflow ? Int.max : nextCount
+      let (amount, productOverflow) = max(0, group.logicalBytes).multipliedReportingOverflow(by: Int64(extraCopies))
+      let (sum, sumOverflow) = bytes.addingReportingOverflow(amount)
+      bytes = productOverflow || sumOverflow ? Int64.max : sum
+    }
+    return ToolSummary(count: count, logicalBytes: bytes, observedAt: observedAt, partial: content.partial)
   }
 
   func refresh() {

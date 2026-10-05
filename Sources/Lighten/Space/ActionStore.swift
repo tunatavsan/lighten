@@ -62,17 +62,20 @@ struct ActionPresentation: Identifiable, Sendable {
   let permanentPlanBuilder: (@MainActor @Sendable () async -> Void)?
   let rejectedItems: [PlanRejection]
   let hasRunningApplications: Bool
+  let reviewNotes: [String]
 
   init(
     plan: ActionPlan, items: [ActionItemSummary],
     permanentPlanBuilder: (@MainActor @Sendable () async -> Void)? = nil,
-    rejectedItems: [PlanRejection] = [], hasRunningApplications: Bool = false
+    rejectedItems: [PlanRejection] = [], hasRunningApplications: Bool = false,
+    reviewNotes: [String] = []
   ) {
     self.plan = plan
     self.items = items
     self.permanentPlanBuilder = permanentPlanBuilder
     self.rejectedItems = rejectedItems
     self.hasRunningApplications = hasRunningApplications
+    self.reviewNotes = reviewNotes
   }
 
   var id: UUID { plan.id }
@@ -309,7 +312,8 @@ final class ActionStore {
   func present(
     plan: ActionPlan, items: [ActionItemSummary],
     permanentPlanBuilder: (@MainActor @Sendable () async -> Void)? = nil,
-    rejectedItems: [PlanRejection] = [], hasRunningApplications: Bool = false
+    rejectedItems: [PlanRejection] = [], hasRunningApplications: Bool = false,
+    reviewNotes: [String] = []
   ) {
     guard !busy, Set(plan.items.map(\.id)) == Set(items.map(\.id)),
       !preparingAlternate || pending?.plan.id == alternatePlanID
@@ -335,7 +339,7 @@ final class ActionStore {
           applicationGroup: summary.applicationGroup)
       },
       permanentPlanBuilder: plan.kind == .trash ? { @MainActor in } : nil,
-      rejectedItems: rejectedItems, hasRunningApplications: hasRunningApplications)
+      rejectedItems: rejectedItems, hasRunningApplications: hasRunningApplications, reviewNotes: reviewNotes)
   }
 
   func requestPermanent(_ presentation: ActionPresentation) async {
@@ -364,7 +368,7 @@ final class ActionStore {
     present(
       plan: plan, items: presentation.items.filter { paths.contains($0.path) },
       rejectedItems: presentation.rejectedItems + outcome.rejections,
-      hasRunningApplications: presentation.hasRunningApplications)
+      hasRunningApplications: presentation.hasRunningApplications, reviewNotes: presentation.reviewNotes)
   }
 
   func invalidatePending(expectedPlanID: UUID?) {

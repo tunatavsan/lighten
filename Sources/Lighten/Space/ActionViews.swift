@@ -49,6 +49,16 @@ struct ConfirmationView: View {
       .padding(20)
       Divider()
       List {
+        if !presentation.reviewNotes.isEmpty {
+          Section {
+            Text(presentation.reviewNotes.joined(separator: "\n"))
+              .font(.callout).foregroundStyle(LightenStyle.muted)
+              .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+              .accessibilityIdentifier("removal.review-notes")
+          } header: {
+            Text(String(localized: "Review notes"))
+          }
+        }
         ForEach(ConfirmationItemGroup.make(presentation.items)) { group in
           Section {
             ForEach(group.items, id: \.id) { item in
@@ -320,23 +330,23 @@ struct HistoryView: View {
                 LazyVStack(spacing: 0) {
                   // Newest first: the action just taken, and its Undo, are at the top.
                   ForEach((actions.history?.plans ?? []).reversed()) { plan in
-                    DisclosureGroup(
-                      isExpanded: Binding(
-                        get: { actions.expandedHistoryGroups.contains(plan.id) },
-                        set: { expanded in Task { await actions.setHistoryGroupExpanded(plan.id, expanded: expanded) } }
-                      )
-                    ) {
-                      if actions.loadingHistoryGroups.contains(plan.id) {
-                        ProgressView(String(localized: "Loading history details…"))
-                          .controlSize(.small)
-                      }
-                      if plan.detailsLoaded {
-                        ForEach(plan.items, id: \.itemID) { item in
-                          historyItem(item, plan: plan)
-                        }
-                      }
-                    } label: {
+                    let expanded = actions.expandedHistoryGroups.contains(plan.id)
+                    VStack(alignment: .leading, spacing: 0) {
                       HStack(spacing: 10) {
+                        Button {
+                          Task { await actions.setHistoryGroupExpanded(plan.id, expanded: !expanded) }
+                        } label: {
+                          Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .frame(width: 12, height: 24)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(
+                          expanded
+                            ? String(localized: "Hide history details") : String(localized: "Show history details")
+                        )
+                        .accessibilityIdentifier("history.group.\(plan.id.uuidString)")
                         VStack(alignment: .leading, spacing: 3) {
                           Text(title(plan))
                             .font(.system(size: 13, weight: .medium)).lineLimit(1)
@@ -358,6 +368,8 @@ struct HistoryView: View {
                             .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
                           }
                         }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("history.summary.\(plan.id.uuidString)")
                         Spacer(minLength: 5)
                         if plan.canUndo {
                           Button(String(localized: "Undo")) {
@@ -377,14 +389,29 @@ struct HistoryView: View {
                         )
                         .font(.system(size: 12)).monospacedDigit()
                         .frame(width: 90, alignment: .trailing)
+                        .accessibilityIdentifier("history.size.\(plan.id.uuidString)")
                         Text(status(plan.state))
                           .font(.system(size: 12)).foregroundStyle(statusColor(plan.state))
                           .frame(width: 105, alignment: .trailing)
+                          .accessibilityLabel(String(localized: "Status"))
+                          .accessibilityValue(status(plan.state))
+                          .accessibilityIdentifier("history.status.\(plan.id.uuidString)")
                       }
                       .accessibilityElement(children: .contain)
+                      if expanded {
+                        if actions.loadingHistoryGroups.contains(plan.id) {
+                          ProgressView(String(localized: "Loading history details…"))
+                            .controlSize(.small)
+                        }
+                        if plan.detailsLoaded {
+                          ForEach(plan.items, id: \.itemID) { item in
+                            historyItem(item, plan: plan)
+                          }
+                        }
+                      }
                     }
+                    .accessibilityElement(children: .contain)
                     .id(plan.id)
-                    .accessibilityIdentifier("history.group.\(plan.id.uuidString)")
                     .padding(.horizontal, 8).padding(.vertical, 7)
                     Divider()
                   }

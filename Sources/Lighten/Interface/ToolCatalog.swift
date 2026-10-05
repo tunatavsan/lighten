@@ -1,3 +1,4 @@
+import Foundation
 import LightenKit
 import SwiftUI
 
@@ -55,11 +56,60 @@ enum ToolCatalog {
   }
 
   static var gridEntries: [ToolCatalogEntry] { entries.filter { $0.id != .tools } }
+
+  /// Reads display-only pictures without opening a tool or starting discovery.
+  static func previousSummaries(
+    from pictures: ResultPictureStore, homeDirectory: String = NSHomeDirectory()
+  ) async -> [LightenSection: ToolSummary] {
+    let previous = await Task.detached(priority: .utility) {
+      (
+        clean: pictures.load(CleanPicture.self, named: "clean"),
+        duplicates: pictures.load(DuplicatePicture.self, named: "duplicates"),
+        apps: pictures.load(AppsPicture.self, named: "apps")
+      )
+    }.value
+    func total(_ values: [Int64]) -> Int64 {
+      values.reduce(0) { sum, amount in
+        let (next, overflow) = sum.addingReportingOverflow(max(0, amount))
+        return overflow ? Int64.max : next
+      }
+    }
+    var summaries: [LightenSection: ToolSummary] = [:]
+    if let clean = previous.clean {
+      summaries[.clean] = ToolSummary(
+        count: clean.content.rows.count + clean.content.relatedRows.count,
+        logicalBytes: total(
+          clean.content.rows.map(\.logicalBytes)
+            + clean.content.relatedRows.compactMap(\.logicalBytes)),
+        observedAt: clean.observedAt, partial: clean.content.partial)
+    }
+    if let duplicates = previous.duplicates {
+      summaries[.duplicates] = DuplicateStore.summary(for: duplicates.content, observedAt: duplicates.observedAt)
+    }
+    if let apps = previous.apps {
+      let installed = apps.content.rows.filter {
+        AppListScope.location(of: $0.path, homeDirectory: homeDirectory) == .installed
+      }
+      summaries[.apps] = ToolSummary(
+        count: installed.count, logicalBytes: total(installed.map { $0.logical.knownLowerBound }),
+        observedAt: apps.observedAt,
+        partial: !apps.content.inventoryComplete || installed.contains(where: \.partial))
+    }
+    return summaries
+  }
+
 }
 
 struct ToolPresentation {
   let phase: ToolPhase
   let summary: ToolSummary
+
+  init(phase: ToolPhase, summary: ToolSummary, previousSummary: ToolSummary? = nil) {
+    self.phase = phase
+    self.summary = phase == .idle && summary.observedAt == nil ? previousSummary ?? summary : summary
+  }
+
+  var isPreviousResult: Bool { phase == .idle && summary.observedAt != nil }
 
   var isWorking: Bool { phase == .scanning || phase == .preparing }
   var resultText: String {
@@ -74,6 +124,12 @@ struct ToolPresentation {
     guard !isWorking, phase != .failed, summary.observedAt != nil else { return resultText }
     if section == .apps {
       return String.localizedStringWithFormat(String(localized: "%lld applications"), summary.count)
+    }
+    if section == .duplicates {
+      let size = ByteCountFormatter.string(fromByteCount: summary.logicalBytes, countStyle: .file)
+      return String.localizedStringWithFormat(
+        summary.partial ? String(localized: "Copy file size: at least %@") : String(localized: "Copy file size: %@"),
+        size)
     }
     return resultText
   }
@@ -100,6 +156,9 @@ struct ToolSidebarRow: View {
           if let date = presentation.summary.observedAt { Text(date, style: .relative) }
         }
         .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        if presentation.isPreviousResult {
+          Text(String(localized: "Previous result")).font(.caption2).foregroundStyle(.secondary)
+        }
       }
     }
     .accessibilityElement(children: .combine)
@@ -114,31 +173,42 @@ struct ToolsGridView: View {
 
   var body: some View {
     ToolScreen(String(localized: "Tools")) {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-          Text(String(localized: "Choose a tool for your Mac"))
-            .font(.callout).foregroundStyle(.secondary)
-          LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 16)], spacing: 16) {
-            ForEach(ToolCatalog.gridEntries) { entry in
-              Button {
-                select(entry.id)
-              } label: {
-                ToolGridCard(entry: entry, presentation: presentations[entry.id])
-                  .padding(18).frame(maxWidth: .infinity, minHeight: 156, alignment: .topLeading)
-                  .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 14))
-                  .overlay {
-                    RoundedRectangle(cornerRadius: 14)
-                      .stroke(
-                        contrast == .increased ? Color.primary : LightenStyle.separator,
-                        lineWidth: contrast == .increased || reduceTransparency ? 1.5 : 0.5)
-                  }
-                  .contentShape(RoundedRectangle(cornerRadius: 14))
+      GeometryReader { geometry in
+        // Leave room for macOS's persistent vertical scroller.
+        let contentWidth = max(0, geometry.size.width - 20)
+        let columnCount = max(1, Int((contentWidth + 16) / 236))
+        let cardWidth = max(0, (contentWidth - CGFloat(columnCount - 1) * 16) / CGFloat(columnCount))
+        let columns = Array(repeating: GridItem(.fixed(cardWidth), spacing: 16), count: columnCount)
+        ScrollView {
+          VStack(alignment: .leading, spacing: 18) {
+            Text(String(localized: "Choose a tool for your Mac"))
+              .font(.callout).foregroundStyle(.secondary)
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+              ForEach(ToolCatalog.gridEntries) { entry in
+                Button {
+                  select(entry.id)
+                } label: {
+                  ToolGridCard(entry: entry, presentation: presentations[entry.id])
+                    .padding(18)
+                    .frame(maxWidth: .infinity, minHeight: 156, alignment: .topLeading)
+                    .frame(width: cardWidth, alignment: .topLeading)
+                    .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay {
+                      RoundedRectangle(cornerRadius: 14)
+                        .stroke(
+                          contrast == .increased ? Color.primary : LightenStyle.separator,
+                          lineWidth: contrast == .increased || reduceTransparency ? 1.5 : 0.5)
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
               }
-              .buttonStyle(.plain)
             }
           }
+          .padding(.vertical, 24)
+          .frame(width: contentWidth, alignment: .leading)
         }
-        .padding(.vertical, 24)
+        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
       }
     } toolbar: {
       EmptyView()
@@ -165,13 +235,16 @@ private struct ToolGridCard: View {
         if !presentation.isWorking, presentation.summary.observedAt != nil, entry.id != .apps {
           Text(
             String.localizedStringWithFormat(
-              entry.id == .duplicates ? String(localized: "%lld groups") : String(localized: "%lld items"),
+              entry.id == .duplicates ? String(localized: "%lld duplicate copies") : String(localized: "%lld items"),
               presentation.summary.count)
           )
           .font(.caption).foregroundStyle(.secondary)
         }
         if let date = presentation.summary.observedAt {
           Text(date, style: .relative).font(.caption).foregroundStyle(.secondary)
+        }
+        if presentation.isPreviousResult {
+          Text(String(localized: "Previous result")).font(.caption).foregroundStyle(.secondary)
         }
       }
     }

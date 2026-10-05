@@ -1332,7 +1332,15 @@ public struct RelatedDataService: Sendable {
   private func ownedDataClaims(
     _ context: AuthenticApplicationContext, cancelled: @Sendable () -> Bool = { false }
   ) -> [String: [ApplicationOwnedDataEvidence]] {
-    if let observed = context.observedDataClaims() { return observed }
+    let previous = context.observedDataClaims()
+    if let previous, (try? context.validateDataSources()) != nil,
+      !previous.values.joined().contains(where: { $0.provenance.kind == .liveProcess })
+    {
+      return previous
+    }
+    let originalSources = context.observedDataSources()
+    let changedSources = context.changedDataSourcePaths()
+    var complete = true
     var result: [String: [ApplicationOwnedDataEvidence]] = [:]
     var seen: Set<String> = []
     var sources: [String: ApplicationPathObservation] = [:]
@@ -1351,21 +1359,44 @@ public struct RelatedDataService: Sendable {
       if Task.isCancelled || cancelled() { return result }
       for source in observed.sources where sources[source.path] == nil { sources[source.path] = source }
       issues += observed.issues
+      if !observed.complete {
+        complete = false
+        // Keep the last positive claims as vetoes until their changed source
+        // is readable again. An incomplete refresh cannot establish absence.
+        for (dataPath, claims) in previous ?? [:] {
+          result[dataPath, default: []] += claims.filter { $0.packagePath == physical }
+        }
+      }
       for evidence in observed.evidence where evidence.bundleID == app.bundleID {
         result[evidence.dataPath, default: []].append(evidence)
         context.recordDataEvidence(evidence)
       }
     }
     if Task.isCancelled || cancelled() { return result }
+    let unresolvedSources = changedSources.subtracting(sources.keys)
+    if !unresolvedSources.isEmpty {
+      complete = false
+      for (dataPath, claims) in previous ?? [:] {
+        let known = Set((result[dataPath] ?? []).map { $0.packagePath })
+        result[dataPath, default: []] += claims.filter { !known.contains($0.packagePath) }
+      }
+      for source in originalSources where unresolvedSources.contains(source.path) { sources[source.path] = source }
+      issues += unresolvedSources.sorted().map {
+        ApplicationAuxiliaryIssue(path: $0, detail: "changed-data-source-not-refreshed")
+      }
+    }
     context.recordDataClaims(
-      result, sources: sources.values.sorted { $0.path < $1.path }, issues: issues)
+      result, sources: sources.values.sorted { $0.path < $1.path }, issues: issues, complete: complete,
+      replacing: true)
     return context.observedDataClaims() ?? result
   }
 
-  func prepareDataEvidence(context: AuthenticApplicationContext) async {
-    _ = await ApplicationEvidenceWork.perform(cancelledValue: false) { cancellation in
+  @discardableResult
+  func prepareDataEvidence(context: AuthenticApplicationContext) async -> Bool {
+    await ApplicationEvidenceWork.perform(cancelledValue: false) { cancellation in
       _ = self.ownedDataClaims(context, cancelled: { cancellation.isCancelled })
-      return !cancellation.isCancelled
+      return !cancellation.isCancelled && context.observedDataClaims() != nil
+        && (try? context.validateDataSources()) != nil
     }
   }
 
@@ -1373,7 +1404,10 @@ public struct RelatedDataService: Sendable {
   private func scopedDataContext(
     app: InstalledApplication, base: AuthenticApplicationContext, cancelled: @Sendable () -> Bool
   ) -> AuthenticApplicationContext {
-    if base.observedDataClaims() != nil, (try? base.validateDataSources()) != nil { return base }
+    if base.observedDataClaims() != nil {
+      _ = ownedDataClaims(base, cancelled: cancelled)
+      return base
+    }
     var inventory = base.inventory
     inventory.ownershipComplete = false
     let context = AuthenticApplicationContext(
@@ -1387,7 +1421,8 @@ public struct RelatedDataService: Sendable {
     guard !cancelled() else { return context }
     let claims = Dictionary(grouping: observed.evidence, by: \.dataPath)
     for evidence in observed.evidence { context.recordDataEvidence(evidence) }
-    context.recordDataClaims(claims, sources: observed.sources, issues: observed.issues)
+    context.recordDataClaims(
+      claims, sources: observed.sources, issues: observed.issues, complete: observed.complete)
     return context
   }
 
@@ -1631,9 +1666,13 @@ public struct RelatedDataService: Sendable {
     let selected = initialInventory(for: app, listing: installed)
     let physical = app.linkTarget ?? app.path
     let signature = signatureCache.cachedMetadata(at: physical)
+    let live = await ApplicationEvidenceWork.perform(
+      cancelledValue: ApplicationLiveDataObservation(records: [], complete: false), selected: true
+    ) { _ in self.liveData() }
+    guard !Task.isCancelled else { return ApplicationRelatedReview(application: app, candidates: []) }
     let framework = ApplicationFrameworkEvidenceProducer.discover(packagePath: physical, homeDirectory: homeDirectory)
     let auxiliary = ApplicationAuxiliaryEvidenceProducer.discover(
-      app: app, homeDirectory: homeDirectory, frameworkDirectories: framework.evidence.map(\.dataPath))
+      app: app, homeDirectory: homeDirectory, live: live, frameworkDirectories: framework.evidence.map(\.dataPath))
     let reference = ApplicationReferenceEvidenceProducer.discover(
       app: app, homeDirectory: homeDirectory, directories: referenceDirectories,
       signingMetadata: { signatureCache.cachedMetadata(at: $0) })
@@ -1647,14 +1686,15 @@ public struct RelatedDataService: Sendable {
     let candidates = await discover(
       inventory: selected, only: app,
       signatures: signature.map { [physical: $0] } ?? [:],
-      initialClaims: claims, allowReceipts: false
+      initialClaims: claims, initialLiveObservation: live, allowReceipts: false
     ) { partial in
       progress?(
         ApplicationRelatedReview(
           application: app, candidates: merged(partial),
           phase: .measuring(completed: partial.filter { $0.observation != nil }.count, total: partial.count)))
     }
-    return ApplicationRelatedReview(application: app, candidates: merged(candidates), phase: .initialComplete)
+    return ApplicationRelatedReview(
+      application: app, candidates: merged(candidates), phase: .initialComplete, openFilesComplete: live.complete)
   }
 
   func review(
@@ -1665,6 +1705,9 @@ public struct RelatedDataService: Sendable {
     else { return ApplicationRelatedReview(application: app, candidates: [], ownershipPending: true, phase: .enriched) }
     // Build global nonexact claims on the session context once, before an
     // outside-root or alias selection derives its own context from it.
+    _ = await ApplicationEvidenceWork.perform(
+      cancelledValue: ApplicationLiveDataObservation(records: [], complete: false), selected: true
+    ) { _ in context.metadata.ownedData.liveObservation(using: self.liveData, fresh: true) }
     let evidenceContext: AuthenticApplicationContext
     if scopedOnly {
       evidenceContext = await ApplicationEvidenceWork.perform(cancelledValue: context, selected: true) { cancellation in
@@ -1694,7 +1737,8 @@ public struct RelatedDataService: Sendable {
       ownershipPending: !selected.inventory.ownershipComplete,
       registrationReport: selected.inventory.registrationReport, phase: .enriched,
       openFilesComplete: selected.metadata.ownedData.liveObservation(using: liveData).complete,
-      globalEvidencePending: globalEvidencePending, globalEvidenceUnavailable: globalEvidenceUnavailable)
+      globalEvidencePending: globalEvidencePending,
+      globalEvidenceUnavailable: globalEvidenceUnavailable || (try? selected.validateDataSources()) == nil)
   }
 
   func discover(context: AuthenticApplicationContext) async -> [RelatedDataCandidate] {
@@ -1713,6 +1757,7 @@ public struct RelatedDataService: Sendable {
     signatures suppliedSignatures: [String: ApplicationSigningMetadata]? = nil,
     authenticatedContext: AuthenticApplicationContext? = nil,
     initialClaims: [String: [ApplicationOwnedDataEvidence]]? = nil,
+    initialLiveObservation: ApplicationLiveDataObservation? = nil,
     allowReceipts: Bool = true,
     progress: (@Sendable ([RelatedDataCandidate]) -> Void)? = nil
   ) async
@@ -1748,7 +1793,7 @@ public struct RelatedDataService: Sendable {
         )
       }
     } else {
-      evidence = (initialClaims ?? [:], false, nil)
+      evidence = (initialClaims ?? [:], false, initialLiveObservation)
     }
     guard !Task.isCancelled else { return [] }
     let (ownedClaims, dataSourcesValid, liveSnapshot) = evidence
@@ -2005,7 +2050,18 @@ public struct RelatedDataService: Sendable {
             ownerPaths: Array(Set(liveSharingOwners + [selectedOwner.linkTarget ?? selectedOwner.path])).sorted(),
             nextStep: "review-other-installations", detail: nil)
         ]
-      } else if Set(claims.map(\.packagePath)).count > 1 {
+      } else if location != .groupContainers, claimScoped, sameIdentifierOwners.count > 1 {
+        classification = .shared
+        reason = .sharedInstalledData
+        evidence = [
+          RelatedOwnershipRefusalEvidence(
+            candidatePath: path, bundleID: bundleID, reason: .sharedInstalledOwners,
+            ownerPaths: Array(Set(sameIdentifierOwners.map { $0.linkTarget ?? $0.path })).sorted(),
+            nextStep: "review-other-installations", detail: nil)
+        ]
+      } else if !claims.isEmpty,
+        Set(claims.map(\.packagePath) + owners.map { $0.linkTarget ?? $0.path }).count > 1
+      {
         if let context = authenticatedContext, let owner = owners.first,
           let shared = sharedOwnerEvidence(
             app: owner, candidatePath: path, context: context,
@@ -2018,15 +2074,6 @@ public struct RelatedDataService: Sendable {
           classification = .uncertain
           reason = .ownershipUnavailable
         }
-      } else if location != .groupContainers, claimScoped, sameIdentifierOwners.count > 1 {
-        classification = .shared
-        reason = .sharedInstalledData
-        evidence = [
-          RelatedOwnershipRefusalEvidence(
-            candidatePath: path, bundleID: bundleID, reason: .sharedInstalledOwners,
-            ownerPaths: Array(Set(sameIdentifierOwners.map { $0.linkTarget ?? $0.path })).sorted(),
-            nextStep: "review-other-installations", detail: nil)
-        ]
       } else if !owners.isEmpty {
         classification = strength == .weak ? .unprovenNameOnly : .installed
         reason = strength == .weak ? .nameOnly : strength == .medium ? .mediumMatch : .installed
@@ -3473,10 +3520,10 @@ public struct RelatedDataService: Sendable {
         nextStep: "review-other-installations", detail: nil)
     }
     let claims = context.observedDataClaims()?[candidatePath] ?? []
-    if Set(claims.map(\.packagePath)).count > 1 {
+    if Set(claims.map(\.packagePath) + [app.linkTarget ?? app.path]).count > 1 {
       do {
         guard sourcesValid else { throw RelatedFailure.changedItem }
-        var physical: Set<String> = []
+        var physical: Set<String> = [app.linkTarget ?? app.path]
         for claim in claims {
           try claim.validate()
           guard !Self.isCachedApplication(claim.packagePath, homeDirectory: homeDirectory),

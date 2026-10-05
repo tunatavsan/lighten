@@ -188,7 +188,7 @@ struct ApplicationReceiptEvidenceTests {
     #expect(!observed.issues(bundleID: fixture.identifier).isEmpty)
   }
 
-  @Test("A changed cached receipt cannot bind old leaf paths to replacement metadata")
+  @Test("A changed cached receipt rereads only replacement paths while old execution evidence stays invalid")
   func changedCachedPrefix() throws {
     let fixture = try ReceiptFixture()
     defer { fixture.cleanup() }
@@ -202,16 +202,24 @@ struct ApplicationReceiptEvidenceTests {
         calls.withLock { $0 += 1 }
         return args == ["--files", fixture.identifier] ? Data("own\n".utf8) : nil
       })
-    #expect(fixture.discover(observed).evidence.map(\.dataPath) == [leaf])
+    let original = fixture.discover(observed)
+    #expect(original.evidence.map(\.dataPath) == [leaf])
+    let originalEvidence = try #require(original.evidence.first)
+    try originalEvidence.validate()
     let movedPrefix = fixture.home + "/ReplacementPayload"
     try fixture.directory(movedPrefix)
+    let replacementLeaf = movedPrefix + "/own"
+    try Data("replacement leaf".utf8).write(to: URL(fileURLWithPath: replacementLeaf))
     try fixture.plist(
       ["PackageIdentifier": fixture.identifier, "InstallPrefixPath": movedPrefix],
       at: fixture.receipts + "/" + fixture.identifier + ".plist")
     let result = fixture.discover(observed)
-    #expect(result.evidence.isEmpty)
-    #expect(!result.issues.isEmpty)
-    #expect(calls.withLock { $0 } == 1)
+    #expect(result.evidence.map(\.dataPath) == [replacementLeaf])
+    #expect(!result.evidence.contains { $0.dataPath == leaf })
+    #expect(result.issues.isEmpty)
+    #expect(calls.withLock { $0 } == 2)
+    #expect(throws: (any Error).self) { try originalEvidence.validate() }
+    try #require(result.evidence.first).validate()
   }
 
   @Test("Fallback metadata cannot be bound to a BOM replaced during its query")
@@ -226,17 +234,20 @@ struct ApplicationReceiptEvidenceTests {
     let observed = ApplicationInstallerReceipts(
       identifiers: [fixture.identifier], complete: true, receiptDirectory: fixture.receipts,
       query: { args, _, _ in
-        calls.withLock { $0.append(args) }
+        let attempt = calls.withLock {
+          $0.append(args)
+          return $0.count
+        }
         guard args == ["--pkg-info-plist", fixture.identifier] else { return Data("own\n".utf8) }
         do {
-          try Data("Replacement BOM from a different observation".utf8)
+          try Data(("Replacement BOM from a different observation" + String(repeating: "x", count: attempt)).utf8)
             .write(to: URL(fileURLWithPath: fixture.receipts + "/" + fixture.identifier + ".bom"))
         } catch { Issue.record(error) }
         return info
       })
     #expect(observed.entries(bundleID: fixture.identifier).isEmpty)
     #expect(!observed.issues(bundleID: fixture.identifier).isEmpty)
-    #expect(calls.withLock { $0 } == [["--pkg-info-plist", fixture.identifier]])
+    #expect(calls.withLock { $0 } == Array(repeating: ["--pkg-info-plist", fixture.identifier], count: 2))
   }
 
   @Test("Incomplete and expired cross-package censuses keep directories visible without claiming exclusivity")

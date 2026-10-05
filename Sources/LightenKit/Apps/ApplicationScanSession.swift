@@ -217,6 +217,7 @@ final class AuthenticApplicationContext: Sendable {
     let issues: [ApplicationAuxiliaryIssue]
     let packages: [String: [ApplicationPathObservation]]
     let independentSources: [ApplicationPathObservation]
+    let complete: Bool
   }
   private let dataClaims = Mutex<DataClaims?>(nil)
   private let dataSourceValidations = Mutex(0)
@@ -295,7 +296,7 @@ final class AuthenticApplicationContext: Sendable {
 
   func recordDataClaims(
     _ claims: [String: [ApplicationOwnedDataEvidence]], sources: [ApplicationPathObservation],
-    issues: [ApplicationAuxiliaryIssue]
+    issues: [ApplicationAuxiliaryIssue], complete: Bool = true, replacing: Bool = false
   ) {
     let packagePaths = Set(inventory.applications.map { $0.linkTarget ?? $0.path })
     var packages: [String: [ApplicationPathObservation]] = [:]
@@ -314,10 +315,21 @@ final class AuthenticApplicationContext: Sendable {
       if let owner { packages[owner, default: []].append(source) } else { independent.append(source) }
     }
     dataClaims.withLock {
-      if $0 == nil {
+      if $0 == nil || replacing {
         $0 = DataClaims(
-          claims: claims, sources: sources, issues: issues, packages: packages, independentSources: independent)
+          claims: claims, sources: sources, issues: issues, packages: packages, independentSources: independent,
+          complete: complete)
       }
+    }
+  }
+
+  func observedDataSources() -> [ApplicationPathObservation] {
+    dataClaims.withLock { $0?.sources ?? [] }
+  }
+
+  func changedDataSourcePaths() -> Set<String> {
+    dataClaims.withLock { observed in
+      Set((observed?.sources ?? []).filter { (try? $0.validate()) == nil }.map(\.path))
     }
   }
 
@@ -329,6 +341,7 @@ final class AuthenticApplicationContext: Sendable {
     dataSourceValidations.withLock { $0 += 1 }
     let observed = dataClaims.withLock { $0 }
     guard let observed else { return }
+    guard observed.complete else { throw RelatedFailure.incompleteInventory }
     for (package, nodes) in observed.packages where package != excludingPackage {
       guard let root = nodes.first(where: { $0.path == package })?.identity else {
         throw RelatedFailure.incompleteInventory
@@ -421,9 +434,13 @@ public actor ApplicationScanSession {
   private var metadata = ApplicationContextMetadata()
   private var contextRevision = UUID()
   private var completedContext: AuthenticApplicationContext?
-  private var dataEvidence: Task<Void, Never>?
+  private var dataEvidence: Task<Bool, Never>?
   private var dataEvidenceUnavailable = false
+  private var dataEvidenceID = UUID()
+  private var evidenceRetry: Task<Bool, Never>?
+  private var evidenceRetryFinished = false
   private let evidenceTimeout: @Sendable () async -> Void
+  private let evidenceRetryDelay: @Sendable () async -> Void
   private var ownership: Task<AuthenticApplicationContext, any Error>?
   private var listing: Task<BundleInventory, Never>?
   private var displayListingTask: Task<[ApplicationListEntry], Never>?
@@ -431,9 +448,12 @@ public actor ApplicationScanSession {
   private var relatedCandidates: Task<[RelatedDataCandidate], Never>?
   private var enrichments: [Task<Void, Never>] = []
   private var initialReviews: [Task<ApplicationRelatedReview, Never>] = []
-  private var selectedReviewID: UUID?
-  private var selectedInitial: Task<ApplicationRelatedReview, Never>?
-  private var selectedEnrichment: Task<Void, Never>?
+  private struct ReviewWork {
+    let requestID: UUID
+    let initial: Task<ApplicationRelatedReview, Never>
+    let enrichment: Task<Void, Never>
+  }
+  private var reviewWork: [String: ReviewWork] = [:]
   private var continuation: AsyncStream<ApplicationDiscovery.Event>.Continuation?
   private let activity = ApplicationSessionActivity()
   private var cancelled = false
@@ -446,7 +466,8 @@ public actor ApplicationScanSession {
     lightweightListing: ApplicationListing.Collector? = nil,
     measurement: @escaping @Sendable (String, String) async -> ApplicationDiscovery.Measurement = ApplicationDiscovery
       .measure,
-    evidenceTimeout: @escaping @Sendable () async -> Void = { try? await Task.sleep(for: .seconds(30)) }
+    evidenceTimeout: @escaping @Sendable () async -> Void = { try? await Task.sleep(for: .seconds(30)) },
+    evidenceRetryDelay: @escaping @Sendable () async -> Void = { try? await Task.sleep(for: .seconds(2)) }
   ) {
     self.related = related
     self.uptime = uptime
@@ -456,6 +477,7 @@ public actor ApplicationScanSession {
       }
     self.measurement = measurement
     self.evidenceTimeout = evidenceTimeout
+    self.evidenceRetryDelay = evidenceRetryDelay
   }
 
   public func events(includeAllRelated: Bool = false) -> AsyncStream<ApplicationDiscovery.Event> {
@@ -573,6 +595,7 @@ public actor ApplicationScanSession {
   private func prepareDataEvidence(context: AuthenticApplicationContext) {
     guard dataEvidence == nil, !cancelled else { return }
     let service = related
+    dataEvidenceID = UUID()
     dataEvidence = Task.detached(priority: .utility) { await service.prepareDataEvidence(context: context) }
   }
 
@@ -580,13 +603,14 @@ public actor ApplicationScanSession {
     guard !dataEvidenceUnavailable else { return false }
     guard let evidence = dataEvidence else { return false }
     let revision = contextRevision
+    let evidenceID = dataEvidenceID
     let context = completedContext
     let timeout = evidenceTimeout
     let completion = AsyncStream<Bool>.makeStream()
     let observed = Task {
-      await evidence.value
+      let complete = await evidence.value
       guard !Task.isCancelled else { return }
-      completion.continuation.yield(true)
+      completion.continuation.yield(complete)
       completion.continuation.finish()
     }
     let deadline = Task {
@@ -601,8 +625,9 @@ public actor ApplicationScanSession {
     }
     var iterator = completion.stream.makeAsyncIterator()
     let completed = await iterator.next() == true
-    guard !Task.isCancelled, revision == contextRevision else { return false }
+    guard !Task.isCancelled, revision == contextRevision, evidenceID == dataEvidenceID else { return false }
     let finished = completed && context?.observedDataClaims() != nil
+    if evidenceRetry != nil { evidenceRetryFinished = true }
     if !finished {
       dataEvidenceUnavailable = true
       evidence.cancel()
@@ -610,8 +635,44 @@ public actor ApplicationScanSession {
     return finished
   }
 
+  private func retryDataEvidence(context: AuthenticApplicationContext, revision: UUID) async -> Bool {
+    guard !cancelled, revision == contextRevision else { return false }
+    if let evidenceRetry { return await evidenceRetry.value }
+    let delay = evidenceRetryDelay
+    let retry = Task.detached(priority: .utility) { [weak self] in
+      await delay()
+      guard !Task.isCancelled, let self else { return false }
+      return await self.beginDataEvidenceRetry(context: context, revision: revision)
+    }
+    evidenceRetry = retry
+    return await retry.value
+  }
+
+  private func beginDataEvidenceRetry(context: AuthenticApplicationContext, revision: UUID) -> Bool {
+    guard !cancelled, revision == contextRevision else { return false }
+    dataEvidence?.cancel()
+    dataEvidence = nil
+    dataEvidenceUnavailable = false
+    evidenceRetryFinished = false
+    prepareDataEvidence(context: context)
+    return true
+  }
+
+  /// These bounded display observations are leads. Relevant registration and
+  /// metadata are checked by the selected claim's own discovery path.
+  private func selectedListing() async -> BundleInventory {
+    let entries = await displayListing()
+    return BundleInventory(
+      applications: entries.compactMap { entry in
+        guard let bundleID = entry.bundleID, RelatedDataService.validBundleID(bundleID) else { return nil }
+        return InstalledApplication(bundleID: bundleID, path: entry.path, version: entry.version)
+      },
+      unidentifiedPaths: entries.filter { $0.bundleID == nil }.map(\.path), complete: false, observedAt: Date(),
+      ownershipComplete: false, installedRootsComplete: false)
+  }
+
   private func scopedContext(app: InstalledApplication) async -> AuthenticApplicationContext {
-    let listing = await installedListing()
+    let listing = await selectedListing()
     let metadata = self.metadata
     let source = completedContext
     let service = related
@@ -628,10 +689,13 @@ public actor ApplicationScanSession {
     listing?.cancel()
     relatedCandidates?.cancel()
     dataEvidence?.cancel()
+    evidenceRetry?.cancel()
     ownership = nil
     listing = nil
     relatedCandidates = nil
     dataEvidence = nil
+    evidenceRetry = nil
+    evidenceRetryFinished = false
     dataEvidenceUnavailable = false
     completedContext = nil
     metadata = ApplicationContextMetadata()
@@ -655,9 +719,14 @@ public actor ApplicationScanSession {
   ) async throws -> ApplicationRelatedReview? {
     try Task.checkCancellation()
     guard !cancelled else { throw CancellationError() }
-    selectedInitial?.cancel()
-    selectedEnrichment?.cancel()
-    selectedReviewID = requestID
+    if dataEvidenceUnavailable && evidenceRetryFinished {
+      evidenceRetry = nil
+      evidenceRetryFinished = false
+    }
+    if let old = reviewWork.removeValue(forKey: path) {
+      old.initial.cancel()
+      old.enrichment.cancel()
+    }
     let service = related
     // Metadata only: neither package measurement nor owner collection precedes
     // the selected application's first standard-domain observation.
@@ -670,7 +739,7 @@ public actor ApplicationScanSession {
       return await service.initialReview(
         for: app,
         listing: {
-          if let activeSession { return await activeSession.installedListing() }
+          if let activeSession { return await activeSession.selectedListing() }
           return service.installedListing()
         }
       ) { review in
@@ -682,8 +751,7 @@ public actor ApplicationScanSession {
       }
     }
     initialReviews.append(initial)
-    selectedInitial = initial
-    if initialReviews.count > 32 { initialReviews.removeFirst().cancel() }
+    if initialReviews.count > 32 { initialReviews.removeFirst() }
     let task = Task.detached(priority: .utility) { [weak self] in
       guard let self else { return }
       var ready = shallowReady.stream.makeAsyncIterator()
@@ -717,10 +785,23 @@ public actor ApplicationScanSession {
       progress?(enriched)
       await self.publish(
         .related(path: path, candidates: enriched.candidates, ownershipPending: enriched.ownershipPending))
+      if !finished || enriched.globalEvidenceUnavailable {
+        guard await self.retryDataEvidence(context: context, revision: revision), !Task.isCancelled,
+          await self.isActive
+        else { return }
+        let recovered = await self.waitForDataEvidence()
+        guard !Task.isCancelled, await self.isActive, await self.contextRevision == revision else { return }
+        let retried = await service.review(
+          for: app, context: context, scopedOnly: true, globalEvidenceUnavailable: !recovered)
+        guard !Task.isCancelled, await self.isActive else { return }
+        progress?(retried)
+        await self.publish(
+          .related(path: path, candidates: retried.candidates, ownershipPending: retried.ownershipPending))
+      }
     }
     enrichments.append(task)
-    selectedEnrichment = task
-    if enrichments.count > 32 { enrichments.removeFirst().cancel() }
+    reviewWork[path] = ReviewWork(requestID: requestID, initial: initial, enrichment: task)
+    if enrichments.count > 32 { enrichments.removeFirst() }
     let review = await withTaskCancellationHandler {
       await initial.value
     } onCancel: {
@@ -733,10 +814,11 @@ public actor ApplicationScanSession {
   }
 
   public func cancelSelectedReview(requestID: UUID) {
-    guard selectedReviewID == requestID else { return }
-    selectedInitial?.cancel()
-    selectedEnrichment?.cancel()
-    selectedReviewID = nil
+    guard let path = reviewWork.first(where: { $0.value.requestID == requestID })?.key,
+      let work = reviewWork.removeValue(forKey: path)
+    else { return }
+    work.initial.cancel()
+    work.enrichment.cancel()
   }
 
   /// A native drop/navigation report uses this session's cheap listing and
@@ -863,13 +945,19 @@ public actor ApplicationScanSession {
     worker?.cancel()
     ownership?.cancel()
     dataEvidence?.cancel()
+    evidenceRetry?.cancel()
     listing?.cancel()
     displayListingTask?.cancel()
     relatedCandidates?.cancel()
     for task in initialReviews { task.cancel() }
     initialReviews.removeAll()
     for task in enrichments { task.cancel() }
-    let pending = enrichments
+    for work in reviewWork.values {
+      work.initial.cancel()
+      work.enrichment.cancel()
+    }
+    let pending = enrichments + reviewWork.values.map(\.enrichment)
+    reviewWork = [:]
     enrichments.removeAll()
     continuation?.finish()
     continuation = nil

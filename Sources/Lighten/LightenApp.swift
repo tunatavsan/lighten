@@ -42,6 +42,7 @@ private struct LightenRootView: View {
   @State private var apps = AppsStore()
   @State private var feedback = ActionFeedbackState()
   @State private var showingWelcome = false
+  @State private var previousSummaries: [LightenSection: ToolSummary] = [:]
 
   private var presentations: [LightenSection: ToolPresentation] {
     var spacePhase: ToolPhase {
@@ -60,9 +61,12 @@ private struct LightenRootView: View {
       partial: space.rootSummary?.partial == true || spacePhase == .partial)
     return [
       .space: ToolPresentation(phase: spacePhase, summary: spaceSummary),
-      .clean: ToolPresentation(phase: clean.phase, summary: clean.toolSummary),
-      .duplicates: ToolPresentation(phase: duplicates.phase, summary: duplicates.toolSummary),
-      .apps: ToolPresentation(phase: apps.phase, summary: apps.toolSummary),
+      .clean: ToolPresentation(
+        phase: clean.phase, summary: clean.toolSummary, previousSummary: previousSummaries[.clean]),
+      .duplicates: ToolPresentation(
+        phase: duplicates.phase, summary: duplicates.toolSummary,
+        previousSummary: previousSummaries[.duplicates]),
+      .apps: ToolPresentation(phase: apps.phase, summary: apps.toolSummary, previousSummary: previousSummaries[.apps]),
     ]
   }
 
@@ -119,6 +123,7 @@ private struct LightenRootView: View {
     }
     .sheet(isPresented: $showingWelcome) { FileAccessWelcome(access: access, preferences: onboarding) }
     .task { await prepareShell() }
+    .task { await loadPreviousSummaries() }
   }
 
   private func showActionFeedback() {
@@ -128,6 +133,12 @@ private struct LightenRootView: View {
     feedback.show(
       planID: result.planID, kind: kind,
       appliedCount: result.items.filter { $0.outcome == .applied }.count, message: message)
+  }
+
+  private func loadPreviousSummaries() async {
+    let loaded = await ToolCatalog.previousSummaries(from: ResultPictureStore())
+    guard !Task.isCancelled else { return }
+    previousSummaries = loaded
   }
 
   private func prepareShell() async {

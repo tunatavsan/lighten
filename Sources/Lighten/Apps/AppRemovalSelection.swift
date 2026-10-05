@@ -5,6 +5,10 @@ enum AppSelectionIntent: Equatable, Sendable {
   case single, toggle, range
 }
 
+enum AppEvidenceReviewStatus: Equatable, Sendable {
+  case checking, complete, unavailable
+}
+
 struct AppRemovalSelection: Sendable {
   var rootIdentity: FileIdentity?
   var bundleID: String?
