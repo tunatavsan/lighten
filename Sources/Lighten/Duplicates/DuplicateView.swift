@@ -31,117 +31,85 @@ struct DuplicateView: View {
   }
 
   var body: some View {
-    LegacyToolScreen(String(localized: "Duplicates")) {
-      VStack(alignment: .leading, spacing: 12) {
-        Text(String(localized: "Exact local file copies in a folder you choose"))
-          .foregroundStyle(LightenStyle.muted)
-        if let folder = store.folderPath {
-          Label(folder, systemImage: "folder")
-            .font(.callout).foregroundStyle(.secondary)
-            .lineLimit(1).truncationMode(.middle).help(folder)
-        }
-        if store.busy {
-          ToolScanProgress(
-            status: store.checkingPreviousResult
-              ? String(localized: "Verifying previous copies") : String(localized: "Scanning and comparing files"),
-            count: store.scanned, bytes: store.scannedLogicalBytes)
-          Text(String.localizedStringWithFormat(String(localized: "%lld files compared"), Int64(store.compared)))
-            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            .contentTransition(reduceMotion ? .identity : .numericText())
-        } else if let date = store.picture?.observedAt ?? store.scannedAt {
-          Text(String(localized: "Last scan") + ": " + date.formatted())
-            .font(.caption).foregroundStyle(.secondary)
-        }
-        Divider()
-        ScrollView {
-          LazyVStack(alignment: .leading, spacing: 12) {
-            scanDetails
-            if store.needsRescan {
-              emptyState(
-                title: String(localized: "Scan is out of date after this operation"),
-                detail: String(localized: "Scan again to refresh duplicate groups before another action."))
-            } else if store.excludedRoot != nil {
-              emptyState(
-                title: String(localized: "This folder is outside duplicate scanning"),
-                detail: String(localized: "Choose another folder or review duplicate scanning settings."))
-            } else if store.picture != nil {
-              Text(String(localized: "Previous result. Selecting copies verifies these files again."))
-                .font(.caption).foregroundStyle(.secondary)
-              if pictureGroups.isEmpty {
-                emptyState(
-                  title: searchText.isEmpty
-                    ? String(localized: "No exact copies found") : String(localized: "No matching groups"),
-                  detail: String(localized: "Choose a folder or scan again to check for new copies.")
-                )
-                .background(DuplicatePictureDrawProbe(didDraw: store.pictureDidDraw).allowsHitTesting(false))
-              } else {
-                ForEach(pictureGroups) { group in
-                  pictureGroupCard(group)
-                    .background(DuplicatePictureDrawProbe(didDraw: store.pictureDidDraw).allowsHitTesting(false))
-                }
+    ToolScreen(String(localized: "Duplicates"), subtitle: subtitle) {
+      ScrollView {
+        VStack(alignment: .leading, spacing: Theme.Space.l) {
+          header
+          if store.needsRescan {
+            EmptyState(
+              symbol: "arrow.clockwise.circle", title: String(localized: "Scan is out of date after this operation"),
+              message: String(localized: "Scan again to refresh duplicate groups before another action."),
+              tint: Theme.Palette.toolDuplicates
+            ) {
+              if let path = store.folderPath {
+                Button(String(localized: "Scan again")) { scanLocation(path) }.buttonStyle(.hero)
               }
-            } else if store.report == nil && !store.busy {
-              emptyState(
-                title: String(localized: "Choose a folder to compare"),
-                detail: String(localized: "No files are selected for removal by default."))
-            } else if groups.isEmpty && !store.busy {
-              emptyState(
-                title: searchText.isEmpty
-                  ? String(localized: "No exact copies found") : String(localized: "No matching groups"),
-                detail: String(localized: "Choose a folder or scan again to check for new copies."))
-            } else {
-              ForEach(groups) { group in groupCard(group) }
             }
-            ActionFeedbackView(actions: actions)
+          } else if store.excludedRoot != nil {
+            EmptyState(
+              symbol: "folder.badge.minus", title: String(localized: "This folder is outside duplicate scanning"),
+              message: String(localized: "Choose another folder or review duplicate scanning settings."),
+              tint: Theme.Palette.toolDuplicates)
+          } else if store.picture != nil {
+            if pictureGroups.isEmpty {
+              noCopies
+                .background(DuplicatePictureDrawProbe(didDraw: store.pictureDidDraw).allowsHitTesting(false))
+            } else {
+              ForEach(pictureGroups) { group in
+                pictureGroupCard(group)
+                  .background(DuplicatePictureDrawProbe(didDraw: store.pictureDidDraw).allowsHitTesting(false))
+              }
+            }
+          } else if store.report == nil && !store.busy {
+            EmptyState(
+              symbol: "doc.on.doc", title: String(localized: "Choose a folder to compare"),
+              message: String(localized: "No files are selected for removal by default."),
+              tint: Theme.Palette.toolDuplicates
+            ) {
+              Button(String(localized: "Choose folder")) { chooseFolder() }.buttonStyle(.hero)
+            }
+          } else if groups.isEmpty && !store.busy {
+            noCopies
+          } else {
+            ForEach(groups) { group in groupCard(group) }
           }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.vertical, 4)
+          ActionFeedbackView(actions: actions)
         }
-        .frame(minHeight: 0, maxHeight: .infinity)
-        Divider()
-        Text(
-          String.localizedStringWithFormat(
-            String(localized: "%lld groups · %lld copies"), Int64(store.selectedGroupCount),
-            Int64(store.selectedCopyCount))
-        )
-        .font(.callout).monospacedDigit()
-        .contentTransition(reduceMotion ? .identity : .numericText())
-        Text(String(localized: "Reclaimable space: Unknown"))
-          .font(.callout.weight(.medium))
-          .accessibilityIdentifier("duplicates.reclaimable-space")
-        Text(
-          String.localizedStringWithFormat(
-            String(localized: "Selected copy file size: %@"), format(store.selectedLogicalBytes))
-        )
-        .font(.caption).foregroundStyle(.secondary)
-        Text(
-          String(
-            localized: "Shared APFS storage cannot be measured here. Moving copies to Trash does not free space yet.")
-        )
-        .font(.caption).foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-        selectionActions
-        if let message = store.message ?? actions.message {
-          Text(message).font(.caption).foregroundStyle(LightenStyle.warning).textSelection(.enabled)
-        }
+        .screenColumn()
+        .padding(.bottom, Theme.Space.xl)
       }
-      .padding(.vertical, 20)
+      .floatingBar(isPresented: !store.targets.isEmpty) { selectionBar }
     } toolbar: {
-      Menu(String(localized: "Scan location")) {
-        Button(String(localized: "Choose folder")) { chooseFolder() }
-        if let path = store.folderPath {
-          Button(String(localized: "Scan again")) { store.startScan(folder: path, actions: actions) }
+      ToolbarItem(placement: .navigation) {
+        Menu {
+          Button(String(localized: "Choose folder")) { chooseFolder() }
+          if let path = store.folderPath {
+            Button(String(localized: "Scan again")) { scanLocation(path) }
+          }
+          Divider()
+          Button(String(localized: "Home")) { scanLocation(store.homeDirectory) }
+          Button(String(localized: "Desktop")) { scanLocation(store.homeDirectory + "/Desktop") }
+          Button(String(localized: "Documents")) { scanLocation(store.homeDirectory + "/Documents") }
+          Button(String(localized: "Downloads")) { scanLocation(store.homeDirectory + "/Downloads") }
+          Button(String(localized: "Pictures")) { scanLocation(store.homeDirectory + "/Pictures") }
+        } label: {
+          Label(folderName, systemImage: "folder")
         }
-        Divider()
-        Button(String(localized: "Home")) { scanLocation(store.homeDirectory) }
-        Button(String(localized: "Desktop")) { scanLocation(store.homeDirectory + "/Desktop") }
-        Button(String(localized: "Documents")) { scanLocation(store.homeDirectory + "/Documents") }
-        Button(String(localized: "Downloads")) { scanLocation(store.homeDirectory + "/Downloads") }
-        Button(String(localized: "Pictures")) { scanLocation(store.homeDirectory + "/Pictures") }
+        .help(String(localized: "Scan location"))
+        .disabled(actions.busy || store.busy)
       }
-      .disabled(actions.busy || store.busy)
+      ToolbarItem(placement: .primaryAction) { keeperMenu }
+      ToolbarItem(placement: .primaryAction) {
+        Button(String(localized: "Reduce all to one"), systemImage: "square.stack.3d.down.right") {
+          store.reduceToOne(rule: keeperRule, actions: actions)
+        }
+        .labelStyle(.titleAndIcon)
+        .disabled(!canApplySelection).accessibilityIdentifier("duplicates.reduce-all")
+      }
       if store.busy {
-        Button(String(localized: "Cancel scan")) { store.cancelScan() }
+        ToolbarItem(placement: .primaryAction) {
+          Button(String(localized: "Cancel scan"), systemImage: "stop.fill") { store.cancelScan() }
+        }
       }
     }
     .searchable(text: $searchText, prompt: String(localized: "Search by name or path"))
@@ -149,10 +117,12 @@ struct DuplicateView: View {
     .sheet(item: $actions.pending) { presentation in
       ConfirmationView(presentation: presentation, actions: actions)
     }
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.targets)
-    .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: store.displayRevision)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.report?.groups.count)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.needsRescan)
+    .animation(Theme.Motion.resolve(Theme.Motion.quick, reduceMotion: reduceMotion), value: store.targets)
+    .animation(Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion), value: store.displayRevision)
+    .animation(
+      Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion), value: store.report?.groups.count
+    )
+    .animation(Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion), value: store.needsRescan)
     .task { store.open() }
     .onAppear { store.observeResult(actions: actions) }
     .onChange(of: actions.result?.planID) { _, _ in store.observeResult(actions: actions) }
@@ -167,46 +137,98 @@ struct DuplicateView: View {
     }
   }
 
-  private var selectionActions: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 12) {
-        keeperMenu
-        reduceButton
-        Spacer(minLength: 0)
-        clearButton
-        reviewButton
+  private var folderName: String {
+    guard let path = store.folderPath else { return String(localized: "Choose folder") }
+    return URL(fileURLWithPath: path).lastPathComponent
+  }
+
+  private var subtitle: String {
+    if store.busy { return String(localized: "Scanning") }
+    let date = store.picture?.observedAt ?? store.scannedAt
+    return date.map { String(localized: "Last scan") + " " + $0.formatted(date: .abbreviated, time: .shortened) }
+      ?? String(localized: "Exact local file copies in a folder you choose")
+  }
+
+  private var noCopies: some View {
+    EmptyState(
+      symbol: "checkmark.circle",
+      title: searchText.isEmpty ? String(localized: "No exact copies found") : String(localized: "No matching groups"),
+      message: String(localized: "Choose a folder or scan again to check for new copies."), tint: Theme.Palette.positive
+    )
+  }
+
+  // MARK: Header
+
+  private var header: some View {
+    VStack(alignment: .leading, spacing: Theme.Space.s) {
+      HStack(alignment: .bottom, spacing: Theme.Space.xl) {
+        HeroMetric(
+          value: .bytes(store.toolSummary.logicalBytes, atLeast: store.toolSummary.partial),
+          caption: String(localized: "Copy file size"))
+        Spacer(minLength: Theme.Space.l)
+        if !store.targets.isEmpty {
+          Metric(
+            value: .bytes(store.selectedLogicalBytes),
+            caption: String.localizedStringWithFormat(
+              String(localized: "%lld groups · %lld copies"), Int64(store.selectedGroupCount),
+              Int64(store.selectedCopyCount)),
+            tone: .accent, compact: true)
+        }
       }
-      VStack(alignment: .leading, spacing: 8) {
-        HStack(spacing: 12) {
-          keeperMenu
-          reduceButton
-        }
-        HStack(spacing: 12) {
-          clearButton
-          reviewButton
-        }
+      if store.busy {
+        ScanStatusRow(
+          status: store.checkingPreviousResult
+            ? String(localized: "Verifying previous copies") : String(localized: "Scanning and comparing files"),
+          count: store.scanned, bytes: store.scannedLogicalBytes
+        )
+        .help(String.localizedStringWithFormat(String(localized: "%lld files compared"), Int64(store.compared)))
+      }
+      scanDetails
+      if let message = store.message ?? actions.message {
+        NoticeBar(message).textSelection(.enabled)
       }
     }
-    .buttonStyle(.bordered)
-    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.top, Theme.Space.l)
+  }
+
+  private var selectionBar: some View {
+    FloatingBar {
+      SelectionSummary(
+        symbol: "doc.on.doc",
+        title: String.localizedStringWithFormat(
+          String(localized: "%lld groups · %lld copies"), Int64(store.selectedGroupCount),
+          Int64(store.selectedCopyCount)),
+        value: .bytes(store.selectedLogicalBytes))
+      DetailChip(String(localized: "Reclaimable space: Unknown"), symbol: "info.circle", tone: .neutral) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+          Text(
+            String.localizedStringWithFormat(
+              String(localized: "Selected copy file size: %@"), format(store.selectedLogicalBytes)))
+          Text(
+            String(
+              localized: "Shared APFS storage cannot be measured here. Moving copies to Trash does not free space yet.")
+          )
+        }
+      }
+      .accessibilityIdentifier("duplicates.reclaimable-space")
+    } actions: {
+      clearButton.buttonStyle(.glass)
+      reviewButton.buttonStyle(.glassProminent)
+    }
   }
 
   private var keeperMenu: some View {
-    Menu(ruleLabel) {
+    Menu {
       Button(String(localized: "Smart")) { keeperRule = .smart }
       Button(String(localized: "Keep newest")) { keeperRule = .newest }
       Button(String(localized: "Keep oldest")) { keeperRule = .oldest }
       Button(String(localized: "Prefer a folder…")) { chooseKeeperFolder() }
+    } label: {
+      Label(ruleLabel, systemImage: "checkmark.shield")
     }
-    .lineLimit(1)
+    .labelStyle(.titleAndIcon)
     .help(ruleLabel)
     .disabled(store.busy || actions.busy)
-  }
-
-  private var reduceButton: some View {
-    Button(String(localized: "Reduce all to one")) { store.reduceToOne(rule: keeperRule, actions: actions) }
-      .fixedSize()
-      .disabled(!canApplySelection).accessibilityIdentifier("duplicates.reduce-all")
   }
 
   private var clearButton: some View {
@@ -217,7 +239,6 @@ struct DuplicateView: View {
 
   private var reviewButton: some View {
     Button(String(localized: "Review selection")) { Task { await store.prepare(actions: actions) } }
-      .buttonStyle(.borderedProminent)
       .fixedSize()
       .disabled(
         store.picture != nil || store.report == nil || !store.tool.allowsPreparation || store.targets.isEmpty
@@ -226,92 +247,97 @@ struct DuplicateView: View {
       .accessibilityIdentifier("duplicates.review-selection")
   }
 
-  private func emptyState(title: String, detail: String) -> some View {
-    VStack(spacing: 12) {
-      Image(systemName: "doc.on.doc").font(.largeTitle).foregroundStyle(.secondary)
-      Text(title).font(.headline)
-      Text(detail).font(.callout).foregroundStyle(.secondary)
-        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-    }
-    .frame(maxWidth: .infinity)
-    .padding(.vertical, 32)
-  }
-
+  /// Scope, exclusions and refusals as a row of chips; each opens its full list.
   @ViewBuilder private var scanDetails: some View {
-    HStack {
-      Text(
-        String.localizedStringWithFormat(
-          String(localized: "Minimum file size: %@ MB"), store.duplicatePreferences.minimumMegabytes.formatted()))
-      Spacer()
-      SettingsLink { Label(String(localized: "Scanning settings"), systemImage: "gearshape") }
-    }
-    .font(.caption).foregroundStyle(.secondary)
-    if store.additionalHardLinkCount > 0 {
-      Text(
-        String.localizedStringWithFormat(
-          String(localized: "%lld additional hard links. File data remains while another link exists."),
-          Int64(store.additionalHardLinkCount))
-      )
-      .font(.caption).foregroundStyle(.secondary)
-      .fixedSize(horizontal: false, vertical: true)
-      .accessibilityIdentifier("duplicates.additional-hard-links")
-    }
-    if let report = store.report, !report.exclusions.isEmpty {
-      DisclosureGroup {
-        ForEach(Array(report.exclusions.enumerated()), id: \.offset) { _, exclusion in
-          VStack(alignment: .leading, spacing: 2) {
-            Text(exclusionLabel(exclusion.reason))
-            Text(exclusion.path).textSelection(.enabled)
-              .lineLimit(2).truncationMode(.middle).help(exclusion.path)
-          }
-          .font(.caption).foregroundStyle(.secondary)
-        }
-      } label: {
-        Text(
-          String.localizedStringWithFormat(
-            String(localized: "%lld items outside scope · %lld folders · %lld cloud-only files"),
-            Int64(report.exclusions.count), Int64(store.excludedDirectoryCount), Int64(store.cloudOnlyCount))
-        )
-        .font(.caption).foregroundStyle(.secondary)
-      }
-    }
     if !store.needsRescan {
       if store.report?.partial == true {
-        PartialResultNotice(
-          reason: String.localizedStringWithFormat(
+        PartialNotice(
+          String.localizedStringWithFormat(
             String(localized: "%lld files could not be checked. Results are partial."), Int64(store.unreadableCount)))
       } else if store.picture?.content.partial == true {
-        PartialResultNotice(reason: String(localized: "Previous scan was incomplete. Scan again to check these files."))
+        PartialNotice(String(localized: "Previous scan was incomplete. Scan again to check these files."))
       } else if store.cancelled {
-        PartialResultNotice(reason: String(localized: "Scan cancelled. Scan again to complete the comparison."))
+        PartialNotice(String(localized: "Scan cancelled. Scan again to complete the comparison."))
+      } else if store.picture != nil {
+        NoticeBar(
+          String(localized: "Previous result. Selecting copies verifies these files again."), symbol: "clock",
+          tone: .neutral)
       }
     }
-    if let refusals = store.report?.refusals, !refusals.isEmpty {
-      DisclosureGroup(String(localized: "Files needing review")) {
-        ForEach(Array(refusals.enumerated()), id: \.offset) { _, refusal in
-          VStack(alignment: .leading, spacing: 2) {
-            Text(refusalLabel(refusal.reason)).foregroundStyle(LightenStyle.warning)
-            Text(refusal.path).foregroundStyle(.secondary).textSelection(.enabled)
-              .lineLimit(2).truncationMode(.middle).help(refusal.path)
-          }.font(.caption)
-        }
+    FlowChips {
+      SettingsLink {
+        Chip(
+          title: String.localizedStringWithFormat(
+            String(localized: "Minimum file size: %@ MB"), store.duplicatePreferences.minimumMegabytes.formatted()),
+          symbol: "gearshape")
       }
-    }
-    if !store.preparationRefusals.isEmpty {
-      DisclosureGroup {
-        ForEach(Array(store.preparationRefusals.enumerated()), id: \.offset) { _, refusal in
-          VStack(alignment: .leading, spacing: 2) {
-            Text(planRefusalLabel(refusal.reason)).foregroundStyle(LightenStyle.warning)
-            Text(refusal.path).foregroundStyle(.secondary).textSelection(.enabled)
-              .lineLimit(2).truncationMode(.middle).help(refusal.path)
-          }.font(.caption)
+      .buttonStyle(.plain)
+      .help(String(localized: "Scanning settings"))
+      if store.additionalHardLinkCount > 0 {
+        DetailChip(
+          String.localizedStringWithFormat(String(localized: "%lld hard links"), Int64(store.additionalHardLinkCount)),
+          symbol: "link", tone: .neutral
+        ) {
+          Text(
+            String.localizedStringWithFormat(
+              String(localized: "%lld additional hard links. File data remains while another link exists."),
+              Int64(store.additionalHardLinkCount)))
         }
-      } label: {
-        Text(
+        .accessibilityIdentifier("duplicates.additional-hard-links")
+      }
+      if let report = store.report, !report.exclusions.isEmpty {
+        DetailChip(
           String.localizedStringWithFormat(
-            String(localized: "%lld groups could not be verified. Details"), Int64(store.preparationRefusals.count))
-        )
-        .font(.caption).foregroundStyle(LightenStyle.warning)
+            String(localized: "%lld outside scope"), Int64(report.exclusions.count)),
+          symbol: "eye.slash", tone: .neutral
+        ) {
+          VStack(alignment: .leading, spacing: Theme.Space.s) {
+            Text(
+              String.localizedStringWithFormat(
+                String(localized: "%lld items outside scope · %lld folders · %lld cloud-only files"),
+                Int64(report.exclusions.count), Int64(store.excludedDirectoryCount), Int64(store.cloudOnlyCount))
+            )
+            .font(Theme.Font.bodyMedium)
+            ForEach(Array(report.exclusions.enumerated()), id: \.offset) { _, exclusion in
+              VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text(exclusionLabel(exclusion.reason))
+                PathLabel(path: exclusion.path, lines: 2).textSelection(.enabled)
+              }
+            }
+          }
+        }
+      }
+      if let refusals = store.report?.refusals, !refusals.isEmpty {
+        DetailChip(
+          String.localizedStringWithFormat(String(localized: "%lld files need review"), Int64(refusals.count)),
+          symbol: "exclamationmark.triangle.fill"
+        ) {
+          VStack(alignment: .leading, spacing: Theme.Space.s) {
+            Text(String(localized: "Files needing review")).font(Theme.Font.bodyMedium)
+            ForEach(Array(refusals.enumerated()), id: \.offset) { _, refusal in
+              VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text(refusalLabel(refusal.reason)).foregroundStyle(Theme.Palette.warning)
+                PathLabel(path: refusal.path, lines: 2).textSelection(.enabled)
+              }
+            }
+          }
+        }
+      }
+      if !store.preparationRefusals.isEmpty {
+        DetailChip(
+          String.localizedStringWithFormat(
+            String(localized: "%lld groups could not be verified. Details"), Int64(store.preparationRefusals.count)),
+          symbol: "exclamationmark.triangle.fill"
+        ) {
+          VStack(alignment: .leading, spacing: Theme.Space.s) {
+            ForEach(Array(store.preparationRefusals.enumerated()), id: \.offset) { _, refusal in
+              VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text(planRefusalLabel(refusal.reason)).foregroundStyle(Theme.Palette.warning)
+                PathLabel(path: refusal.path, lines: 2).textSelection(.enabled)
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -368,32 +394,52 @@ struct DuplicateView: View {
     }
   }
 
-  private func pictureGroupCard(_ group: DuplicatePicture.Group) -> some View {
-    VStack(alignment: .leading, spacing: 9) {
-      HStack {
-        Text("\(group.members.count) \(String(localized: "identical copies"))")
-          .font(.system(size: 15, weight: .semibold))
-        Spacer()
-        Text(format(group.logicalBytes)).font(.system(size: 13, weight: .medium)).monospacedDigit()
-      }
-      Divider()
-      if group.members.contains(where: { isICloudPath($0.path) }) {
-        iCloudNotice
-      }
-      ForEach(group.members) { member in
-        HStack(spacing: 10) {
-          VStack(alignment: .leading, spacing: 2) {
-            Text(URL(fileURLWithPath: member.path).lastPathComponent)
-              .font(.system(size: 12, weight: .medium)).lineLimit(1)
-            Text(member.path).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-              .lineLimit(1).truncationMode(.middle).help(member.path)
-          }
-          Spacer(minLength: 8)
-          Text(
-            member.eligibility == .eligible ? String(localized: "Previously verified copy") : label(member.eligibility)
-          )
-          .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+  private func groupHeader(count: Int, bytes: Int64, note: String?, warnings: [String] = []) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
+      VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+        Text(String.localizedStringWithFormat(String(localized: "%lld identical copies"), Int64(count)))
+          .font(Theme.Font.headline)
+        if let note {
+          Text(note).font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary).lineLimit(1).help(note)
         }
+      }
+      Spacer(minLength: Theme.Space.s)
+      if !warnings.isEmpty {
+        DetailChip(
+          warnings.count == 1
+            ? warnings[0]
+            : String.localizedStringWithFormat(String(localized: "%lld differences"), Int64(warnings.count)),
+          symbol: "exclamationmark.triangle.fill"
+        ) {
+          VStack(alignment: .leading, spacing: Theme.Space.xs) { ForEach(warnings, id: \.self) { Text($0) } }
+        }
+      }
+      Text(format(bytes)).font(Theme.Font.mono).foregroundStyle(Theme.Palette.ink)
+    }
+    .padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.m)
+  }
+
+  private func pictureGroupCard(_ group: DuplicatePicture.Group) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      groupHeader(
+        count: group.members.count, bytes: group.logicalBytes,
+        note: group.members.contains(where: { isICloudPath($0.path) }) ? iCloudNoticeText : nil)
+      RowDivider()
+      ForEach(group.members) { member in
+        HStack(spacing: Theme.Space.m) {
+          FileKindIcon(path: member.path)
+          VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            Text(URL(fileURLWithPath: member.path).lastPathComponent)
+              .font(Theme.Font.bodyMedium).lineLimit(1)
+            PathLabel(path: member.path)
+          }
+          Spacer(minLength: Theme.Space.s)
+          Chip(
+            title: member.eligibility == .eligible
+              ? String(localized: "Previously verified copy") : label(member.eligibility),
+            tone: member.eligibility == .eligible ? .neutral : .warning)
+        }
+        .padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.s)
         .contextMenu { rowContextMenu(member.path) }
         .focusable().focused($focusedPath, equals: member.path)
         .onKeyPress(.space) {
@@ -404,41 +450,28 @@ struct DuplicateView: View {
         .onKeyPress(.downArrow) { moveFocus(1, from: member.path) }
       }
     }
-    .padding(13)
-    .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 10))
+    .padding(.bottom, Theme.Space.xs)
+    .moduleSurface()
   }
 
   private func groupCard(_ group: DuplicateGroup) -> some View {
-    VStack(alignment: .leading, spacing: 9) {
-      HStack {
-        VStack(alignment: .leading, spacing: 2) {
-          Text("\(group.members.count) \(String(localized: "identical copies"))")
-            .font(.system(size: 15, weight: .semibold))
-          Text(
-            group.members.contains(where: { isICloudPath($0.entry.path) })
-              ? iCloudNoticeText
-              : group.reportOnlyReason.map(reportOnlyLabel)
-                ?? String(localized: "One copy stays in each group. Choose another keeper if needed.")
-          )
-          .font(.caption).foregroundStyle(.secondary)
-          let warnings = Array(Set(group.members.flatMap(\.metadataWarnings))).sorted { $0.rawValue < $1.rawValue }
-          if !warnings.isEmpty {
-            Text(warnings.map(metadataWarningLabel).joined(separator: " · "))
-              .font(.caption).foregroundStyle(.secondary)
-          }
-        }
-        Spacer()
-        Text(format(group.logicalBytes)).font(.system(size: 13, weight: .medium))
-          .monospacedDigit()
-      }
-      Divider()
+    let warnings = Array(Set(group.members.flatMap(\.metadataWarnings))).sorted { $0.rawValue < $1.rawValue }
+    return VStack(alignment: .leading, spacing: 0) {
+      groupHeader(
+        count: group.members.count, bytes: group.logicalBytes,
+        note: group.members.contains(where: { isICloudPath($0.entry.path) })
+          ? iCloudNoticeText
+          : group.reportOnlyReason.map(reportOnlyLabel)
+            ?? String(localized: "One copy stays in each group. Choose another keeper if needed."),
+        warnings: warnings.map(metadataWarningLabel))
+      RowDivider()
       ForEach(group.members) { member in
         memberRow(member, group: group)
-          .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.96)))
+          .transition(Theme.Motion.transition(Theme.Motion.pop, reduceMotion: reduceMotion))
       }
     }
-    .padding(13)
-    .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 10))
+    .padding(.bottom, Theme.Space.xs)
+    .moduleSurface()
   }
 
   private func memberRow(_ member: DuplicateMember, group: DuplicateGroup) -> some View {
@@ -446,7 +479,7 @@ struct DuplicateView: View {
     let isKeeper = keeperID == member.id
     let canTarget = keeperID.map { group.canTarget(member.id, keeperID: $0) } ?? false
     let selected = store.targets.contains(member.id)
-    return HStack(spacing: 10) {
+    return HStack(spacing: Theme.Space.m) {
       Toggle(
         String(localized: "Select copy for Trash"),
         isOn: Binding(
@@ -459,6 +492,38 @@ struct DuplicateView: View {
       .disabled(!canTarget || isKeeper || actions.busy || store.tool.phase != .ready)
       .accessibilityLabel(
         String(localized: "Select copy for Trash") + " " + URL(fileURLWithPath: member.entry.path).lastPathComponent)
+      FileKindIcon(path: member.entry.path)
+      VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+        Text(URL(fileURLWithPath: member.entry.path).lastPathComponent)
+          .font(Theme.Font.bodyMedium).lineLimit(1)
+        HStack(spacing: Theme.Space.xs) {
+          PathLabel(path: member.entry.path)
+          if let seconds = member.entry.identity?.modificationSeconds {
+            Text(verbatim: "·").font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkTertiary)
+            Text(Date(timeIntervalSince1970: Double(seconds)), format: .dateTime.year().month().day().hour().minute())
+              .font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary).lineLimit(1).fixedSize()
+          }
+        }
+        if let reason = actions.failure(at: member.entry.path) {
+          Text(reason).font(Theme.Font.caption).foregroundStyle(Theme.Palette.warning)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      Spacer(minLength: Theme.Space.s)
+      if let links = member.entry.identity?.linkCount, links > 1 {
+        DetailChip(
+          String.localizedStringWithFormat(String(localized: "%lld hard links"), Int64(clamping: links - 1)),
+          symbol: "link", tone: .neutral
+        ) {
+          Text(
+            String.localizedStringWithFormat(
+              String(localized: "%lld other hard links retain this file's data"), Int64(clamping: links - 1)))
+        }
+      }
+      if member.eligibility != .eligible {
+        Chip(title: label(member.eligibility), symbol: "exclamationmark.triangle.fill", tone: .warning)
+          .help(label(member.eligibility))
+      }
       Menu {
         Button(String(localized: "Keep this copy")) {
           store.chooseKeeper(member.id, for: group, actions: actions)
@@ -469,47 +534,22 @@ struct DuplicateView: View {
         }
         .disabled(!canTarget || isKeeper)
       } label: {
-        Label(
-          isKeeper ? String(localized: "Keep") : selected ? String(localized: "Trash") : String(localized: "Choose"),
-          systemImage: isKeeper ? "checkmark.shield" : selected ? "trash" : "circle"
-        )
-        .frame(width: 78, alignment: .leading)
+        Chip(
+          title: isKeeper
+            ? String(localized: "Keep") : selected ? String(localized: "Trash") : String(localized: "Choose"),
+          symbol: isKeeper ? "checkmark.shield.fill" : selected ? "trash.fill" : "circle",
+          tone: isKeeper ? .positive : selected ? .accent : .neutral)
       }
-      .menuStyle(.borderlessButton)
+      .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
       .disabled(actions.busy || store.tool.phase != .ready)
       .accessibilityLabel(
         isKeeper
           ? String(localized: "Keep this copy")
           : selected ? String(localized: "Select copy for Trash") : String(localized: "Choose as keeper"))
-      VStack(alignment: .leading, spacing: 2) {
-        Text(URL(fileURLWithPath: member.entry.path).lastPathComponent)
-          .font(.system(size: 12, weight: .medium)).lineLimit(1)
-        if let reason = actions.failure(at: member.entry.path) {
-          Text(reason).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        Text(member.entry.path)
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          .lineLimit(1).truncationMode(.middle).help(member.entry.path)
-        if let seconds = member.entry.identity?.modificationSeconds {
-          Text(Date(timeIntervalSince1970: Double(seconds)), format: .dateTime.year().month().day().hour().minute())
-            .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-        }
-        if let links = member.entry.identity?.linkCount, links > 1 {
-          Text(
-            String.localizedStringWithFormat(
-              String(localized: "%lld other hard links retain this file's data"), Int64(clamping: links - 1))
-          )
-          .font(.caption).foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-        }
-      }
-      Spacer(minLength: 8)
-      Text(
-        isKeeper ? String(localized: "Keep") : label(member.eligibility)
-      )
-      .font(.system(size: 10))
-      .foregroundStyle(member.eligibility == .eligible ? LightenStyle.muted : .orange)
+    }
+    .padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.s)
+    .background {
+      if selected { Theme.Palette.selection.opacity(0.6) }
     }
     .accessibilityElement(children: .contain)
     .contextMenu { rowContextMenu(member.entry.path) }
@@ -528,11 +568,6 @@ struct DuplicateView: View {
 
   private var iCloudNoticeText: String {
     String(localized: "iCloud Drive copies are not removed here. Manage them in Finder.")
-  }
-
-  private var iCloudNotice: some View {
-    Text(iCloudNoticeText).font(.caption).foregroundStyle(.secondary)
-      .fixedSize(horizontal: false, vertical: true)
   }
 
   private func refusalLabel(_ reason: DuplicateObservationRefusal.Reason) -> String {
@@ -620,6 +655,18 @@ struct DuplicateView: View {
   }
 }
 
+/// The Finder icon for a file, small enough to sit in a row.
+private struct FileKindIcon: View {
+  let path: String
+
+  var body: some View {
+    Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+      .resizable().interpolation(.high)
+      .frame(width: Theme.Layout.rowIcon, height: Theme.Layout.rowIcon)
+      .accessibilityHidden(true)
+  }
+}
+
 private struct DuplicatePictureDrawProbe: NSViewRepresentable {
   let didDraw: @MainActor () -> Void
   func makeNSView(context: Context) -> ProbeView { ProbeView(didDraw: didDraw) }
@@ -662,9 +709,9 @@ private struct DuplicatePreviewSheet: View {
   }
 
   var body: some View {
-    VStack(spacing: 12) {
+    VStack(spacing: Theme.Space.m) {
       HStack {
-        Text(URL(fileURLWithPath: currentPath).lastPathComponent).font(.headline).lineLimit(1)
+        Text(URL(fileURLWithPath: currentPath).lastPathComponent).font(Theme.Font.headline).lineLimit(1)
         Spacer()
         Button {
           navigate(-1)
@@ -682,10 +729,10 @@ private struct DuplicatePreviewSheet: View {
           .keyboardShortcut(.cancelAction)
       }
       DuplicateQuickLookView(path: currentPath)
-        .frame(minWidth: 520, minHeight: 380)
-      Text(currentPath).font(.caption).foregroundStyle(LightenStyle.muted).textSelection(.enabled)
+        .frame(minWidth: Theme.Layout.previewMinimum.width, minHeight: Theme.Layout.previewMinimum.height)
+      PathLabel(path: currentPath, lines: 2).textSelection(.enabled)
     }
-    .padding(16).focusable().focused($focused)
+    .padding(Theme.Space.l).focusable().focused($focused)
     .onAppear { focused = true }
     .onKeyPress(.leftArrow) {
       navigate(-1)

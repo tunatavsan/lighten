@@ -202,6 +202,23 @@
         }
       }
     },
+    "%lld differences": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld differences"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld fark"
+          }
+        }
+      }
+    },
     "%lld files compared": {
       "localizations": {
         "en": {
@@ -234,6 +251,23 @@
         }
       }
     },
+    "%lld files need review": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld files need review"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld dosya inceleme gerektiriyor"
+          }
+        }
+      }
+    },
     "%lld groups could not be verified. Details": {
       "localizations": {
         "en": {
@@ -262,6 +296,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "%lld grup · %lld kopya"
+          }
+        }
+      }
+    },
+    "%lld hard links": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld hard links"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld sabit bağ"
+          }
+        }
+      }
+    },
+    "%lld identical copies": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld identical copies"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld özdeş kopya"
           }
         }
       }
@@ -360,6 +428,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Diğer %lld sabit bağlantı bu dosyanın verisini koruyor"
+          }
+        }
+      }
+    },
+    "%lld outside scope": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld outside scope"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld kapsam dışı"
           }
         }
       }
@@ -2074,6 +2159,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Devam et"
+          }
+        }
+      }
+    },
+    "Copy file size": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy file size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopya dosya boyutu"
           }
         }
       }
@@ -9974,22 +10076,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "iOS uygulama yer tutucuları"
-          }
-        }
-      }
-    },
-    "identical copies": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "identical copies"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "aynı içerikli kopya"
           }
         }
       }

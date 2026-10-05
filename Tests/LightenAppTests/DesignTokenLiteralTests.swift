@@ -19,7 +19,6 @@ struct DesignTokenLiteralTests {
     "Sources/Lighten/Apps/AppsBasketView.swift",
     "Sources/Lighten/Apps/AppsView.swift",
     "Sources/Lighten/Apps/ApplicationIconView.swift",
-    "Sources/Lighten/Duplicates/DuplicateView.swift",
     "Sources/Lighten/Interface/ActionFeedback.swift",
     "Sources/Lighten/Interface/FileAccessViews.swift",
     "Sources/Lighten/Interface/LegacyToolScreen.swift",
