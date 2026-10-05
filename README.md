@@ -16,6 +16,13 @@
   <img src="https://img.shields.io/badge/Swift-6.2-F05138.svg?logo=swift&logoColor=white" alt="Swift 6.2">
 </p>
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/space-light.png">
+    <img src="docs/images/space-dark.png" width="860" alt="Lighten's Space view showing a treemap of a folder and its largest items">
+  </picture>
+</p>
+
 Most Mac cleaners promise gigabytes of "junk" and ask you to trust a single big button. Lighten takes the opposite
 approach: it measures carefully, explains every suggestion, keeps your files recoverable, and never pretends to know
 more than it does.
@@ -47,6 +54,24 @@ more than it does.
 | **History** | Lists every action Lighten has taken and restores items from the Trash with Undo. |
 
 Lighten is available in English and Turkish.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/apps-light.png">
+    <img src="docs/images/apps-dark.png" width="860" alt="Lighten's Apps view with an application and its related data selected">
+  </picture>
+</p>
+
+<details>
+<summary><strong>More screenshots</strong></summary>
+<br>
+<p align="center">
+  <img src="docs/images/overview-dark.png" width="860" alt="Overview with disk, memory and the processes using the most memory"><br><br>
+  <img src="docs/images/clean-dark.png" width="860" alt="Clean listing developer tool caches with their sizes"><br><br>
+  <img src="docs/images/duplicates-dark.png" width="860" alt="Duplicates with the copy to keep and the copies to remove"><br><br>
+  <img src="docs/images/history-dark.png" width="860" alt="History with recorded actions and Undo">
+</p>
+</details>
 
 ## Getting started
 
