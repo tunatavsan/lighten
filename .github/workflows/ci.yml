@@ -4,6 +4,7 @@ on:
   push:
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,9 +16,10 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: macos-26
+    timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Select Xcode and log tool versions
         shell: bash
@@ -29,11 +31,11 @@ jobs:
           swift --version
           swift format --version
 
+      - name: Lint Swift formatting
+        run: swift format lint --strict -r Sources Tests
+
       - name: Build
         run: swift build
 
       - name: Test
         run: swift test --no-parallel
-
-      - name: Lint Swift formatting
-        run: swift format lint --strict -r Sources Tests
