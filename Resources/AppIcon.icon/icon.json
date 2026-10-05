@@ -1,8 +1,8 @@
 {
   "fill": {
     "linear-gradient": [
-      "srgb:0.20000,0.31373,0.48627,1.00000",
-      "srgb:0.05882,0.08627,0.15686,1.00000"
+      "display-p3:0.95037,0.95877,0.99842,1.00000",
+      "display-p3:0.82430,0.84023,0.91757,1.00000"
     ],
     "orientation": {
       "start": {
@@ -17,16 +17,16 @@
   },
   "groups": [
     {
-      "name": "lifted",
+      "name": "hero",
       "layers": [
         {
-          "name": "tile-amber",
-          "image-name": "lifted.svg",
+          "name": "amber",
+          "image-name": "amber.svg",
           "glass": true,
           "fill": {
             "linear-gradient": [
-              "srgb:1.00000,0.85098,0.49412,1.00000",
-              "srgb:1.00000,0.63529,0.20392,1.00000"
+              "display-p3:0.96619,0.70828,0.32434,1.00000",
+              "display-p3:0.86080,0.60792,0.21194,1.00000"
             ],
             "orientation": {
               "start": {
@@ -43,25 +43,25 @@
       ],
       "shadow": {
         "kind": "layer-color",
-        "opacity": 0.85
+        "opacity": 0.7
       },
       "specular": true,
       "translucency": {
         "enabled": true,
-        "value": 0.3
+        "value": 0.25
       }
     },
     {
       "name": "mosaic",
       "layers": [
         {
-          "name": "tile-orchid",
+          "name": "orchid",
           "image-name": "orchid.svg",
           "glass": true,
           "fill": {
             "linear-gradient": [
-              "srgb:0.82745,0.58039,0.91765,1.00000",
-              "srgb:0.58431,0.31373,0.75294,1.00000"
+              "display-p3:0.69447,0.47160,0.86547,1.00000",
+              "display-p3:0.59681,0.37526,0.76187,1.00000"
             ],
             "orientation": {
               "start": {
@@ -76,13 +76,13 @@
           }
         },
         {
-          "name": "tile-indigo",
+          "name": "indigo",
           "image-name": "indigo.svg",
           "glass": true,
           "fill": {
             "linear-gradient": [
-              "srgb:0.41569,0.59216,0.92549,1.00000",
-              "srgb:0.22745,0.34118,0.71373,1.00000"
+              "display-p3:0.27521,0.42823,0.81378,1.00000",
+              "display-p3:0.18846,0.33166,0.70977,1.00000"
             ],
             "orientation": {
               "start": {
@@ -97,13 +97,13 @@
           }
         },
         {
-          "name": "tile-violet",
+          "name": "violet",
           "image-name": "violet.svg",
           "glass": true,
           "fill": {
             "linear-gradient": [
-              "srgb:0.58431,0.55294,0.96863,1.00000",
-              "srgb:0.35294,0.30588,0.81569,1.00000"
+              "display-p3:0.49852,0.44561,0.87200,1.00000",
+              "display-p3:0.40940,0.34898,0.76711,1.00000"
             ],
             "orientation": {
               "start": {
@@ -125,37 +125,7 @@
       "specular": true,
       "translucency": {
         "enabled": true,
-        "value": 0.2
-      }
-    },
-    {
-      "name": "plate",
-      "layers": [
-        {
-          "name": "empty-slot",
-          "image-name": "plate.svg",
-          "glass": false,
-          "fill": {
-            "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
-          },
-          "opacity-specializations": [
-            {
-              "value": 0.1
-            },
-            {
-              "appearance": "dark",
-              "value": 0.13
-            }
-          ]
-        }
-      ],
-      "shadow": {
-        "kind": "none",
-        "opacity": 0
-      },
-      "translucency": {
-        "enabled": false,
-        "value": 0
+        "value": 0.15
       }
     }
   ],
