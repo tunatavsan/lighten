@@ -53,3 +53,17 @@ struct ToolHeader<Trailing: View, Status: View>: View {
     .padding(.bottom, Theme.Space.l)
   }
 }
+
+/// A screen with no toolbar actions of its own.
+struct NoToolbarActions: ToolbarContent {
+  var body: some ToolbarContent { ToolbarItemGroup {} }
+}
+
+extension ToolScreen where Toolbar == NoToolbarActions {
+  init(_ title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+    self.title = title
+    self.subtitle = subtitle
+    self.content = content()
+    self.toolbar = NoToolbarActions()
+  }
+}

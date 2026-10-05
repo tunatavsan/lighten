@@ -5,189 +5,223 @@ struct OverviewView: View {
   @Bindable var store: OverviewStore
   @Bindable var space: SpaceStore
   @Bindable var actions: ActionStore
-  let showSpace: () -> Void
-  let showHistory: () -> Void
+  let presentations: [LightenSection: ToolPresentation]
+  let show: (LightenSection) -> Void
 
   var body: some View {
-    LegacyToolScreen(String(localized: "Overview")) {
+    ToolScreen(String(localized: "Overview"), subtitle: subtitle) {
       ScrollView {
-        VStack(alignment: .leading, spacing: 22) {
-          HStack(alignment: .firstTextBaseline) {
-            if let date = store.system?.observedAt {
-              Text("\(String(localized: "System checked")) \(date.formatted(date: .omitted, time: .shortened))")
-                .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        VStack(alignment: .leading, spacing: Theme.Space.xxl) {
+          ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: Theme.Space.l) {
+              DiskCard(store: store, space: space, actions: actions, show: show)
+              MemoryCard(store: store).frame(width: Theme.Layout.memoryCardWidth)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: Theme.Space.l) {
+              DiskCard(store: store, space: space, actions: actions, show: show)
+              MemoryCard(store: store)
             }
           }
-          diskSection
-          Divider()
-          memorySection
-          Divider()
-          processSection
+          VStack(alignment: .leading, spacing: Theme.Space.m) {
+            SectionHeader(String(localized: "Tools"))
+            LazyVGrid(
+              columns: [GridItem(.adaptive(minimum: Theme.Layout.toolCardMinimum), spacing: Theme.Space.m)],
+              spacing: Theme.Space.m
+            ) {
+              ForEach(ToolCatalog.toolEntries) { entry in
+                ToolCard(entry: entry, presentation: presentations[entry.id], actions: actions) { show(entry.id) }
+              }
+            }
+          }
+          ProcessSection(store: store)
         }
-        .padding(.vertical, 24)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .screenColumn()
+        .padding(.vertical, Theme.Space.xl)
       }
-    } toolbar: {
-      Button(String(localized: "Explore space"), action: showSpace)
     }
     .task { await store.run(rootPath: space.selectedRoot.path) }
     .onAppear { space.showCachedSummary() }
     .onDisappear { store.stop() }
   }
 
-  private var diskSection: some View {
-    VStack(alignment: .leading, spacing: 10) {
+  private var subtitle: String? {
+    guard let date = store.system?.observedAt else { return nil }
+    return String(localized: "System checked") + " " + date.formatted(date: .omitted, time: .shortened)
+  }
+}
+
+// MARK: - Disk
+
+private struct DiskCard: View {
+  @Bindable var store: OverviewStore
+  @Bindable var space: SpaceStore
+  @Bindable var actions: ActionStore
+  let show: (LightenSection) -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: Theme.Space.l) {
+      HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+        Label(volumeName, systemImage: "internaldrive")
+          .font(Theme.Font.headline).foregroundStyle(Theme.Palette.inkSecondary)
+        Spacer(minLength: Theme.Space.s)
+        InfoButton(
+          text: String(
+            localized: "Volume usage includes snapshots and shared data. Scan totals and items in Trash are separate."))
+      }
+      HeroMetric(value: .bytes(store.volume?.freeBytes), caption: freeCaption)
+      CapacityBar(segments: segments)
+      HStack(spacing: Theme.Space.l) {
+        legend(String(localized: "Used on volume"), store.volume?.usedBytes, color: Theme.Palette.indigo)
+        Button {
+          show(.history)
+        } label: {
+          legend(String(localized: "Pending Trash"), actions.pendingTrashLogicalBytes, color: Theme.Palette.hero)
+        }
+        .buttonStyle(.plain)
+        .help(String(localized: "Trash items have not freed disk space."))
+        legend(String(localized: "Free on volume"), store.volume?.freeBytes, color: Theme.Palette.well)
+        Spacer(minLength: 0)
+      }
+      RowDivider()
+      HStack(alignment: .center, spacing: Theme.Space.l) {
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+          Text(scanSummary).font(Theme.Font.bodyMedium).monospacedDigit()
+          Text(scanDetail).font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary)
+        }
+        .accessibilityElement(children: .combine)
+        Spacer(minLength: Theme.Space.s)
+        Button(String(localized: "Explore space")) { show(.space) }
+          .buttonStyle(.hero)
+      }
+    }
+    .frame(maxHeight: .infinity, alignment: .top)
+    .cardSurface(padding: Theme.Space.xl, radius: Theme.Radius.panel)
+  }
+
+  private var volumeName: String {
+    let url = URL(fileURLWithPath: space.selectedRoot.path)
+    return (try? url.resourceValues(forKeys: [.volumeLocalizedNameKey]).volumeLocalizedName)
+      ?? String(localized: "Disk")
+  }
+
+  private var freeCaption: String {
+    guard let total = store.volume?.totalBytes else { return String(localized: "Free on volume") }
+    return String.localizedStringWithFormat(
+      String(localized: "Free of %@"), ByteCountFormatter.string(fromByteCount: total, countStyle: .file))
+  }
+
+  private var segments: [CapacityBar.Segment] {
+    guard let total = store.volume?.totalBytes, total > 0, let used = store.volume?.usedBytes else { return [] }
+    let trash = min(actions.pendingTrashLogicalBytes, used)
+    return [
+      .init(id: "used", fraction: Double(used - trash) / Double(total), color: Theme.Palette.indigo),
+      .init(id: "trash", fraction: Double(trash) / Double(total), color: Theme.Palette.hero),
+    ]
+  }
+
+  private func legend(_ title: String, _ bytes: Int64?, color: Color) -> some View {
+    HStack(spacing: Theme.Space.xs + 2) {
+      Circle().fill(color).frame(width: Theme.Space.s, height: Theme.Space.s)
+        .overlay(Circle().strokeBorder(Theme.Palette.hairline, lineWidth: Theme.Stroke.hairline))
+      Text(title).foregroundStyle(Theme.Palette.inkSecondary)
+      Text(format(bytes)).font(Theme.Font.mono).foregroundStyle(Theme.Palette.ink)
+    }
+    .font(Theme.Font.callout)
+    .accessibilityElement(children: .combine)
+  }
+
+  private var scanSummary: String {
+    guard let root = space.rootSummary else { return String(localized: "Not scanned") }
+    let size: String
+    if let complete = root.logical.completeTotal {
+      size = format(complete)
+    } else if root.logical.knownLowerBound == 0 {
+      size = String(localized: "Unknown")
+    } else {
+      size = String(localized: "At least") + " " + format(root.logical.knownLowerBound)
+    }
+    return String(localized: "Selected scan") + ": " + size
+  }
+
+  private var scanDetail: String {
+    var parts = [space.selectedRoot.path]
+    if let items = space.rootSummary?.itemCount {
+      parts.append(String.localizedStringWithFormat(String(localized: "%lld items"), Int64(clamping: items)))
+    }
+    if let date = space.cachedAt {
+      parts.append(String(localized: "Last scan") + " " + date.formatted(date: .abbreviated, time: .shortened))
+    }
+    return parts.joined(separator: " · ")
+  }
+}
+
+// MARK: - Memory
+
+private struct MemoryCard: View {
+  @Bindable var store: OverviewStore
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: Theme.Space.l) {
       HStack {
-        sectionHeading(String(localized: "Disk"), symbol: "externaldrive")
+        Label(String(localized: "Memory"), systemImage: "memorychip")
+          .font(Theme.Font.headline).foregroundStyle(Theme.Palette.inkSecondary)
         Spacer()
       }
-      Text(space.selectedRoot.path)
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        .lineLimit(1).truncationMode(.middle).help(space.selectedRoot.path)
-      if let date = store.volumeObservedAt {
-        Text("\(String(localized: "Disk checked")) \(date.formatted(date: .omitted, time: .shortened))")
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      VStack(alignment: .leading, spacing: Theme.Space.xs) {
+        Text(PressureText.title(pressure)).font(Theme.Font.title)
+          .foregroundStyle(
+            PressureText.tone(pressure) == .neutral ? Theme.Palette.ink : PressureText.tone(pressure).foreground)
+        Text(String(localized: "Memory pressure")).font(Theme.Font.callout).foregroundStyle(Theme.Palette.inkSecondary)
       }
-      HStack(alignment: .firstTextBaseline, spacing: 30) {
-        metric(String(localized: "Used on volume"), store.volume?.usedBytes)
-        metric(String(localized: "Free on volume"), store.volume?.freeBytes)
-        Spacer(minLength: 0)
-      }
-      HStack(alignment: .firstTextBaseline, spacing: 18) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(
-            "\(String(localized: "Selected scan")): \(scanSize)"
-              + (space.cachedAt.map {
-                " · \(String(localized: "Last scan")) \($0.formatted(date: .abbreviated, time: .shortened))"
-              } ?? ""))
-          Text(
-            "\(String(localized: "Scanned items")): \(space.rootSummary.map { $0.itemCount.formatted() } ?? String(localized: "Not scanned"))"
-          )
+      .accessibilityElement(children: .combine)
+      PressureScale(pressure: pressure)
+      RowDivider()
+      HStack(alignment: .top) {
+        Metric(
+          value: store.system?.swap.map { .bytes(Int64(clamping: $0.usedBytes)) }
+            ?? .text(String(localized: "Unknown")),
+          caption: String(localized: "Swap used"), compact: true)
+        Spacer()
+        if let swap = store.system?.swap {
+          if swap.totalBytes == 0 {
+            InfoButton(text: String(localized: "No swap is allocated; a percentage is unavailable."))
+          } else {
+            Metric(
+              value: .bytes(Int64(clamping: swap.totalBytes)), caption: String(localized: "Allocated swap"),
+              compact: true)
+          }
         }
-        Spacer(minLength: 0)
-        Button(
-          "\(String(localized: "Pending Trash")): \(format(actions.pendingTrashLogicalBytes))", action: showHistory
-        )
-        .buttonStyle(.link)
-      }
-      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-      Text(
-        String(
-          localized: "Volume usage includes snapshots and shared data. Scan totals and items in Trash are separate.")
-      )
-      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-      .fixedSize(horizontal: false, vertical: true)
-    }
-  }
-
-  private var scanSize: String {
-    guard let root = space.rootSummary else {
-      return String(localized: "Not scanned")
-    }
-    if let complete = root.logical.completeTotal { return format(complete) }
-    if root.logical.knownLowerBound == 0 { return String(localized: "Unknown") }
-    return "\(String(localized: "At least")) \(format(root.logical.knownLowerBound))"
-  }
-
-  private var memorySection: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      sectionHeading(String(localized: "Memory"), symbol: "memorychip")
-      HStack(alignment: .firstTextBaseline, spacing: 30) {
-        VStack(alignment: .leading, spacing: 4) {
-          Text(pressureText(store.system?.pressure ?? .unknown))
-            .font(.system(size: 21, weight: .semibold))
-            .foregroundStyle(pressureColor(store.system?.pressure ?? .unknown))
-          Text(String(localized: "Memory pressure"))
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        }
-        VStack(alignment: .leading, spacing: 4) {
-          Text(store.system?.swap.map { format(Int64(clamping: $0.usedBytes)) } ?? String(localized: "Unknown"))
-            .font(.system(size: 21, weight: .semibold)).monospacedDigit()
-          Text(String(localized: "Swap used"))
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        }
-        Spacer(minLength: 0)
-      }
-      if let swap = store.system?.swap {
-        Text(
-          swap.totalBytes == 0
-            ? String(localized: "No swap is allocated; a percentage is unavailable.")
-            : "\(String(localized: "Allocated swap")): \(format(Int64(clamping: swap.totalBytes)))"
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       }
       if store.system?.pressure == .unknown {
-        Text(String(localized: "Memory pressure is unavailable on this Mac right now."))
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+        NoticeBar(String(localized: "Memory pressure is unavailable on this Mac right now."))
       }
     }
+    .frame(maxHeight: .infinity, alignment: .top)
+    .cardSurface(padding: Theme.Space.xl, radius: Theme.Radius.panel)
   }
 
-  private var processSection: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      sectionHeading(String(localized: "Processes using memory"), symbol: "list.bullet.rectangle")
-      Text(String(localized: "Top 10 processes for your account by resident memory. CPU is a share of one core."))
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-      if let census = store.system?.census {
-        if census.partial {
-          Text(
-            "\(String(localized: "Partial process list")): \(census.unreadableCount) \(String(localized: "unreadable"))\(census.truncated ? " · " + String(localized: "limit reached") : "")"
-          )
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-        }
-        if store.topProcesses.isEmpty {
-          Text(String(localized: "No readable processes in this sample"))
-            .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-        } else {
-          HStack {
-            Text(String(localized: "Process"))
-            Spacer()
-            Text(String(localized: "Memory used")).frame(width: 100, alignment: .trailing)
-            Text(String(localized: "CPU / core")).frame(width: 95, alignment: .trailing)
-          }
-          .font(.system(size: 11, weight: .medium)).foregroundStyle(LightenStyle.muted)
-          ForEach(store.topProcesses) { row in
-            HStack(spacing: 8) {
-              Text(row.process.name).font(.system(size: 13)).lineLimit(1)
-              Spacer(minLength: 8)
-              Text(format(Int64(clamping: row.process.residentBytes)))
-                .frame(width: 100, alignment: .trailing)
-              Text(
-                row.corePercent.map { "\($0.formatted(.number.precision(.fractionLength(0...1))))%" }
-                  ?? String(localized: "Unknown")
-              )
-              .frame(width: 95, alignment: .trailing)
-            }
-            .font(.system(size: 11)).monospacedDigit()
-            .padding(.vertical, 4)
-            Divider()
-          }
-        }
-      } else {
-        Text(
-          store.sampling
-            ? String(localized: "Reading system status")
-            : String(localized: "Process information unavailable")
-        )
-        .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+  private var pressure: MemoryPressure { store.system?.pressure ?? .unknown }
+}
+
+/// Three steps of memory pressure, the current one lit.
+private struct PressureScale: View {
+  let pressure: MemoryPressure
+
+  var body: some View {
+    HStack(spacing: Theme.Space.xs) {
+      ForEach([MemoryPressure.normal, .warning, .critical], id: \.self) { step in
+        Capsule()
+          .fill(step == pressure ? PressureText.tone(step).foreground : Theme.Palette.well)
+          .frame(height: Theme.Layout.meterHeight)
       }
     }
+    .accessibilityHidden(true)
   }
+}
 
-  private func sectionHeading(_ title: String, symbol: String) -> some View {
-    Label(title, systemImage: symbol)
-      .font(.system(size: 16, weight: .semibold))
-      .foregroundStyle(LightenStyle.accent)
-  }
-
-  private func metric(_ title: String, _ value: Int64?) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(format(value)).font(.system(size: 21, weight: .semibold)).monospacedDigit()
-      Text(title).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-    }
-  }
-
-  private func pressureText(_ pressure: MemoryPressure) -> String {
+enum PressureText {
+  static func title(_ pressure: MemoryPressure) -> String {
     switch pressure {
     case .normal: String(localized: "Normal")
     case .warning: String(localized: "Elevated")
@@ -196,12 +230,164 @@ struct OverviewView: View {
     }
   }
 
-  private func pressureColor(_ pressure: MemoryPressure) -> Color {
+  static func tone(_ pressure: MemoryPressure) -> Tone {
     switch pressure {
-    case .normal: LightenStyle.accent
-    case .warning: LightenStyle.warning
-    case .critical: .red
-    case .unknown: LightenStyle.muted
+    case .normal: .positive
+    case .warning: .warning
+    case .critical: .critical
+    case .unknown: .neutral
     }
+  }
+}
+
+// MARK: - Tools
+
+private struct ToolCard: View {
+  let entry: ToolCatalogEntry
+  let presentation: ToolPresentation?
+  let actions: ActionStore
+  let open: () -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    Button(action: open) {
+      VStack(alignment: .leading, spacing: Theme.Space.m) {
+        HStack(alignment: .top) {
+          ToolGlyph(symbol: entry.symbol, color: entry.tint, size: Theme.Layout.toolTileLarge)
+          Spacer()
+          if presentation?.isWorking == true {
+            ProgressView().controlSize(.small)
+          } else if presentation?.isPreviousResult == true {
+            Chip(title: String(localized: "Previous result"), symbol: "clock")
+          }
+        }
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+          Text(entry.title).font(Theme.Font.headline).foregroundStyle(Theme.Palette.ink)
+          Text(value).font(Theme.Font.metricSmall).monospacedDigit().foregroundStyle(Theme.Palette.ink)
+            .lineLimit(1)
+          Text(caption).font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary).lineLimit(1)
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .cardSurface()
+      .overlay {
+        RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+          .strokeBorder(hovering ? Theme.Palette.accent : .clear, lineWidth: Theme.Stroke.hairline)
+      }
+      .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+    .help(entry.description)
+    .accessibilityElement(children: .combine)
+    .accessibilityHint(entry.description)
+  }
+
+  private var value: String {
+    if entry.id == .history {
+      return ByteCountFormatter.string(fromByteCount: actions.pendingTrashLogicalBytes, countStyle: .file)
+    }
+    guard let presentation else { return String(localized: "Not scanned") }
+    if entry.id == .duplicates, presentation.summary.observedAt != nil, !presentation.isWorking,
+      presentation.phase != .failed
+    {
+      let size = ByteCountFormatter.string(fromByteCount: presentation.summary.logicalBytes, countStyle: .file)
+      return presentation.summary.partial ? String(localized: "At least") + " " + size : size
+    }
+    return presentation.resultText(for: entry.id)
+  }
+
+  private var caption: String {
+    if entry.id == .history { return String(localized: "Pending Trash") }
+    guard let presentation, let date = presentation.summary.observedAt, !presentation.isWorking else {
+      return entry.description
+    }
+    var parts: [String] = []
+    if entry.id == .duplicates {
+      parts.append(String(localized: "Copy file size"))
+    } else if entry.id != .apps {
+      parts.append(String.localizedStringWithFormat(String(localized: "%lld items"), Int64(presentation.summary.count)))
+    }
+    parts.append(date.formatted(.relative(presentation: .named)))
+    return parts.joined(separator: " · ")
+  }
+}
+
+// MARK: - Processes
+
+private struct ProcessSection: View {
+  @Bindable var store: OverviewStore
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: Theme.Space.m) {
+      SectionHeader(String(localized: "Processes using memory")) {
+        InfoButton(
+          text: String(localized: "Top 10 processes for your account by resident memory. CPU is a share of one core."))
+      }
+      VStack(spacing: 0) {
+        if let census = store.system?.census {
+          if census.partial {
+            NoticeBar(partialText(census)).padding(Theme.Space.s)
+          }
+          if store.topProcesses.isEmpty {
+            Text(String(localized: "No readable processes in this sample"))
+              .font(Theme.Font.callout).foregroundStyle(Theme.Palette.inkSecondary)
+              .padding(Theme.Space.l)
+          } else {
+            header
+            ForEach(Array(store.topProcesses.enumerated()), id: \.element.id) { index, row in
+              if index > 0 { RowDivider(leading: Theme.Space.l) }
+              processRow(row)
+            }
+          }
+        } else {
+          HStack(spacing: Theme.Space.s) {
+            if store.sampling { ProgressView().controlSize(.small) }
+            Text(
+              store.sampling
+                ? String(localized: "Reading system status") : String(localized: "Process information unavailable")
+            )
+            .font(Theme.Font.callout).foregroundStyle(Theme.Palette.inkSecondary)
+          }
+          .padding(Theme.Space.l)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+      .cardSurface(padding: 0)
+    }
+  }
+
+  private var header: some View {
+    HStack {
+      Text(String(localized: "Process"))
+      Spacer()
+      Text(String(localized: "Memory used")).frame(width: Theme.Layout.statusColumn, alignment: .trailing)
+      Text(String(localized: "CPU / core")).frame(width: Theme.Layout.sizeColumn, alignment: .trailing)
+    }
+    .font(Theme.Font.captionMedium).foregroundStyle(Theme.Palette.inkSecondary)
+    .padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.s)
+    .background(Theme.Palette.well)
+  }
+
+  private func processRow(_ row: ProcessDisplay) -> some View {
+    HStack(spacing: Theme.Space.s) {
+      Text(row.process.name).font(Theme.Font.body).lineLimit(1)
+      Spacer(minLength: Theme.Space.s)
+      Text(format(Int64(clamping: row.process.residentBytes)))
+        .frame(width: Theme.Layout.statusColumn, alignment: .trailing)
+      Text(
+        row.corePercent.map { "\($0.formatted(.number.precision(.fractionLength(0...1))))%" }
+          ?? String(localized: "Unknown")
+      )
+      .frame(width: Theme.Layout.sizeColumn, alignment: .trailing)
+    }
+    .font(Theme.Font.mono).foregroundStyle(Theme.Palette.ink)
+    .padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.s)
+    .accessibilityElement(children: .combine)
+  }
+
+  private func partialText(_ census: ProcessCensus) -> String {
+    "\(String(localized: "Partial process list")): \(census.unreadableCount) \(String(localized: "unreadable"))"
+      + (census.truncated ? " · " + String(localized: "limit reached") : "")
   }
 }

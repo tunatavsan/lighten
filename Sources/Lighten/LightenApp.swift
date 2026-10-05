@@ -71,7 +71,7 @@ struct LightenRootView: View {
     case .overview:
       OverviewView(
         store: model.overview, space: model.space, actions: model.actions,
-        showSpace: { model.show(.space) }, showHistory: { model.show(.history) })
+        presentations: model.presentations, show: model.show)
     case .space:
       SpaceView(store: model.space, actions: model.actions, showHistory: { model.show(.history) })
     case .clean:

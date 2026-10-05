@@ -282,6 +282,23 @@
         }
       }
     },
+    "%lld items": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld items"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld öğe"
+          }
+        }
+      }
+    },
     "%lld items checked": {
       "localizations": {
         "en": {
@@ -1925,6 +1942,23 @@
         }
       }
     },
+    "Copy file size": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy file size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopya dosya boyutu"
+          }
+        }
+      }
+    },
     "Copy file size: %@": {
       "localizations": {
         "en": {
@@ -2161,22 +2195,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Disk"
-          }
-        }
-      }
-    },
-    "Disk checked": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disk checked"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disk denetlendi"
           }
         }
       }
@@ -2882,6 +2900,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Klasörler"
+          }
+        }
+      }
+    },
+    "Free of %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Free of %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ içinde boş"
           }
         }
       }
@@ -6513,22 +6548,6 @@
         }
       }
     },
-    "Scanned items": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scanned items"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Taranan öğeler"
-          }
-        }
-      }
-    },
     "Scanning": {
       "localizations": {
         "en": {
@@ -9111,6 +9130,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu sembolik bağlantı bu işlemle taşınamaz. İçinde bulunduğu klasörü seçin."
+          }
+        }
+      }
+    },
+    "Tools": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tools"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Araçlar"
           }
         }
       }

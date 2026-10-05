@@ -221,6 +221,9 @@ extension Theme {
     static let inspectorIdeal: CGFloat = 300
     static let inspectorMaximum: CGFloat = 380
     static let listColumn: CGFloat = 340
+    /// Below this content width Space shows the map and the list one at a time.
+    static let spaceCompactWidth: CGFloat = 760
+    static let basketChipsWidth: CGFloat = 280
     static let toolTile: CGFloat = 28
     static let sidebarGlyph: CGFloat = 20
     static let toolTileLarge: CGFloat = 40
@@ -237,6 +240,8 @@ extension Theme {
     static let welcomeWidth: CGFloat = 560
     static let settingsWidth: CGFloat = 520
     static let menuBarWidth: CGFloat = 300
+    static let memoryCardWidth: CGFloat = 300
+    static let toolCardMinimum: CGFloat = 172
     static let popoverWidth: CGFloat = 320
     static let emptyStateWidth: CGFloat = 380
     static let popoverMaximumHeight: CGFloat = 420

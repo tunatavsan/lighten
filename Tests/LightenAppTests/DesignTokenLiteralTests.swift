@@ -25,7 +25,6 @@ struct DesignTokenLiteralTests {
     "Sources/Lighten/Interface/FileAccessViews.swift",
     "Sources/Lighten/Interface/LegacyToolScreen.swift",
     "Sources/Lighten/Overview/LightenSettingsView.swift",
-    "Sources/Lighten/Overview/OverviewView.swift",
     "Sources/Lighten/Services/FailureReasonView.swift",
     "Sources/Lighten/Space/SpaceStore.swift",
     "Sources/Lighten/Space/SpaceView.swift",
