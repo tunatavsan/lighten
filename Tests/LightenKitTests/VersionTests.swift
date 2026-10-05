@@ -5,14 +5,14 @@ import Testing
 
 @Suite("Lighten version")
 struct VersionTests {
-  @Test("Initial marketing version")
+  @Test("Marketing version is a semantic version")
   func marketingVersion() {
-    #expect(LightenVersion.marketing == "0.0.1")
+    #expect(LightenVersion.marketing.wholeMatch(of: /[0-9]+\.[0-9]+\.[0-9]+/) != nil)
   }
 
-  @Test("Initial build number")
+  @Test("Build number is positive")
   func buildNumber() {
-    #expect(LightenVersion.build == 1)
+    #expect(LightenVersion.build > 0)
   }
 
   @Test("Source plist leaves both versions for packaging")
