@@ -518,7 +518,7 @@ final class AppsStore {
     cancellationRequestedAt = nil
   }
 
-  func select(_ path: String) {
+  func select(_ path: String, selectPackage: Bool = false) {
     guard !needsRescan, pictureRows.isEmpty, !dropping else { return }
     selectedReviewRequestedAt = .now
     selectedDrawRevision += 1
@@ -532,16 +532,19 @@ final class AppsStore {
     navigationGeneration = UUID()
     ownershipRefusalEvidence = []
     selectedPath = path
-    packageSelected = false
+    packageSelected = selectPackage && selectedReport.map { packageUnavailableReason($0) == nil } == true
     selectedDataPaths = []
+    if packageSelected, let report = selectedReport {
+      selectedDataPaths = Set(report.related.filter { automaticSelectionAllowed($0) }.map(\.path))
+    }
     explicitlySelectedUnproven = [:]
     message = nil
     requestSelectedReview(path)
   }
 
-  func select(_ path: String, actions: ActionStore) {
+  func select(_ path: String, actions: ActionStore, selectPackage: Bool = true) {
     invalidatePreparation(actions: actions)
-    select(path)
+    select(path, selectPackage: selectPackage)
   }
 
   func waitForSelectedReview() async { await selectedReviewTask?.value }
@@ -752,7 +755,12 @@ final class AppsStore {
         invalidatePreparation(actions: preparedActions)
         message = String(localized: "An item you selected by name changed. Review it and select it again.")
       }
-      if packageSelected && !ownershipPending && preferences.automaticallySelectRelatedData {
+      // A review covers the choices present when it started. Newly discovered data stays available
+      // for a later explicit choice without cancelling or expanding that confirmation.
+      let hasPresentedReview = presentedPlanID != nil && preparedActions?.pending?.id == presentedPlanID
+      if packageSelected && !ownershipPending && !preparing && !hasPresentedReview
+        && preferences.automaticallySelectRelatedData
+      {
         selectedDataPaths.formUnion(
           reports[index].related.filter {
             automaticSelectionAllowed($0) && !explicitlyDeselectedDataPaths.contains($0.path)
@@ -842,7 +850,7 @@ final class AppsStore {
     }
     incompletePackagePaths.remove(path)
     reviewedDropPath = path
-    select(path, actions: actions)
+    select(path, actions: actions, selectPackage: false)
   }
 
   func toggleData(_ path: String, actions: ActionStore) {
@@ -1208,7 +1216,8 @@ final class AppsStore {
   private func invalidatePreparation(
     actions: ActionStore? = nil, keepPresentedPlanID: Bool = false
   ) {
-    (actions ?? preparedActions)?.clearKeptItems()
+    let actions = actions ?? preparedActions
+    actions?.clearKeptItems()
     preparationGeneration = UUID()
     preparationTask?.cancel()
     preparationTask = nil
@@ -1218,11 +1227,19 @@ final class AppsStore {
     if !keepPresentedPlanID || pendingMatches { presentedPlanID = nil }
   }
 
+  func canReviewSelectedData(actions: ActionStore) -> Bool {
+    !preparing && !needsRescan && !actions.busy && pictureRows.isEmpty
+      && selectedReport != nil && (packageSelected || !selectedDataPaths.isEmpty)
+  }
+
   func prepareSelectedData(actions: ActionStore) async {
-    guard !preparing, !needsRescan, !actions.busy, pictureRows.isEmpty, let report = selectedReport,
-      packageSelected || !selectedDataPaths.isEmpty
+    guard canReviewSelectedData(actions: actions), let report = selectedReport
     else {
       message = String(localized: "Select the app or eligible related data")
+      return
+    }
+    if packageSelected, let reason = packageUnavailableReason(report) {
+      message = reason
       return
     }
     if !usesInjectedPlanner {
@@ -1241,6 +1258,9 @@ final class AppsStore {
             applicationPackagePaths: [report.path]))
       }
       let chosen = selections
+      let missing = paths.subtracting(report.related.map(\.path)).sorted().map {
+        PlanRejection(.unavailable, path: $0)
+      }
       await prepare(
         actions: actions,
         stillSelected: {
@@ -1248,7 +1268,7 @@ final class AppsStore {
         },
         builder: {
           let outcome = await planner.makeAvailableUserSelectionPlan(selections: chosen, kind: kind)
-          return .init(plan: outcome.plan, rejections: outcome.rejections)
+          return .init(plan: outcome.plan, rejections: missing + outcome.rejections)
         })
       return
     }
@@ -1261,10 +1281,6 @@ final class AppsStore {
     }.sorted { $0.path < $1.path }
     let missing = selectedDataPaths.subtracting(candidates.map(\.path) + manual.map(\.path)).sorted().map {
       PlanRejection(.unavailable, path: $0, ruleID: "explicitSelectionRequired")
-    }
-    if packageSelected, let reason = packageUnavailableReason(report) {
-      message = reason
-      return
     }
     let includePackage = packageSelected
     let dataPaths = selectedDataPaths

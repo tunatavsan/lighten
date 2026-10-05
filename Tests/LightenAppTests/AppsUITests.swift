@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import LightenKit
 import Testing
 
 @testable import Lighten
@@ -180,4 +181,34 @@ func applicationViewportTracksViewportChanges() {
   let empty = ApplicationViewportSnapshot(
     rows: viewportRows(count: 22), orderedPaths: ordered, viewport: .zero)
   #expect(empty.visibleRows.isEmpty && !empty.iconsReady)
+}
+
+@Test("Review availability follows explicit choices and cancellation while background measurement continues")
+@MainActor func appsReviewAvailabilityIgnoresBackgroundProgress() {
+  let path = "/Applications/LightenQA-availability.app"
+  let store = AppsStore(events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [
+    ApplicationReport(
+      path: path, bundleID: "qa.lighten.availability", version: nil, signerTeamID: nil,
+      logical: ByteAggregate(knownLowerBound: 0, completeTotal: nil),
+      allocated: ByteAggregate(knownLowerBound: 0, completeTotal: nil),
+      knownItemCount: 0, partial: true, related: [], manualUninstallerSuggested: false)
+  ]
+  store.busy = true
+  store.measuringPaths = [path]
+  store.select(path, actions: actions)
+  #expect(store.canReviewSelectedData(actions: actions))
+  store.togglePackage(actions: actions)
+  #expect(!store.canReviewSelectedData(actions: actions))
+  store.togglePackage(actions: actions)
+  #expect(store.canReviewSelectedData(actions: actions))
+  store.preparing = true
+  #expect(!store.canReviewSelectedData(actions: actions))
+  store.preparing = false
+  actions.busy = true
+  #expect(!store.canReviewSelectedData(actions: actions))
+  actions.busy = false
+  store.cancelScan()
+  #expect(!store.canReviewSelectedData(actions: actions))
 }

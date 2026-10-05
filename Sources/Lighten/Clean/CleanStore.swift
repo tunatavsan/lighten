@@ -380,41 +380,37 @@ final class CleanStore: ToolSummaryProviding {
       let token = tool.preparation.begin()
     else { return }
     defer { tool.preparation.finish(token) }
-    do {
-      let outcome = await userPlanner.makeAvailableUserSelectionPlan(
-        selections: [
-          UserSelection(
-            path: candidate.path,
-            expectedIdentity: candidate.snapshot?.entries.first { $0.path == candidate.path }?.identity,
-            observedSize: candidate.observation.map { ObservedPlanSize(logical: $0.logical, allocated: $0.allocated) },
-            warnings: SelectionWarning.example(in: candidate.snapshot?.entries.map(\.path) ?? [candidate.path])
-              .map { [UserSelectionWarning(examplePath: $0)] } ?? [],
-            applicationPackagePaths: ActionStore.observedApplicationPackagePaths(
-              in: candidate.snapshot?.entries.map(\.path) ?? [], under: candidate.path))
-        ],
-        kind: preferences.deletionDefault.kind)
-      guard tool.preparation.accepts(token) else { return }
-      guard let plan = outcome.plan else {
-        message = outcome.rejections.map(SpaceText.rejection).joined(separator: "\n")
-        return
-      }
-      let running = await actions.containsRunningApplications(plan)
-      guard tool.preparation.accepts(token) else { return }
-      actions.present(
-        plan: plan,
-        items: plan.items.map { item in
-          let sizes = PlanItemSize.measure(item)
-          return ActionItemSummary(
-            id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
-            path: item.sourcePath,
-            reason: String(localized: "Previously verified owner absent here; it may exist elsewhere"),
-            logicalBytes: sizes.0, allocatedBytes: sizes.1)
-        }, hasRunningApplications: running)
-      presentedPlanID = plan.id
-      message = nil
-    } catch {
-      if tool.preparation.accepts(token) { message = FailureText.describe(error) }
+    let outcome = await userPlanner.makeAvailableUserSelectionPlan(
+      selections: [
+        UserSelection(
+          path: candidate.path,
+          expectedIdentity: candidate.snapshot?.entries.first { $0.path == candidate.path }?.identity,
+          observedSize: candidate.observation.map { ObservedPlanSize(logical: $0.logical, allocated: $0.allocated) },
+          warnings: SelectionWarning.example(in: candidate.snapshot?.entries.map(\.path) ?? [candidate.path])
+            .map { [UserSelectionWarning(examplePath: $0)] } ?? [],
+          applicationPackagePaths: ActionStore.observedApplicationPackagePaths(
+            in: candidate.snapshot?.entries.map(\.path) ?? [], under: candidate.path))
+      ],
+      kind: preferences.deletionDefault.kind)
+    guard tool.preparation.accepts(token) else { return }
+    guard let plan = outcome.plan else {
+      message = outcome.rejections.map(SpaceText.rejection).joined(separator: "\n")
+      return
     }
+    let running = await actions.containsRunningApplications(plan)
+    guard tool.preparation.accepts(token) else { return }
+    actions.present(
+      plan: plan,
+      items: plan.items.map { item in
+        let sizes = PlanItemSize.measure(item)
+        return ActionItemSummary(
+          id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
+          path: item.sourcePath,
+          reason: String(localized: "Previously verified owner absent here; it may exist elsewhere"),
+          logicalBytes: sizes.0, allocatedBytes: sizes.1)
+      }, hasRunningApplications: running)
+    presentedPlanID = plan.id
+    message = nil
   }
 
   func prepare(actions: ActionStore, kind: ActionKind = .trash) async {

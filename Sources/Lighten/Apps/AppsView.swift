@@ -394,9 +394,7 @@ struct AppsView: View {
       Task { await store.prepareSelectedData(actions: actions) }
     }
     .buttonStyle(.borderedProminent)
-    .disabled(
-      (store.selectedDataPaths.isEmpty && !store.packageSelected) || store.preparing
-        || store.needsRescan || actions.busy)
+    .disabled(!store.canReviewSelectedData(actions: actions))
   }
 
   private func appRow(_ app: ApplicationReport) -> some View {

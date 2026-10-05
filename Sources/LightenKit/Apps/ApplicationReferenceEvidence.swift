@@ -124,7 +124,7 @@ struct ApplicationReferenceDirectories: Sendable, Equatable {
     guard count > 1, count <= Int(PATH_MAX) else { return nil }
     var bytes = [CChar](repeating: 0, count: count)
     guard confstr(key, &bytes, count) == count, bytes.last == 0 else { return nil }
-    var path = String(cString: bytes)
+    var path = String(decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     while path.hasSuffix("/") { path.removeLast() }
     // /var is macOS's fixed alias. Avoid following that alias in the secure
     // descriptor walk; every component below /private is still no-follow.

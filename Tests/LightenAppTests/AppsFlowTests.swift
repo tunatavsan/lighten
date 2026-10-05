@@ -34,7 +34,7 @@ private struct AppsUnknownSource: RunningApplicationSource {
   store.reports = [flowReport(path: app)]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending?.plan == plan)
@@ -86,7 +86,7 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   store.reports = [flowReport(path: app, candidates: [accepted, refused])]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.toggleData(accepted.path, actions: actions)
   store.toggleData(refused.path, actions: actions)
   store.selectedDataPaths.insert(missing)
@@ -120,7 +120,7 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   store.reports = [flowReport(path: app, candidates: [candidate])]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.toggleData(candidate.path, actions: actions)
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending == nil)
@@ -148,7 +148,7 @@ private func flowPictures(_ root: String) -> ResultPictureStore {
   store.reports = [flowReport(path: app, candidates: [candidate])]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.toggleData(candidate.path, actions: actions)
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending == nil)
@@ -197,7 +197,7 @@ private actor AppsAvailableGate {
   let actions = ActionStore(journal: JSONLActionJournal(path: journalPath))
   store.reports = [flowReport(path: app, identity: identity)]
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending == nil && actions.result == nil && actions.resultKind == nil)
@@ -227,14 +227,14 @@ private actor AppsAvailableGate {
   let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
   store.reports = [flowReport(path: app), flowReport(path: root + "/LightenQA-other.app")]
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   let preparation = Task { await store.prepareSelectedData(actions: actions) }
   await gate.waitForArrival()
   if cancelTask {
     preparation.cancel()
   } else {
-    store.select(root + "/LightenQA-other.app", actions: actions)
+    store.select(root + "/LightenQA-other.app", actions: actions, selectPackage: false)
   }
   await gate.finish(.init(plan: nil, rejections: [PlanRejection(.needsAdministrator, path: app)]))
   await preparation.value
@@ -259,7 +259,7 @@ private actor AppsAvailableGate {
   let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
   store.reports = [flowReport(path: app)]
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   let firstReview = Task { await store.prepareSelectedData(actions: actions) }
   await gate.waitForArrival()
@@ -300,7 +300,7 @@ private actor AppsAvailableGate {
   store.reports = [flowReport(path: app, candidates: [candidate])]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.toggleData(candidate.path, actions: actions)
   let preparation = Task { await store.prepareSelectedData(actions: actions) }
   await gate.waitForArrival()
@@ -349,7 +349,7 @@ private actor AppsAvailableGate {
   store.reports = [report]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(appPath, actions: actions)
+  store.select(appPath, actions: actions, selectPackage: false)
   #expect(store.selectedPath == appPath)
   #expect(store.canSelect(candidate, app: report))
   store.togglePackage(actions: actions)
@@ -401,7 +401,7 @@ private actor AppsAvailableGate {
   let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
   store.reports = [report]
   store.inventoryComplete = true
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   #expect(store.canSelect(candidate, app: report) && store.selectedDataPaths.isEmpty)
   await store.prepareSelectedData(actions: actions)
@@ -440,7 +440,7 @@ private actor AppsAvailableGate {
   store.reports = [report]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(listed, actions: actions)
+  store.select(listed, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending?.plan == plan)
@@ -500,7 +500,7 @@ private actor AppsAvailableGate {
   let actions = ActionStore()
   store.reports = [report]
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(listed, actions: actions)
+  store.select(listed, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending == nil)
@@ -604,7 +604,7 @@ private actor AppsAvailableGate {
   #expect(store.pictureObservedAt == observedAt)
   #expect(store.busy)
   #expect(store.reports.isEmpty)
-  store.select(reports[0].path, actions: actions)
+  store.select(reports[0].path, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending == nil)
@@ -641,7 +641,7 @@ private actor AppsAvailableGate {
   store.reports = [flowReport(path: app, candidates: [first, second])]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.toggleData(first.path, actions: actions)
   store.toggleData(second.path, actions: actions)
   #expect(store.selectedDataPaths == [first.path, second.path])
@@ -863,7 +863,7 @@ private func appFileManifest(_ path: String) throws -> [String: String] {
   store.reports = [flowReport(path: app, candidates: [first, skipped, medium])]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   #expect(store.selectedDataPaths == [first.path, skipped.path])
   await store.prepareSelectedData(actions: actions)
@@ -996,7 +996,7 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   store.reports = [flowReport(path: path, candidates: [candidate])]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(path, actions: actions)
+  store.select(path, actions: actions, selectPackage: false)
   #expect(!candidate.canSelect && !candidate.defaultSelected)
   store.togglePackage(actions: actions)
   #expect(store.packageSelected && store.selectedDataPaths.isEmpty)
@@ -1032,7 +1032,7 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   store.reports = [flowReport(path: path, candidates: [candidate])]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(path, actions: actions)
+  store.select(path, actions: actions, selectPackage: false)
   store.selectedDataPaths = [candidate.path]
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending == nil)
@@ -1067,7 +1067,7 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   store.reports = [flowReport(path: path, candidates: [candidate])]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(path, actions: actions)
+  store.select(path, actions: actions, selectPackage: false)
   store.toggleData(candidate.path, actions: actions)
   let preparation = Task { await store.prepareSelectedData(actions: actions) }
   await gate.waitForArrival()
@@ -1111,7 +1111,7 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   store.reports = [report]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   store.toggleData(unselected.path, actions: actions)
   await store.prepareSelectedData(actions: actions)
@@ -1205,7 +1205,7 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   store.reports = [flowReport(path: app, candidates: [candidate])]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.flow"]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   #expect(store.selectedDataPaths.contains(candidate.path) == allowed)
 }
@@ -1245,7 +1245,6 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   #expect(report.logical.completeTotal == nil && report.version == "1.2")
   #expect(store.busy && !store.inventoryComplete)
   store.select(path, actions: actions)
-  store.togglePackage(actions: actions)
   await store.prepareSelectedData(actions: actions)
   let pending = try #require(actions.pending)
   #expect(pending.plan.items.map(\.sourcePath) == [path])
@@ -1288,7 +1287,7 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
     planService: PlanService(homeDirectory: root))
   let app = root + "/LightenQA-shared.app"
   store.reports = [flowReport(path: app, candidates: [candidate])]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   #expect(!store.automaticSelectionAllowed(candidate))
   store.toggleData(path, actions: actions)
   await store.prepareSelectedData(actions: actions)
@@ -1327,7 +1326,7 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
     trash: OwnedFlowTrash(destination: trashPath), planService: PlanService(homeDirectory: root),
     preferences: preferences, applicationActivity: ClearFlowApplicationActivity())
   store.reports = [flowReport(path: app, candidates: [candidate], identity: appIdentity)]
-  store.select(app, actions: actions)
+  store.select(app, actions: actions, selectPackage: false)
   store.togglePackage(actions: actions)
   #expect(store.selectedDataPaths.isEmpty)
   await store.prepareSelectedData(actions: actions)
@@ -1462,4 +1461,96 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   #expect(store.openingTiming?.requestedAt == requestedAt)
   store.cancelScan()
   continuation.finish()
+}
+
+@Test("Package and ready roots are reviewed while ownership is pending; missing choices get an exact reason")
+@MainActor func appsPendingOwnershipReviewsReadyRoots() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let app = root + "/LightenQA-pending.app"
+  let readyPath = root + "/ready-data"
+  let missingPath = root + "/not-discovered"
+  for path in [app, readyPath] {
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
+  }
+  var ready = RelatedDataCandidate(
+    id: readyPath, path: readyPath, classification: .uncertain, reason: .ownershipUnavailable,
+    snapshot: nil, receipt: nil)
+  ready.displayRootIdentity = try DescriptorFileSystem.identity(at: readyPath)
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let planner = PlanService(homeDirectory: root)
+  let store = AppsStore(pictures: flowPictures(root), userPlanner: planner, events: { stream })
+  let actions = ActionStore(
+    journal: JSONLActionJournal(path: root + "/journal.jsonl"), planService: planner,
+    applicationActivity: ClearFlowApplicationActivity())
+  store.startScan(actions: actions)
+  let report = flowReport(path: app, identity: try DescriptorFileSystem.identity(at: app))
+  let inventory = BundleInventory(applications: [], unidentifiedPaths: [], complete: false, observedAt: Date())
+  continuation.yield(.inventory(inventory, [report]))
+  try await waitFlow { store.selectedReport == nil && store.reports.count == 1 }
+  store.select(app, actions: actions)
+  continuation.yield(.related(path: app, candidates: [ready], ownershipPending: true))
+  try await waitFlow { store.ownershipPendingPaths.contains(app) }
+  store.toggleData(readyPath, actions: actions)
+  store.selectedDataPaths.insert(missingPath)
+  #expect(store.busy && !store.inventoryComplete && store.measuringPaths.contains(app))
+  await store.prepareSelectedData(actions: actions)
+  let presentation = try #require(actions.pending)
+  #expect(Set(presentation.plan.items.map(\.sourcePath)) == [app, readyPath])
+  #expect(presentation.rejectedItems.map(\.path) == [missingPath])
+  #expect(presentation.rejectedItems.first?.reason == .unavailable)
+  #expect(!store.preparing && store.ownershipPendingPaths.contains(app))
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+  store.cancelScan()
+  continuation.finish()
+  #expect(actions.pending == nil)
+}
+
+@Test("Lighten remains unselected and refuses its own package in every preparation path", arguments: [false, true])
+@MainActor func appsDefaultSelectionPreservesSelfProtection(injected: Bool) async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let path = root + "/LightenQA-self.app"
+  try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
+  let builder: AppsStore.AvailableUninstallPlanBuilder? =
+    injected
+    ? { @Sendable _, _, _ in
+      Issue.record("Self removal reached the plan builder")
+      return .init(plan: nil, rejections: [])
+    } : nil
+  let store = AppsStore(pictures: flowPictures(root), availableUninstallPlanBuilder: builder)
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.reports = [flowReport(path: path, bundleID: LightenIdentity.bundleIdentifier.uppercased())]
+  store.select(path, actions: actions)
+  #expect(!store.packageSelected && !store.canReviewSelectedData(actions: actions))
+  store.packageSelected = true
+  await store.prepareSelectedData(actions: actions)
+  #expect(actions.pending == nil && !store.preparing)
+  #expect(store.message == String(localized: "Lighten does not remove itself."))
+}
+
+private struct AppsActiveSelectionActivity: ApplicationActivitySource {
+  func activity(applicationPath: String) async -> ApplicationActivity {
+    ApplicationActivity(state: .active, scope: .currentUser)
+  }
+}
+
+@Test("Default app selection preserves the running-application close confirmation")
+@MainActor func appsDefaultSelectionKeepsRunningConfirmation() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let path = root + "/LightenQA-running.app"
+  try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
+  let planner = PlanService(homeDirectory: root)
+  let store = AppsStore(pictures: flowPictures(root), userPlanner: planner)
+  let actions = ActionStore(
+    journal: JSONLActionJournal(path: root + "/journal.jsonl"), planService: planner,
+    userSelectionApplicationActivity: AppsActiveSelectionActivity())
+  store.reports = [flowReport(path: path, identity: try DescriptorFileSystem.identity(at: path))]
+  store.select(path, actions: actions)
+  await store.prepareSelectedData(actions: actions)
+  let presentation = try #require(actions.pending)
+  #expect(presentation.plan.items.map(\.sourcePath) == [path])
+  #expect(presentation.hasRunningApplications)
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
 }

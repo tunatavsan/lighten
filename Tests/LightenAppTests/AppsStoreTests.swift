@@ -65,7 +65,7 @@ private struct ClosedAppSource: RunningApplicationSource {
   #expect(store.measuringPaths == [path])
   #expect(store.reports[0].version == "1")
   #expect(!store.inventoryComplete)
-  store.select(path, actions: actions)
+  store.select(path, actions: actions, selectPackage: false)
   #expect(store.selectedReport?.path == path)
   continuation.yield(.measured([measured]))
   await waitForApps { store.measuredCount == 1 }
@@ -154,7 +154,7 @@ private actor AppsPlanGate {
   store.reports = [app]
   store.inventoryComplete = true
   store.runningCheckedIDs = [bundleID]
-  store.select(appPath, actions: actions)
+  store.select(appPath, actions: actions, selectPackage: false)
   store.toggleData(dataPath, actions: actions)
 
   let staleResult = Task { await store.prepareSelectedData(actions: actions) }
@@ -255,7 +255,7 @@ private actor SelectedRunningGate: RunningApplicationSource {
     running: running, events: { AsyncStream { $0.finish() } })
   let actions = ActionStore()
   store.reports = [metadata]
-  store.select(path, actions: actions)
+  store.select(path, actions: actions, selectPackage: false)
   let started = try #require(store.selectedReviewRequestedAt)
   await gate.waitForRequests(1)
   await gate.publish(ApplicationRelatedReview(application: app, candidates: [], phase: .shallow), request: 0)
@@ -299,7 +299,7 @@ private actor SelectedRunningGate: RunningApplicationSource {
     preferences: preferences, running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
   let actions = ActionStore()
   store.reports = [selectedAppReport(path, bundleID: app.bundleID)]
-  store.select(path, actions: actions)
+  store.select(path, actions: actions, selectPackage: false)
   await gate.waitForRequests(1)
   let update = ApplicationRelatedReview(application: app, candidates: [candidate], ownershipPending: false)
   await gate.publish(update, request: 0)
@@ -341,7 +341,7 @@ private actor SelectedRunningGate: RunningApplicationSource {
     running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
   let actions = ActionStore()
   store.reports = [selectedAppReport(app.path, bundleID: app.bundleID)]
-  store.select(app.path, actions: actions)
+  store.select(app.path, actions: actions, selectPackage: false)
   await gate.waitForRequests(1)
   await gate.publish(ApplicationRelatedReview(application: app, candidates: [shallow], phase: .shallow), request: 0)
   await waitForApps { store.selectedShallowComplete }
@@ -424,7 +424,7 @@ private func selectedAppCandidate(_ path: String) -> RelatedDataCandidate {
   await waitForApps { store.reports.count == 1 }
   #expect(store.inventoryPublishedAt != nil)
   #expect(!store.inventoryComplete)
-  store.select(path, actions: actions)
+  store.select(path, actions: actions, selectPackage: false)
   await gate.waitForRequests(1)
   #expect(store.busy && store.selectedReviewPending)
   #expect(store.packageUnavailableReason(metadata) == nil)
@@ -482,9 +482,9 @@ private func selectedAppCandidate(_ path: String) -> RelatedDataCandidate {
         selectedAppReport(secondPath, bundleID: second.bundleID),
       ]))
   await waitForApps { store.reports.count == 2 }
-  store.select(firstPath, actions: actions)
+  store.select(firstPath, actions: actions, selectPackage: false)
   await gate.waitForRequests(1)
-  store.select(secondPath, actions: actions)
+  store.select(secondPath, actions: actions, selectPackage: false)
   await gate.waitForRequests(2)
   await gate.publish(oldReview, request: 0)
   await gate.finish(oldReview, request: 0)
@@ -601,7 +601,7 @@ private func selectedAppCandidate(_ path: String) -> RelatedDataCandidate {
     }, running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
   let actions = ActionStore()
   store.reports = [report]
-  store.select(listed, actions: actions)
+  store.select(listed, actions: actions, selectPackage: false)
   await store.waitForSelectedReview()
   #expect(store.selectedPath == listed)
   #expect(store.selectedReport?.linkTarget == physical)
@@ -644,7 +644,7 @@ private func storeUnprovenCandidate(
   store.reports = [app]
   store.inventoryComplete = true
   store.runningCheckedIDs = ["qa.lighten.name"]
-  store.select(path, actions: actions)
+  store.select(path, actions: actions, selectPackage: false)
   #expect(store.canSelect(candidate, app: app))
   #expect(!store.automaticSelectionAllowed(candidate))
   store.toggleData(candidate.path, actions: actions)
@@ -698,7 +698,7 @@ private func storeUnprovenCandidate(
   await waitForApps { store.reports.count == 1 }
   store.inventoryComplete = true
   store.runningCheckedIDs = [id]
-  store.select(path, actions: actions)
+  store.select(path, actions: actions, selectPackage: false)
   store.toggleData(candidate.path, actions: actions)
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending?.id == plan.id)
@@ -729,4 +729,84 @@ private func storeUnprovenCandidate(
   ])
 func appsProvenanceLabelsAreHonest(kind: RelatedDataProvenanceKind, phrase: String) {
   #expect(AppsStore.provenanceLabel(kind).contains(phrase))
+}
+
+@Test("Selecting an app chooses its package immediately while related review is suspended")
+@MainActor func appsSelectionDefaultsToPackage() async throws {
+  let path = "/Applications/LightenQA-default.app"
+  let app = InstalledApplication(bundleID: "qa.lighten.default", path: path, version: "1")
+  let gate = SelectedAppReviewGate()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    selectedReview: { path, progress in try await gate.review(path: path, progress: progress) },
+    running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [selectedAppReport(path, bundleID: app.bundleID)]
+  store.busy = true
+  store.measuringPaths = [path]
+  store.select(path, actions: actions)
+  await gate.waitForRequests(1)
+  #expect(store.packageSelected)
+  #expect(store.selectedReviewPending && !store.inventoryComplete && store.busy)
+  store.togglePackage(actions: actions)
+  #expect(!store.packageSelected)
+  await gate.finish(ApplicationRelatedReview(application: app, candidates: []), request: 0)
+  await store.waitForSelectedReview()
+  #expect(!store.packageSelected)
+}
+
+@Test("Late automatic related data cannot replace the selection being prepared or confirmed")
+@MainActor func appsEnrichmentPreservesPreparingSelection() async throws {
+  let name = "LightenQA-" + UUID().uuidString
+  let defaults = try #require(UserDefaults(suiteName: name))
+  defer { defaults.removePersistentDomain(forName: name) }
+  let preferences = RemovalPreferences(defaults: defaults, persistentDomainName: name)
+  preferences.automaticallySelectRelatedData = true
+  let path = "/Applications/LightenQA-confirmation.app"
+  let app = InstalledApplication(bundleID: "qa.lighten.confirmation", path: path, version: "1")
+  let ready = selectedAppCandidate("/tmp/LightenQA-ready")
+  let late = selectedAppCandidate("/tmp/LightenQA-late")
+  let latest = selectedAppCandidate("/tmp/LightenQA-latest")
+  let review = SelectedAppReviewGate()
+  let planning = AppsPlanGate()
+  let package = PlanItem(
+    id: UUID(), sourcePath: path, inventory: [], ancestors: [], policy: .wholeBundle,
+    applicationBundleID: app.bundleID)
+  let data = PlanItem(id: UUID(), sourcePath: ready.path, inventory: [], ancestors: [])
+  let plan = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [package, data])
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    uninstallPlanBuilder: { _, candidates, includePackage in
+      #expect(includePackage && candidates.map(\.path) == [ready.path])
+      return try await planning.next()
+    }, selectedReview: { path, progress in try await review.review(path: path, progress: progress) },
+    preferences: preferences, running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [selectedAppReport(path, bundleID: app.bundleID)]
+  store.select(path, actions: actions)
+  // Start with an explicit package choice to isolate enrichment from selection defaults.
+  store.packageSelected = true
+  await review.waitForRequests(1)
+  await review.publish(
+    ApplicationRelatedReview(application: app, candidates: [ready], ownershipPending: false), request: 0)
+  await waitForApps { store.selectedDataPaths.contains(ready.path) }
+  try #require(store.selectedDataPaths == [ready.path])
+  #expect(store.selectedReviewPending)
+  let preparation = Task { await store.prepareSelectedData(actions: actions) }
+  await planning.waitForRequest(1)
+  await review.publish(
+    ApplicationRelatedReview(application: app, candidates: [ready, late], ownershipPending: false), request: 0)
+  await waitForApps { store.selectedReport?.related.count == 2 }
+  await planning.finish(.success(plan))
+  await preparation.value
+  #expect(actions.pending?.plan == plan)
+  #expect(store.selectedDataPaths == [ready.path])
+  await review.finish(
+    ApplicationRelatedReview(application: app, candidates: [ready, late, latest], ownershipPending: false), request: 0)
+  await store.waitForSelectedReview()
+  #expect(actions.pending?.plan == plan)
+  #expect(store.selectedDataPaths == [ready.path])
+  store.toggleData(late.path, actions: actions)
+  #expect(actions.pending == nil)
+  #expect(store.selectedDataPaths == [ready.path, late.path])
 }
