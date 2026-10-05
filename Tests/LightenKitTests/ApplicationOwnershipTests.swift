@@ -365,3 +365,23 @@ struct ApplicationOwnershipTests {
   }
 
 }
+
+/// Recursion that needs far more than a dispatch worker's 512 KB stack, as a walk through
+/// deeply nested packages does.
+private func deepRecursion(_ depth: Int) -> Int {
+  var padding = (depth, depth &* 3, depth &* 5, depth &* 7, depth &* 11, depth &* 13, depth &* 17, depth &* 19)
+  guard depth > 0 else { return padding.0 }
+  let below = deepRecursion(depth - 1)
+  withUnsafeMutableBytes(of: &padding) { _ = $0.count }
+  return below &+ padding.1 &- padding.2
+}
+
+@Test("Ownership work has the stack for deep package walks")
+func ownershipWorkRunsDeepRecursion() async throws {
+  let work = ApplicationOwnershipWork(label: "test.ownership-stack")
+  let finished = try await work.perform { _ in
+    _ = deepRecursion(40_000)
+    return true
+  }
+  #expect(finished)
+}

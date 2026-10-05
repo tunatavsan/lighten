@@ -4,8 +4,12 @@ import Synchronization
 
 /// Ownership walks and native registration can block. A serial dispatch lane
 /// keeps that work outside Swift's cooperative executor without unbounded fan-out.
+/// Each job runs on its own thread with a large stack: the package walk recurses
+/// once per nested folder, deeper than a dispatch worker's 512 KB stack allows.
 final class ApplicationOwnershipWork: Sendable {
   static let shared = ApplicationOwnershipWork(label: "com.tavsn.lighten.application-ownership")
+  /// Room for the walk's 128-level depth limit with a wide margin.
+  static let stackSize = 16 << 20
   private let queue: DispatchQueue
 
   init(label: String) { queue = DispatchQueue(label: label, qos: .utility) }
@@ -58,7 +62,16 @@ final class ApplicationOwnershipWork: Sendable {
         }
         queue.async {
           guard !pending.isCancelled else { return }
-          pending.finish(work { pending.isCancelled })
+          // The lane waits for the job's thread, so jobs still run one at a time.
+          let done = DispatchSemaphore(value: 0)
+          let thread = Thread {
+            pending.finish(work { pending.isCancelled })
+            done.signal()
+          }
+          thread.stackSize = Self.stackSize
+          thread.qualityOfService = .utility
+          thread.start()
+          done.wait()
         }
       }
     } onCancel: {
