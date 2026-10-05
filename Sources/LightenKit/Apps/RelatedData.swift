@@ -956,6 +956,27 @@ public struct RelatedDataService: Sendable {
           target.hasPrefix(foldedAppID(id) + ".") || target.hasPrefix(foldedAppID(id) + "-")
         }
     }
+    var scopedUnknownValidated = false
+    func validateUnknown(_ observation: ApplicationMetadataObservation, bundleID: String) throws {
+      let path = RelatedLocation.caches.path(domain: bundleID, homeDirectory: homeDirectory)
+      if context.standardBundleID == bundleID,
+        let owner = apps.first(where: { foldedAppID($0.bundleID) == foldedAppID(bundleID) })
+      {
+        if !scopedUnknownValidated {
+          guard
+            exactClaimRefusals(
+              inventory: context.inventory, owner: owner, candidatePath: path, fresh: true
+            ).isEmpty
+          else { throw RelatedFailure.incompleteInventory }
+          scopedUnknownValidated = true
+        }
+      } else if !metadataRefusals(
+        inventory: context.inventory, bundleID: bundleID, candidatePath: path,
+        observations: [observation], fresh: true
+      ).isEmpty {
+        throw RelatedFailure.incompleteInventory
+      }
+    }
     for observed in apps {
       if Self.isCachedApplication(observed.path, homeDirectory: homeDirectory)
         || Self.isCachedApplication(observed.linkTarget ?? observed.path, homeDirectory: homeDirectory)
@@ -985,13 +1006,7 @@ public struct RelatedDataService: Sendable {
         if affectsDecision(observed.bundleID) { throw RelatedFailure.incompleteInventory }
         let observation = ApplicationMetadataObservation.read(at: observed.path)
         for id in bundleIDs {
-          let path = RelatedLocation.caches.path(domain: id, homeDirectory: homeDirectory)
-          if !metadataRefusals(
-            inventory: context.inventory, bundleID: id, candidatePath: path,
-            observations: [observation], fresh: true
-          ).isEmpty {
-            throw RelatedFailure.incompleteInventory
-          }
+          try validateUnknown(observation, bundleID: id)
         }
       }
     }
@@ -1006,13 +1021,7 @@ public struct RelatedDataService: Sendable {
       {
         let observation = ApplicationMetadataObservation.read(at: path)
         for id in bundleIDs {
-          if !metadataRefusals(
-            inventory: context.inventory, bundleID: id,
-            candidatePath: RelatedLocation.caches.path(domain: id, homeDirectory: homeDirectory),
-            observations: [observation], fresh: true
-          ).isEmpty {
-            throw RelatedFailure.incompleteInventory
-          }
+          try validateUnknown(observation, bundleID: id)
         }
       }
     }
@@ -1321,7 +1330,8 @@ public struct RelatedDataService: Sendable {
       let exclusive = vendorIsExclusive(app: app, context: context, cancelled: cancelled)
       if Task.isCancelled || cancelled() { return result }
       let observed = context.metadata.ownedData.discover(
-        app: app, home: homeDirectory, vendorExclusive: exclusive, liveData: liveData)
+        app: app, home: homeDirectory, vendorExclusive: exclusive, liveData: liveData,
+        signingMetadata: { self.signingMetadata($0, context: context) })
       if Task.isCancelled || cancelled() { return result }
       for source in observed.sources where sources[source.path] == nil { sources[source.path] = source }
       issues += observed.issues
@@ -1427,9 +1437,8 @@ public struct RelatedDataService: Sendable {
     observation: ApplicationLiveDataObservation? = nil
   ) throws {
     let observed = observation ?? liveData()
-    guard observed.complete else {
-      throw PlanRejection(.activityUnavailable, path: path, ruleID: "live-process-census-incomplete")
-    }
+    // Incomplete open-file coverage is informational. Positive observations
+    // still refuse shared data, and the action keeps its independent guards.
     guard
       try ApplicationAuxiliaryEvidenceProducer.liveSharedOwnerPaths(
         dataPath: path, excludingPackage: excludingPackage, applications: applications,
@@ -1560,7 +1569,9 @@ public struct RelatedDataService: Sendable {
   }
 
   func initialReview(
-    for app: InstalledApplication, progress: (@Sendable (ApplicationRelatedReview) -> Void)?
+    for app: InstalledApplication,
+    listing: (@Sendable () async -> BundleInventory)? = nil,
+    progress: (@Sendable (ApplicationRelatedReview) -> Void)?
   ) async -> ApplicationRelatedReview {
     let shallow = shallowCandidates(for: app)
     guard !Task.isCancelled else { return ApplicationRelatedReview(application: app, candidates: []) }
@@ -1569,8 +1580,24 @@ public struct RelatedDataService: Sendable {
       let paths = Set(measured.map(\.path))
       return (measured + shallow.filter { !paths.contains($0.path) }).sorted { $0.path < $1.path }
     }
-    let listing = BundleInventory(applications: [app], unidentifiedPaths: [], complete: false, observedAt: Date())
-    let candidates = await discover(inventory: listing, only: app, signatures: [:], allowReceipts: false) { partial in
+    let installed: BundleInventory
+    if let listing { installed = await listing() } else { installed = installedListing() }
+    guard !Task.isCancelled else { return ApplicationRelatedReview(application: app, candidates: []) }
+    let selected = initialInventory(for: app, listing: installed)
+    let physical = app.linkTarget ?? app.path
+    let signature = signatureCache.cachedMetadata(at: physical)
+    let framework = ApplicationFrameworkEvidenceProducer.discover(packagePath: physical, homeDirectory: homeDirectory)
+    let auxiliary = ApplicationAuxiliaryEvidenceProducer.discover(
+      app: app, homeDirectory: homeDirectory, frameworkDirectories: framework.evidence.map(\.dataPath))
+    let claims = Dictionary(
+      grouping:
+        framework.evidence.map(ApplicationOwnedDataEvidence.framework)
+        + auxiliary.evidence.map(ApplicationOwnedDataEvidence.auxiliary), by: \.dataPath)
+    let candidates = await discover(
+      inventory: selected, only: app,
+      signatures: signature.map { [physical: $0] } ?? [:],
+      initialClaims: claims, allowReceipts: false
+    ) { partial in
       progress?(
         ApplicationRelatedReview(
           application: app, candidates: merged(partial),
@@ -1580,8 +1607,15 @@ public struct RelatedDataService: Sendable {
   }
 
   func review(for app: InstalledApplication, context: AuthenticApplicationContext) async -> ApplicationRelatedReview {
-    guard let physical = application(at: app.linkTarget ?? app.path), physical.bundleID == app.bundleID,
-      let selected = try? selectedContext(app: physical, base: context)
+    guard let physical = application(at: app.linkTarget ?? app.path), physical.bundleID == app.bundleID
+    else { return ApplicationRelatedReview(application: app, candidates: [], ownershipPending: true, phase: .enriched) }
+    // Build global nonexact claims on the session context once, before an
+    // outside-root or alias selection derives its own context from it.
+    _ = await ApplicationEvidenceWork.perform(cancelledValue: false) { cancellation in
+      _ = self.ownedDataClaims(context, cancelled: { cancellation.isCancelled })
+      return !cancellation.isCancelled
+    }
+    guard !Task.isCancelled, let selected = try? selectedContext(app: physical, base: context)
     else { return ApplicationRelatedReview(application: app, candidates: [], ownershipPending: true, phase: .enriched) }
     let signatures = await ApplicationEvidenceWork.perform(cancelledValue: [:]) { cancellation in
       self.signatures(
@@ -1597,7 +1631,8 @@ public struct RelatedDataService: Sendable {
       candidates: candidates + shallowCandidates(for: physical).filter { !paths.contains($0.path) },
       signerTeamID: signatures[physical.path]?.teamID,
       ownershipPending: !selected.inventory.ownershipComplete,
-      registrationReport: selected.inventory.registrationReport, phase: .enriched)
+      registrationReport: selected.inventory.registrationReport, phase: .enriched,
+      openFilesComplete: selected.metadata.ownedData.liveObservation(using: liveData).complete)
   }
 
   func discover(context: AuthenticApplicationContext) async -> [RelatedDataCandidate] {
@@ -1615,6 +1650,7 @@ public struct RelatedDataService: Sendable {
     inventory apps: BundleInventory, only app: InstalledApplication?,
     signatures suppliedSignatures: [String: ApplicationSigningMetadata]? = nil,
     authenticatedContext: AuthenticApplicationContext? = nil,
+    initialClaims: [String: [ApplicationOwnedDataEvidence]]? = nil,
     allowReceipts: Bool = true,
     progress: (@Sendable ([RelatedDataCandidate]) -> Void)? = nil
   ) async
@@ -1649,7 +1685,7 @@ public struct RelatedDataService: Sendable {
         )
       }
     } else {
-      evidence = ([:], false, nil)
+      evidence = (initialClaims ?? [:], false, nil)
     }
     guard !Task.isCancelled else { return [] }
     let (ownedClaims, dataSourcesValid, liveSnapshot) = evidence
@@ -1684,7 +1720,9 @@ public struct RelatedDataService: Sendable {
               apps.ownershipCandidates.filter { $0.packagePath == app.path }
                 .flatMap { signatures[$0.path]?.groupIdentifiers ?? [] }))
         } else {
-          domains = [app.bundleID]
+          domains =
+            [app.bundleID]
+            + (signatures[app.linkTarget ?? app.path]?.teamID.map { [$0 + "." + app.bundleID] } ?? [])
         }
         for domain in domains {
           let path = location.path(domain: domain, homeDirectory: homeDirectory)
@@ -1773,6 +1811,12 @@ public struct RelatedDataService: Sendable {
             .caseInsensitiveCompare(domain) == .orderedSame
         } : []
       let claims = ownedClaims[path] ?? []
+      let scopedClaims = claims.contains {
+        [.bundleIdentifier, .installerReceipt, .launchService].contains($0.provenance.kind)
+      }
+      let exactIdentifierClaim = location != .groupContainers && (!exactOwners.isEmpty || !exactTeamOwners.isEmpty)
+      let claimScoped = exactIdentifierClaim || scopedClaims
+      let claimSourcesValid = claims.allSatisfy { (try? $0.validate()) != nil }
       let artifactOwners = apps.applications.filter { owner in
         claims.contains { $0.packagePath == (owner.linkTarget ?? owner.path) && $0.bundleID == owner.bundleID }
       }
@@ -1785,7 +1829,7 @@ public struct RelatedDataService: Sendable {
             ? artifactOwners
             : !prefixOwners.isEmpty ? prefixOwners : weakOwners
       let liveSharing: Result<[String], any Error>? = owners.first.flatMap { owner in
-        guard let liveSnapshot, liveSnapshot.complete else { return nil }
+        guard let liveSnapshot else { return nil }
         return Result {
           try ApplicationAuxiliaryEvidenceProducer.liveSharedOwnerPaths(
             dataPath: path, excludingPackage: owner.linkTarget ?? owner.path,
@@ -1825,6 +1869,7 @@ public struct RelatedDataService: Sendable {
       let bundleID =
         focusedOwner ?? owners.first?.bundleID ?? (Self.validBundleID(domain) || literalOwner ? domain : nil)
       guard let bundleID else { continue }
+      let sameIdentifierOwners = installedOwners(bundleID: bundleID, applications: apps.applications)
       if let app, bundleID != app.bundleID { continue }
       let receipt = receipts.first { $0.relatedPath == path && $0.bundleID == bundleID }
       let validReceipt =
@@ -1838,9 +1883,11 @@ public struct RelatedDataService: Sendable {
       var evidence =
         location == .groupContainers
         ? ownershipReadRefusals(inventory: apps, bundleID: bundleID, candidatePath: path, allOwners: true)
-        : metadataRefusals(
-          inventory: apps, bundleID: bundleID, candidatePath: path, signatures: signatures)
-      if location != .groupContainers, domain != bundleID {
+        : claimScoped && owners.first != nil
+          ? exactClaimRefusals(inventory: apps, owner: owners[0], candidatePath: path)
+          : metadataRefusals(
+            inventory: apps, bundleID: bundleID, candidatePath: path, signatures: signatures)
+      if location != .groupContainers, domain != bundleID, !claimScoped {
         evidence += metadataRefusals(
           inventory: apps, bundleID: domain, candidatePath: path, signatures: signatures)
       }
@@ -1871,18 +1918,12 @@ public struct RelatedDataService: Sendable {
       } else if !evidence.isEmpty {
         classification = .uncertain
         reason = .incompleteInventory
-      } else if !exactOwners.isEmpty && liveSnapshot?.complete == false {
-        classification = .uncertain
-        reason = .liveCensusUnavailable
-      } else if exactOwners.isEmpty && !claims.isEmpty && apps.registrationReport?.complete == false {
+      } else if exactOwners.isEmpty && !claims.isEmpty && !claimScoped && apps.registrationReport?.complete == false {
         classification = .uncertain
         reason = registrationIsOnlyMissingSource(apps) ? .registrationUnavailable : .ownershipUnavailable
-      } else if !claims.isEmpty && !dataSourcesValid {
+      } else if !claims.isEmpty && !(claimScoped ? claimSourcesValid : dataSourcesValid) {
         classification = .uncertain
         reason = .ownershipUnavailable
-      } else if liveSnapshot?.complete == false {
-        classification = .uncertain
-        reason = .liveCensusUnavailable
       } else if liveSharingFailed {
         classification = .uncertain
         reason = .ownershipUnavailable
@@ -1908,21 +1949,15 @@ public struct RelatedDataService: Sendable {
           classification = .uncertain
           reason = .ownershipUnavailable
         }
-      } else if location != .groupContainers, owners.count > 1,
-        !exactOwners.isEmpty || !exactTeamOwners.isEmpty
-      {
-        if let context = authenticatedContext, let owner = owners.first,
-          let shared = sharedOwnerEvidence(
-            app: owner, candidatePath: path, context: context,
-            discoverySourcesValid: dataSourcesValid, liveObservation: liveSnapshot)
-        {
-          classification = .shared
-          reason = .sharedInstalledData
-          evidence = [shared]
-        } else {
-          classification = .uncertain
-          reason = .ownershipUnavailable
-        }
+      } else if location != .groupContainers, claimScoped, sameIdentifierOwners.count > 1 {
+        classification = .shared
+        reason = .sharedInstalledData
+        evidence = [
+          RelatedOwnershipRefusalEvidence(
+            candidatePath: path, bundleID: bundleID, reason: .sharedInstalledOwners,
+            ownerPaths: Array(Set(sameIdentifierOwners.map { $0.linkTarget ?? $0.path })).sorted(),
+            nextStep: "review-other-installations", detail: nil)
+        ]
       } else if !owners.isEmpty {
         classification = strength == .weak ? .unprovenNameOnly : .installed
         reason = strength == .weak ? .nameOnly : strength == .medium ? .mediumMatch : .installed
@@ -1962,6 +1997,9 @@ public struct RelatedDataService: Sendable {
             + (exactTeamOwners.isEmpty ? [] : [.teamIdentifier]))
       ).sorted { $0.rawValue < $1.rawValue }
       candidate.explicitManualChoiceAvailable = classification == .unprovenNameOnly && evidence.isEmpty
+      if claimScoped, candidate.classification == .installed, candidate.matchStrength == .strong {
+        candidate = metadataSnapshot(candidate, observedAt: apps.observedAt)
+      }
       pending.append(candidate)
     }
     if !Task.isCancelled { progress?(candidates + pending) }
@@ -2003,7 +2041,7 @@ public struct RelatedDataService: Sendable {
               bundleID: candidate.bundleID, matchStrength: candidate.matchStrength, observation: result.observation,
               modifiedAt: candidate.modifiedAt, refusalEvidence: candidate.refusalEvidence,
               provenance: candidate.provenance, explicitManualChoiceAvailable: candidate.explicitManualChoiceAvailable,
-              evidenceKinds: candidate.evidenceKinds)
+              evidenceKinds: candidate.evidenceKinds, displayRootIdentity: candidate.displayRootIdentity)
           }
           return (index, result)
         }
@@ -2019,7 +2057,10 @@ public struct RelatedDataService: Sendable {
     candidates += measured
     if let context = authenticatedContext, (try? context.validateDataSources()) == nil {
       candidates = candidates.map { candidate in
-        guard ownedClaims[candidate.path] != nil else { return candidate }
+        guard let claims = ownedClaims[candidate.path],
+          !candidate.evidenceKinds.contains(.bundleIdentifier), !candidate.evidenceKinds.contains(.teamIdentifier),
+          !claims.contains(where: { [.installerReceipt, .launchService].contains($0.provenance.kind) })
+        else { return candidate }
         return RelatedDataCandidate(
           id: candidate.id, path: candidate.path, classification: .uncertain, reason: .ownershipUnavailable,
           snapshot: candidate.snapshot, receipt: candidate.receipt, bundleID: candidate.bundleID,
@@ -2373,9 +2414,16 @@ public struct RelatedDataService: Sendable {
             groups: RelatedLocation.matching(path: candidate.path, homeDirectory: homeDirectory)?.0 == .groupContainers)
         }
         if let candidateContext {
-          refusalEvidence += metadataRefusals(
-            inventory: candidateContext.inventory,
-            bundleID: app.bundleID, candidatePath: candidate.path, fresh: true)
+          if candidateContext.standardBundleID == app.bundleID,
+            isExactStandardSelection(app: app, candidates: [candidate])
+          {
+            refusalEvidence += exactClaimRefusals(
+              inventory: candidateContext.inventory, owner: app, candidatePath: candidate.path, fresh: true)
+          } else {
+            refusalEvidence += metadataRefusals(
+              inventory: candidateContext.inventory,
+              bundleID: app.bundleID, candidatePath: candidate.path, fresh: true)
+          }
           if error as? RelatedFailure == .ambiguousOwner,
             let shared = sharedOwnerEvidence(app: app, candidatePath: candidate.path, context: candidateContext)
           {
@@ -3082,6 +3130,103 @@ public struct RelatedDataService: Sendable {
     }
   }
 
+  /// The initial review shares the session listing and adds only fresh leads
+  /// for this identifier. It never constructs the global ownership context.
+  private func initialInventory(for app: InstalledApplication, listing: BundleInventory) -> BundleInventory {
+    var result = listing
+    var applications = listing.applications
+    var metadata = listing.applicationMetadata
+    let registered = registeredByID(app.bundleID)
+    for path in registered.paths where !ApplicationRegistration.isTrash(path) {
+      let observation = ApplicationMetadataObservation.read(at: path)
+      if !metadata.contains(where: { $0.path == path }) { metadata.append(observation) }
+      if let owner = try? inspectRegisteredApplication(at: path),
+        !applications.contains(where: { $0.path == owner.path })
+      {
+        applications.append(owner)
+      }
+    }
+    if !applications.contains(where: { $0.path == app.path }) { applications.append(app) }
+    result = BundleInventory(
+      applications: applications, unidentifiedPaths: listing.unidentifiedPaths,
+      complete: listing.complete, observedAt: listing.observedAt,
+      ownershipCandidates: listing.ownershipCandidates, ownershipComplete: false,
+      ownershipIssues: listing.ownershipIssues, metadataIssues: listing.metadataIssues,
+      scopeExclusions: listing.scopeExclusions, registrationReport: listing.registrationReport,
+      observedDirectories: listing.observedDirectories, installedRootsComplete: listing.installedRootsComplete,
+      unresolvedApplicationMetadata: listing.unresolvedApplicationMetadata, applicationMetadata: metadata)
+    return result
+  }
+
+  /// Exact claims need their own readable owner and no plausible unidentified
+  /// copy. Unrelated broken packages and launch plists remain coverage notes.
+  private func exactClaimRefusals(
+    inventory: BundleInventory, owner: InstalledApplication, candidatePath: String, fresh: Bool = false
+  ) -> [RelatedOwnershipRefusalEvidence] {
+    let selected = ApplicationMetadataObservation.read(at: owner.linkTarget ?? owner.path)
+    func names(_ observation: ApplicationMetadataObservation) -> Set<String> {
+      Set(
+        ([
+          ((observation.path as NSString).deletingPathExtension as NSString).lastPathComponent,
+          ((observation.physicalPath as NSString).deletingPathExtension as NSString).lastPathComponent,
+        ] + observation.displayNames + (observation.executableName.map { [$0] } ?? [])).filter { !$0.isEmpty }.map(
+          foldedAppID))
+    }
+    let selectedNames = names(selected).union([foldedAppID(owner.bundleID)])
+    var observations = inventory.applicationMetadata
+    for path in inventory.unidentifiedPaths where !observations.contains(where: { $0.path == path }) {
+      observations.append(ApplicationMetadataObservation.read(at: path))
+    }
+    let knownOwners = Set(
+      installedOwners(bundleID: owner.bundleID, applications: inventory.applications).map {
+        $0.linkTarget ?? $0.path
+      })
+    return observations.compactMap { original in
+      let observation = fresh ? ApplicationMetadataObservation.read(at: original.path) : original
+      guard observation.physicalPath != selected.physicalPath,
+        !Self.isCachedApplication(observation.path, homeDirectory: homeDirectory),
+        !Self.isCachedApplication(observation.physicalPath, homeDirectory: homeDirectory)
+      else { return nil }
+      let detail: String
+      switch observation.state {
+      case .declaredID(let id):
+        guard foldedAppID(id) == foldedAppID(owner.bundleID), !knownOwners.contains(observation.physicalPath) else {
+          return nil
+        }
+        detail = "An observed package declares this identifier but could not be verified."
+      case .unknown(let reason):
+        guard !names(observation).isDisjoint(with: selectedNames) else { return nil }
+        detail = "A possible copy could not be identified: " + reason
+      case .absentInfo, .identifierless:
+        guard !names(observation).isDisjoint(with: selectedNames) else { return nil }
+        detail = "A possible copy has no readable application identifier."
+      }
+      return RelatedOwnershipRefusalEvidence(
+        candidatePath: candidatePath, bundleID: owner.bundleID, reason: .unknownMetadata,
+        ownerPaths: [observation.physicalPath], nextStep: "inspect-owner-metadata", detail: detail)
+    }
+  }
+
+  private func metadataSnapshot(_ candidate: RelatedDataCandidate, observedAt: Date) -> RelatedDataCandidate {
+    guard let identity = candidate.displayRootIdentity, identity.hasStableTrashProof,
+      let volumeID = try? DescriptorFileSystem.volumeID(at: candidate.path)
+    else { return candidate }
+    let entry = ScanEntry(parentID: nil, path: candidate.path, identity: identity, issues: [], readable: true)
+    let unknown = ByteAggregate(knownLowerBound: 0, completeTotal: nil)
+    let node = ScanNode(
+      id: entry.id, parentID: nil, logical: unknown, allocated: unknown,
+      knownItemCount: 1, completeItemCount: nil, partial: true, protected: false, skipped: false)
+    return RelatedDataCandidate(
+      id: candidate.id, path: candidate.path, classification: candidate.classification, reason: candidate.reason,
+      snapshot: ScanSnapshot(
+        rootPath: candidate.path, volumeDevice: identity.device, volumeID: volumeID,
+        observedAt: observedAt, entries: [entry], nodes: [node]), receipt: candidate.receipt,
+      bundleID: candidate.bundleID, matchStrength: candidate.matchStrength, observation: candidate.observation,
+      modifiedAt: candidate.modifiedAt, refusalEvidence: candidate.refusalEvidence, provenance: candidate.provenance,
+      explicitManualChoiceAvailable: candidate.explicitManualChoiceAvailable, evidenceKinds: candidate.evidenceKinds,
+      displayRootIdentity: identity)
+  }
+
   private func ownershipReadRefusals(
     inventory: BundleInventory, bundleID: String, candidatePath: String, allOwners: Bool = false
   ) -> [RelatedOwnershipRefusalEvidence] {
@@ -3176,6 +3321,18 @@ public struct RelatedDataService: Sendable {
   private func validateMetadataScope(
     _ context: AuthenticApplicationContext, bundleID: String, candidatePath: String
   ) throws {
+    if context.standardBundleID == bundleID,
+      let (location, domain) = RelatedLocation.matching(path: candidatePath, homeDirectory: homeDirectory),
+      location != .groupContainers, foldedAppID(domain) == foldedAppID(bundleID),
+      let owner = context.inventory.applications.first(where: { foldedAppID($0.bundleID) == foldedAppID(bundleID) })
+    {
+      let owners = installedOwners(bundleID: bundleID, applications: context.inventory.applications)
+      guard owners.count == 1 else { throw RelatedFailure.ambiguousOwner }
+      let refusals = exactClaimRefusals(
+        inventory: context.inventory, owner: owner, candidatePath: candidatePath, fresh: true)
+      guard refusals.isEmpty else { throw RelatedFailure.incompleteInventory }
+      return
+    }
     for observation in context.observedInfoAbsences() {
       if Self.isCachedApplication(observation.path, homeDirectory: homeDirectory)
         || Self.isCachedApplication(observation.physicalPath, homeDirectory: homeDirectory)

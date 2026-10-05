@@ -145,6 +145,14 @@ func selectedShallowListPrecedesMeasurement() async throws {
   await gate.waitUntilStarted()
   #expect(!finished.withLock { $0 })
   #expect(nativeReads.withLock { $0 } == 0)
+  var fastExact: RelatedDataCandidate?
+  while let update = await iterator.next() {
+    if let candidate = update.candidates.first(where: { $0.path == fixture.cache }), candidate.defaultSelected {
+      fastExact = candidate
+      break
+    }
+  }
+  #expect(fastExact?.snapshot != nil && fastExact?.observation == nil)
   await gate.release()
   let measured = await review.value
   #expect(measured.candidates.first { $0.path == fixture.cache }?.defaultSelected == true)
@@ -457,6 +465,242 @@ func installedDataRequiresUniqueCompleteExactOwner(_ unknownMetadata: String) as
   let plan = try fixture.service.planInstalled(app: app, candidate: candidate)
   #expect(plan.items.first?.installedRelatedProof?.appPath == fixture.app)
   #expect(fixture.service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+}
+
+@Test("Exact identifier preselection ignores unrelated broken packages, root plists and incomplete open-file coverage")
+func exactIdentifierPreselectionIsClaimScoped() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let unknown = fixture.appRoot + "/Unrelated.app"
+  try FileManager.default.createDirectory(atPath: unknown + "/Contents", withIntermediateDirectories: true)
+  try Data("broken plist".utf8).write(to: URL(fileURLWithPath: unknown + "/Contents/Info.plist"))
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil },
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    registration: { ApplicationRegistrationObservation(paths: [], complete: false) },
+    registeredByID: { _ in ApplicationRegistrationObservation(paths: [], complete: true) },
+    liveData: { ApplicationLiveDataObservation(records: [], complete: false) })
+  let app = try #require(service.application(at: fixture.app))
+  var inventory = service.installedListing()
+  inventory.ownershipIssues.append(
+    ApplicationOwnershipIssue(path: "/Library/LaunchDaemons/qa.unrelated.plist", code: EACCES))
+  let observedInventory = inventory
+  let initial = await service.initialReview(for: app, listing: { observedInventory }, progress: nil)
+  let exact = try #require(initial.candidates.first { $0.path == fixture.cache })
+  #expect(exact.defaultSelected && exact.refusalEvidence.isEmpty)
+  let context = service.makeContext(base: inventory)
+  let enriched = await service.review(for: app, context: context)
+  let final = try #require(enriched.candidates.first { $0.path == fixture.cache })
+  #expect(final.defaultSelected && final.refusalEvidence.isEmpty)
+  #expect(enriched.openFilesComplete == false)
+  let available = await service.makeAvailableUninstallPlan(app: app, selectedRelated: [exact], includePackage: false)
+  let plan = try #require(available.plan)
+  #expect(available.rejections.isEmpty && service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+}
+
+@Test("Readable launch and receipt claims survive unrelated global source failures", arguments: ["launch", "receipt"])
+func readableArtifactClaimsHaveScopedSelection(_ kind: String) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let app = try #require(fixture.service.application(at: fixture.app))
+  let path: String
+  let observed: ApplicationAuxiliaryDiscovery
+  if kind == "launch" {
+    let parent = fixture.home + "/Library/LaunchAgents"
+    try FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
+    path = parent + "/qa.own.plist"
+    try PropertyListSerialization.data(
+      fromPropertyList: ["Program": fixture.app + "/Contents/MacOS/fixture"], format: .xml, options: 0
+    )
+    .write(to: URL(fileURLWithPath: path))
+    observed = ApplicationAuxiliaryEvidenceProducer.discover(app: app, homeDirectory: fixture.home)
+  } else {
+    let directory = fixture.home + "/Receipts"
+    let prefix = fixture.home + "/Payload"
+    for root in [directory, prefix] {
+      try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+    }
+    path = prefix + "/own-file"
+    try Data("payload".utf8).write(to: URL(fileURLWithPath: path))
+    try PropertyListSerialization.data(
+      fromPropertyList: ["PackageIdentifier": fixture.bundleID, "InstallPrefixPath": prefix], format: .xml, options: 0
+    )
+    .write(to: URL(fileURLWithPath: directory + "/" + fixture.bundleID + ".plist"))
+    try Data("BOM identity".utf8).write(to: URL(fileURLWithPath: directory + "/" + fixture.bundleID + ".bom"))
+    let receipts = ApplicationInstallerReceipts(
+      identifiers: [fixture.bundleID], complete: true, receiptDirectory: directory,
+      query: { arguments, _, _ in arguments == ["--files", fixture.bundleID] ? Data("own-file\n".utf8) : nil })
+    observed = ApplicationAuxiliaryEvidenceProducer.discover(app: app, homeDirectory: fixture.home, receipts: receipts)
+  }
+  let claim = try #require(observed.evidence.first { $0.dataPath == path })
+  try claim.validate()
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil }, registration: { ApplicationRegistrationObservation(paths: [], complete: false) })
+  let context = service.makeContext()
+  context.recordDataClaims(
+    [path: [.auxiliary(claim)]],
+    sources: [
+      ApplicationPathObservation(
+        path: fixture.home + "/UnrelatedUnavailableSource", identity: try DescriptorFileSystem.identity(at: fixture.app)
+      )
+    ],
+    issues: [])
+  #expect(throws: (any Error).self) { try context.validateDataSources() }
+  let review = await service.review(for: app, context: context)
+  let candidate = try #require(review.candidates.first { $0.path == path })
+  #expect(candidate.defaultSelected && candidate.refusalEvidence.isEmpty)
+  #expect(candidate.evidenceKinds.contains(kind == "launch" ? .launchService : .installerReceipt))
+}
+
+@Test(
+  "A plausible unidentified copy closes only its own exact identifier preselection",
+  arguments: ["package", "executable", "display", "bundleName", "identifierless"])
+func exactIdentificationRefusesPlausibleUnknownCopies(_ matching: String) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let selectedInfo = try PropertyListSerialization.data(
+    fromPropertyList: [
+      "CFBundleIdentifier": fixture.bundleID, "CFBundleExecutable": "fixture",
+      "CFBundleDisplayName": "Fixture Friendly", "CFBundleName": "Fixture Internal",
+    ], format: .xml, options: 0)
+  try selectedInfo.write(to: URL(fileURLWithPath: fixture.app + "/Contents/Info.plist"))
+  let copies = fixture.home + "/Other Applications"
+  let copy = copies + (matching == "package" ? "/Fixture.app" : "/Unidentified.app")
+  try FileManager.default.createDirectory(atPath: copy + "/Contents", withIntermediateDirectories: true)
+  if matching != "package" {
+    var info: [String: Any] = matching == "identifierless" ? [:] : ["CFBundleIdentifier": 42]
+    if matching == "executable" { info["CFBundleExecutable"] = "fixture" }
+    if matching == "display" || matching == "identifierless" { info["CFBundleDisplayName"] = "Fixture Friendly" }
+    if matching == "bundleName" { info["CFBundleName"] = "Fixture Internal" }
+    try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+      .write(to: URL(fileURLWithPath: copy + "/Contents/Info.plist"))
+  }
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot, copies], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
+  let app = try #require(service.application(at: fixture.app))
+  let initial = await service.initialReview(for: app, progress: nil)
+  let exact = try #require(initial.candidates.first { $0.path == fixture.cache })
+  #expect(!exact.defaultSelected && !exact.canSelect)
+  #expect(exact.refusalEvidence.contains { $0.reason == .unknownMetadata && $0.ownerPaths == [copy] })
+  let enriched = await service.review(for: app, context: service.makeContext())
+  #expect(enriched.candidates.first { $0.path == fixture.cache }?.defaultSelected == false)
+}
+
+@Test("An unknown package that becomes a plausible copy closes existing exact-ID action authority")
+func exactIdentifierActionRechecksPlausibleUnknownCopy() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  try PropertyListSerialization.data(
+    fromPropertyList: [
+      "CFBundleIdentifier": fixture.bundleID, "CFBundleExecutable": "fixture",
+      "CFBundleDisplayName": "Fixture Friendly",
+    ], format: .xml, options: 0
+  ).write(to: URL(fileURLWithPath: fixture.app + "/Contents/Info.plist"))
+  let unknown = fixture.appRoot + "/Unknown.app"
+  try FileManager.default.createDirectory(atPath: unknown + "/Contents", withIntermediateDirectories: true)
+  func writeUnknown(displayName: String) throws {
+    try PropertyListSerialization.data(
+      fromPropertyList: [
+        "CFBundleIdentifier": 42, "CFBundleExecutable": "unrelated-helper",
+        "CFBundleDisplayName": displayName,
+      ], format: .xml, options: 0
+    ).write(to: URL(fileURLWithPath: unknown + "/Contents/Info.plist"))
+  }
+  try writeUnknown(displayName: "Unrelated Friendly")
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    registration: { ApplicationRegistrationObservation(paths: [], complete: true) },
+    registeredByID: { _ in ApplicationRegistrationObservation(paths: [], complete: true) })
+  let app = try #require(service.application(at: fixture.app))
+  let context = service.makeContext()
+  let exact = try #require((await service.discover(context: context)).first { $0.path == fixture.cache })
+  #expect(exact.defaultSelected && exact.refusalEvidence.isEmpty)
+  let available = await service.makeAvailableUninstallPlan(
+    app: app, selectedRelated: [exact], includePackage: false, context: context)
+  let plan = try #require(available.plan)
+  #expect(available.rejections.isEmpty && service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+  // No package or installation-directory entry changes. Only the previously
+  // unrelated unknown owner's display name becomes a plausible copy.
+  try writeUnknown(displayName: "Fixture Friendly")
+  #expect(!service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+  #expect(throws: RelatedFailure.self) { try service.validateInstalled(plan.items[0], plan: plan) }
+  let refused = await service.makeAvailableUninstallPlan(
+    app: app, selectedRelated: [exact], includePackage: false, context: context)
+  #expect(refused.plan == nil && !refused.rejections.isEmpty)
+  #expect(refused.refusalEvidence.contains { $0.reason == .unknownMetadata && $0.ownerPaths == [unknown] })
+}
+
+@Test("Multiple readable exact owners block shallow preselection without waiting for signing")
+func shallowExactOwnersAreDisjointPackages() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let copy = fixture.appRoot + "/Previous Fixture.app"
+  try FileManager.default.copyItem(atPath: fixture.app, toPath: copy)
+  let app = try #require(fixture.service.application(at: fixture.app))
+  let candidate = try #require(
+    (await fixture.service.initialReview(for: app, progress: nil)).candidates.first { $0.path == fixture.cache })
+  #expect(candidate.classification == .shared && !candidate.defaultSelected)
+  #expect(candidate.refusalEvidence.contains { Set($0.ownerPaths) == [fixture.app, copy] })
+}
+
+@Test("Incomplete open-file coverage retains positive shared-owner observations")
+func partialLiveCoveragePreservesPositiveSharing() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let other = fixture.appRoot + "/Other.app"
+  try FileManager.default.copyItem(atPath: fixture.app, toPath: other)
+  try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": "qa.lighten.other", "CFBundleExecutable": "fixture"], format: .xml,
+    options: 0
+  )
+  .write(to: URL(fileURLWithPath: other + "/Contents/Info.plist"))
+  let held = try DescriptorFileSystem.identity(at: fixture.cache + "/record")
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    liveData: {
+      ApplicationLiveDataObservation(
+        records: [
+          .init(
+            pid: 123, executable: other + "/Contents/MacOS/fixture", path: fixture.cache + "/record",
+            isCWD: false, device: held.device, inode: held.inode)
+        ], complete: false)
+    })
+  let candidate = try #require((await service.discover()).first { $0.path == fixture.cache })
+  #expect(candidate.classification == .shared && !candidate.defaultSelected)
+  #expect(candidate.refusalEvidence.contains { Set($0.ownerPaths) == [fixture.app, other] })
+}
+
+@Test("Native session reports expose exact row selection before stalled sizes and reuse one ownership walk")
+func nativeInitialReportsPrecedeHeavyWork() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let gate = RelatedMeasurementGate()
+  let walks = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil }, ownershipCollected: { walks.withLock { $0 += 1 } },
+    relatedMeasurement: { _, _ in await gate.measure() })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  defer {
+    Task {
+      await gate.release()
+      await session.cancel()
+    }
+  }
+  for _ in 0..<2 {
+    let report = try #require(try await session.initialReport(path: fixture.app))
+    let exact = try #require(report.related.first { $0.path == fixture.cache })
+    #expect(exact.defaultSelected && exact.observation == nil && report.partial)
+  }
+  await gate.release()
+  _ = try await session.context()
+  #expect(walks.withLock { $0 } == 1)
+  await session.cancel()
 }
 
 @Test("Case aliases remain owner evidence but never exclusive installed-data authority")

@@ -232,7 +232,10 @@ final class ApplicationDataEvidenceCache: Sendable {
 
   func discover(
     app: InstalledApplication, home: String, vendorExclusive: Bool = false,
-    liveData: @Sendable () -> ApplicationLiveDataObservation = { .observe() }
+    liveData: @Sendable () -> ApplicationLiveDataObservation = { .observe() },
+    signingMetadata: @Sendable (String) -> ApplicationSigningMetadata? = {
+      ApplicationSignatureCache.native.metadata(at: $0)
+    }
   ) -> Discovery {
     let path = app.linkTarget ?? app.path
     if let cached = entries.withLock({ $0[path] }),
@@ -254,7 +257,8 @@ final class ApplicationDataEvidenceCache: Sendable {
       let auxiliary = ApplicationAuxiliaryEvidenceProducer.discover(
         app: app, homeDirectory: home, receipts: installer, live: processes,
         vendorExclusive: vendorExclusive, frameworkDirectories: framework.evidence.map(\.dataPath))
-      let reference = ApplicationReferenceEvidenceProducer.discover(app: app, homeDirectory: home)
+      let reference = ApplicationReferenceEvidenceProducer.discover(
+        app: app, homeDirectory: home, signingMetadata: signingMetadata)
       var referenceEvidence: [ApplicationAuxiliaryEvidence] = []
       var referenceIssues = reference.issues
       for claim in reference.claims {
@@ -321,7 +325,8 @@ enum ApplicationAuxiliaryEvidenceProducer {
     dataPath: String, excludingPackage: String, applications: [InstalledApplication], home: String,
     observation: ApplicationLiveDataObservation = .observe()
   ) throws -> [String] {
-    guard observation.complete else { throw RelatedFailure.incompleteInventory }
+    // Partial coverage may still establish a positive shared owner. It does
+    // not establish absence, and coverage alone is not an action veto.
     var owners: Set<String> = []
     for record in observation.records
     where record.path == dataPath || record.path.hasPrefix(dataPath + "/") {

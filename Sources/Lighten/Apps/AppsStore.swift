@@ -139,8 +139,17 @@ final class AppsStore: ToolSummaryProviding {
   var measuredCount = 0
   var inventoryComplete = false
   private(set) var externalVolumesUnchecked = false
-  private(set) var coverageIssueDescriptions: [String] = []
-  var hasCoverageIssue: Bool { !busy && backgroundFinishedAt != nil && !inventoryComplete }
+  private var inventoryCoverageIssueDescriptions: [String] = []
+  private var incompleteOpenFilesPaths: Set<String> = []
+  var coverageIssueDescriptions: [String] {
+    inventoryCoverageIssueDescriptions
+      + incompleteOpenFilesPaths.sorted().map {
+        String(localized: "Open files could not be fully checked.") + " " + $0
+      }
+  }
+  var hasCoverageIssue: Bool {
+    (!busy && backgroundFinishedAt != nil && !inventoryComplete) || !incompleteOpenFilesPaths.isEmpty
+  }
   var scannedAt: Date?
   var busy = false {
     didSet {
@@ -243,7 +252,8 @@ final class AppsStore: ToolSummaryProviding {
     @Sendable ([RelatedDataCandidate]) async -> RelatedDataService.AvailableUninstallPlan
   @ObservationIgnored private let remainingDataPlanBuilder: RemainingDataPlanBuilder
   @ObservationIgnored private let basketPlanBuilder: BasketPlanBuilder?
-  @ObservationIgnored private let droppedReport: @Sendable (String) async -> ApplicationReport?
+  @ObservationIgnored private let injectedDroppedReport: (@Sendable (String) async -> ApplicationReport?)?
+  @ObservationIgnored private var droppedMeasurement: Task<Void, Never>?
 
   init(
     pictures: ResultPictureStore = ResultPictureStore(),
@@ -260,9 +270,7 @@ final class AppsStore: ToolSummaryProviding {
     },
     orphanPlanBuilder: (@Sendable ([RelatedDataCandidate]) async throws -> ActionPlan)? = nil,
     remainingDataPlanBuilder: RemainingDataPlanBuilder? = nil,
-    droppedReport: @escaping @Sendable (String) async -> ApplicationReport? = {
-      await ApplicationDiscovery(related: .system).report(path: $0)
-    },
+    droppedReport: (@Sendable (String) async -> ApplicationReport?)? = nil,
     preferences: RemovalPreferences = .shared, userPlanner: PlanService = PlanService(),
     running: any RunningApplicationSource = MacOSRunningApplicationSource(),
     events: @escaping @Sendable () -> AsyncStream<ApplicationDiscovery.Event> = {
@@ -309,7 +317,7 @@ final class AppsStore: ToolSummaryProviding {
       remainingDataPlanBuilder ?? { candidates in
         await relatedService.makeAvailableRemainingDataPlan(selected: candidates)
       }
-    self.droppedReport = droppedReport
+    self.injectedDroppedReport = droppedReport
     let standardBuilder: AvailableUninstallPlanBuilder =
       availableUninstallPlanBuilder ?? { report, candidates, includePackage in
         if let uninstallPlanBuilder {
@@ -467,7 +475,8 @@ final class AppsStore: ToolSummaryProviding {
     measuringPaths = []
     measuredCount = 0
     inventoryComplete = false
-    coverageIssueDescriptions = []
+    inventoryCoverageIssueDescriptions = []
+    incompleteOpenFilesPaths = []
     externalVolumesUnchecked = false
     selectedPath = nil
     packageSelected = false
@@ -1110,6 +1119,9 @@ final class AppsStore: ToolSummaryProviding {
       selectedReviewPhaseRank = rank
     }
     externalVolumesUnchecked = review.registrationReport?.externalVolumesUnchecked ?? externalVolumesUnchecked
+    if let complete = review.openFilesComplete {
+      if complete { incompleteOpenFilesPaths.remove(path) } else { incompleteOpenFilesPaths.insert(path) }
+    }
     switch review.phase {
     case .legacy: break
     case .shallow:
@@ -1224,7 +1236,7 @@ final class AppsStore: ToolSummaryProviding {
 
   private func publishCoverage(_ inventory: BundleInventory) {
     guard !inventory.complete else {
-      coverageIssueDescriptions = []
+      inventoryCoverageIssueDescriptions = []
       return
     }
     var descriptions = inventory.unidentifiedPaths.map {
@@ -1243,7 +1255,7 @@ final class AppsStore: ToolSummaryProviding {
     if descriptions.isEmpty {
       descriptions.append(String(localized: "Some application associations could not be verified."))
     }
-    coverageIssueDescriptions = Array(Set(descriptions)).sorted()
+    inventoryCoverageIssueDescriptions = Array(Set(descriptions)).sorted()
   }
 
   private func mergingMeasurement(_ report: ApplicationReport, with current: ApplicationReport) -> ApplicationReport {
@@ -1285,7 +1297,11 @@ final class AppsStore: ToolSummaryProviding {
     _ candidate: RelatedDataCandidate, appPath: String?, appBundleID: String?,
     refusalEvidence: [RelatedOwnershipRefusalEvidence]
   ) -> Bool {
-    appBundleID != nil && appPath.map { !ownershipPendingPaths.contains($0) } == true
+    let kinds = candidate.evidenceKinds.isEmpty ? candidate.provenance.map { [$0.kind] } ?? [] : candidate.evidenceKinds
+    let claimScoped = kinds.contains {
+      [.bundleIdentifier, .teamIdentifier, .installerReceipt, .launchService].contains($0)
+    }
+    return appBundleID != nil && appPath.map { claimScoped || !ownershipPendingPaths.contains($0) } == true
       && preferences.automaticallySelectRelatedData && candidate.automaticSelectionAllowed
       && candidate.defaultSelected
       && candidate.classification != .unprovenNameOnly && candidate.provenance?.kind != .configuredDirectory
@@ -1314,6 +1330,42 @@ final class AppsStore: ToolSummaryProviding {
   }
 
   /// Owner paths are navigation leads. Refresh the destination before offering selections.
+  private func droppedReport(_ path: String) async -> ApplicationReport? {
+    if let injectedDroppedReport { return await injectedDroppedReport(path) }
+    let active: ApplicationScanSession
+    if let session {
+      active = session
+    } else {
+      active = ApplicationDiscovery(related: relatedService).scanSession()
+      session = active
+      relatedDiscoveryStopped = false
+    }
+    return try? await active.initialReport(path: path)
+  }
+
+  private func measureDroppedReport(_ report: ApplicationReport) {
+    droppedMeasurement?.cancel()
+    let home = relatedService.homeDirectory
+    droppedMeasurement = Task(priority: .utility) { @concurrent in
+      let size = await ApplicationDiscovery.measure(path: report.linkTarget ?? report.path, homeDirectory: home)
+      guard !Task.isCancelled else { return }
+      await MainActor.run {
+        guard let index = self.reports.firstIndex(where: { $0.path == report.path }),
+          self.reports[index].displayRootIdentity == report.displayRootIdentity,
+          !self.displayRemoved(self.reports[index])
+        else { return }
+        let current = self.reports[index]
+        var measured = ApplicationReport(
+          path: current.path, bundleID: current.bundleID, version: current.version, signerTeamID: current.signerTeamID,
+          logical: size.logical, allocated: size.allocated, knownItemCount: size.count, partial: size.partial,
+          related: current.related, manualUninstallerSuggested: current.manualUninstallerSuggested,
+          linkTarget: current.linkTarget, displayRootIdentity: current.displayRootIdentity)
+        measured.isIOSWrapper = current.isIOSWrapper
+        self.reports[index] = measured
+      }
+    }
+  }
+
   func openOtherInstallation(
     _ path: String, candidate: RelatedDataCandidate, app: ApplicationReport, actions: ActionStore
   ) async {
@@ -1335,6 +1387,7 @@ final class AppsStore: ToolSummaryProviding {
     }
     incompletePackagePaths.remove(path)
     reviewedDropPath = path
+    if injectedDroppedReport == nil { measureDroppedReport(report) }
     focusApp(path, defaultPackage: false)
     logPackageAvailability(actions: actions)
   }
@@ -1725,6 +1778,8 @@ final class AppsStore: ToolSummaryProviding {
     pictureObservedAt = nil
     needsRescan = false
     selectedPath = report.path
+    if injectedDroppedReport == nil { measureDroppedReport(report) }
+    if injectedDroppedReport == nil { requestSelectedReview(report.path) }
     reviewedDropPath = report.path
     selectedAppPaths = []
     selectedDataPaths = []

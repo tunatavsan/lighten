@@ -217,19 +217,27 @@ struct ScopedApplicationOwnershipTests {
     for path in [teamPath, unrelatedPath] {
       try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
     }
-    let service = fixture.service { _ in ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: []) }
+    let service = fixture.service { _ in
+      ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [fixture.groupID])
+    }
     let context = service.makeContext()
     let candidates = await service.discover(context: context)
     let related = try #require(candidates.first { $0.path == teamPath })
     #expect(related.reason == .incompleteInventory && !related.canSelect)
     #expect(related.refusalEvidence.contains { $0.reason == .unknownMetadata && $0.ownerPaths == [unknown] })
     let selected = try #require(candidates.first { $0.path == fixture.cache })
-    #expect(selected.reason == .incompleteInventory && !selected.canSelect)
-    #expect(selected.refusalEvidence.contains { $0.reason == .unknownMetadata && $0.ownerPaths == [unknown] })
+    #expect(selected.classification == .installed && selected.canSelect && selected.defaultSelected)
+    #expect(selected.refusalEvidence.isEmpty)
     let app = try #require(service.application(at: fixture.app))
-    let refused = await service.makeAvailableUninstallPlan(
+    let available = await service.makeAvailableUninstallPlan(
       app: app, selectedRelated: [selected], includePackage: false, context: context)
-    #expect(refused.plan == nil && refused.rejections.contains { $0.ruleID == "incompleteInventory" })
+    let plan = try #require(available.plan)
+    #expect(available.rejections.isEmpty && service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+    let group = try #require(candidates.first { $0.path == fixture.group })
+    #expect(group.classification == .shared && !group.canSelect && !group.defaultSelected)
+    let refused = await service.makeAvailableUninstallPlan(
+      app: app, selectedRelated: [group], includePackage: false, context: context)
+    #expect(refused.plan == nil && !refused.rejections.isEmpty)
     let unrelated = try #require(candidates.first { $0.path == unrelatedPath })
     #expect(unrelated.classification == .orphanVerified, "\(unrelated.reason): \(unrelated.refusalEvidence)")
     #expect(unrelated.refusalEvidence.isEmpty)

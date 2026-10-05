@@ -138,7 +138,9 @@ enum ApplicationReferenceEvidenceProducer {
   static func discover(
     app: InstalledApplication, homeDirectory: String,
     directories: ApplicationReferenceDirectories = .currentUser(),
-    signingMetadata: @Sendable (String) -> ApplicationSigningMetadata? = ApplicationSigningMetadata.read
+    signingMetadata: @Sendable (String) -> ApplicationSigningMetadata? = {
+      ApplicationSignatureCache.native.metadata(at: $0)
+    }
   ) -> ApplicationReferenceDiscovery {
     var result = ApplicationReferenceDiscovery()
     let package = app.linkTarget ?? app.path

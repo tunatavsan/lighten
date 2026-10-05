@@ -607,7 +607,9 @@ func relatedMetadataAndReceiptSymlinksStayUncertain() async throws {
     withDestinationPath: external)
   let service = RelatedDataService(homeDirectory: fixture.home, applicationRoots: [appRoot])
   #expect(!service.inventory().complete)
-  #expect((await service.discover()).first { $0.path == related }?.classification == .uncertain)
+  let unsafeMetadata = try #require((await service.discover()).first { $0.path == related })
+  #expect(unsafeMetadata.classification == .uncertain && !unsafeMetadata.canSelect)
+  #expect(unsafeMetadata.snapshot == nil)
   try FileManager.default.removeItem(atPath: contents + "/Info.plist")
   try plist.write(to: URL(fileURLWithPath: contents + "/Info.plist"))
   _ = await service.discover()
@@ -617,11 +619,17 @@ func relatedMetadataAndReceiptSymlinksStayUncertain() async throws {
     atPath: receiptPath,
     withDestinationPath: external)
   let installedWithUnsafeReceipt = try #require((await service.discover()).first { $0.path == related })
-  #expect(installedWithUnsafeReceipt.classification == .installed)
-  #expect(installedWithUnsafeReceipt.snapshot == nil)
+  #expect(installedWithUnsafeReceipt.classification == .installed && installedWithUnsafeReceipt.defaultSelected)
+  #expect(installedWithUnsafeReceipt.snapshot?.rootPath == related)
+  let app = try #require(service.application(at: appRoot + "/Fixture.app"))
+  let installedPlan = try service.planInstalled(app: app, candidate: installedWithUnsafeReceipt)
+  #expect(installedPlan.items.first?.installedRelatedProof?.bundleID == id)
+  #expect(installedPlan.items.first?.relatedProof == nil)
   try FileManager.default.removeItem(atPath: appRoot + "/Fixture.app")
   let result = await service.discover()
-  #expect(result.first { $0.path == related }?.classification == .uncertain)
+  let unsafeReceipt = try #require(result.first { $0.path == related })
+  #expect(unsafeReceipt.classification == .uncertain && !unsafeReceipt.canSelect)
+  #expect(throws: RelatedFailure.self) { try service.plan(candidate: unsafeReceipt) }
   #expect(result.contains { $0.reason == .recordUnsafe })
 }
 

@@ -141,7 +141,7 @@ int lighten_copy_application_data_paths(size_t maximum_bytes, uint32_t timeout_m
       census->failure_flags |= observation_failure(errno, 0);
       continue;
     }
-    if (before.pbi_uid != geteuid()) { census->failure_flags |= LIGHTEN_CENSUS_PROCESS_CHANGED; continue; }
+    if (before.pbi_uid != geteuid()) continue;
     if (before.pbi_status == SZOMB) continue;
     char executable[PROC_PIDPATHINFO_MAXSIZE] = {0};
     errno = 0;

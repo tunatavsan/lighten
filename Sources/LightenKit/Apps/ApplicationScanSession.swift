@@ -15,12 +15,14 @@ public struct ApplicationRelatedReview: Sendable {
   public let signerTeamID: String?
   public let ownershipPending: Bool
   public let registrationReport: ApplicationRegistrationReport?
+  /// Informational coverage only; it supplies no ownership or action authority.
+  public let openFilesComplete: Bool?
   public let phase: Phase
 
   public init(
     application: InstalledApplication, candidates: [RelatedDataCandidate], signerTeamID: String? = nil,
     ownershipPending: Bool = true, registrationReport: ApplicationRegistrationReport? = nil,
-    phase: Phase = .legacy
+    phase: Phase = .legacy, openFilesComplete: Bool? = nil
   ) {
     self.application = application
     self.candidates = candidates
@@ -28,6 +30,7 @@ public struct ApplicationRelatedReview: Sendable {
     self.ownershipPending = ownershipPending
     self.registrationReport = registrationReport
     self.phase = phase
+    self.openFilesComplete = openFilesComplete
   }
 }
 
@@ -556,9 +559,16 @@ public actor ApplicationScanSession {
     guard let app = service.application(at: path) else { return nil }
     let activity = self.activity
     let shallowReady = AsyncStream<Void>.makeStream()
-    let initial = Task.detached(priority: .userInitiated) {
+    let initial = Task.detached(priority: .userInitiated) { [weak self] in
+      let activeSession = self
       defer { shallowReady.continuation.finish() }
-      return await service.initialReview(for: app) { review in
+      return await service.initialReview(
+        for: app,
+        listing: {
+          if let activeSession { return await activeSession.installedListing() }
+          return service.installedListing()
+        }
+      ) { review in
         if activity.active.withLock({ $0 }), !Task.isCancelled { progress?(review) }
         if review.phase == .shallow {
           shallowReady.continuation.yield(())
@@ -603,6 +613,44 @@ public actor ApplicationScanSession {
     selectedInitial?.cancel()
     selectedEnrichment?.cancel()
     selectedReviewID = nil
+  }
+
+  /// A native drop/navigation report uses this session's cheap listing and
+  /// one background ownership context. The existing full report API remains
+  /// available to callers that explicitly await all ownership evidence.
+  public func initialReport(path: String) async throws -> ApplicationReport? {
+    try Task.checkCancellation()
+    guard !cancelled, related.scopeExclusion(at: path) == nil else { return nil }
+    guard let app = related.application(at: path) else {
+      return await ApplicationDiscovery(related: related).report(path: path)
+    }
+    let physical = app.linkTarget ?? path
+    guard related.scopeExclusion(at: physical) == nil else { return nil }
+    let updates = AsyncStream<ApplicationRelatedReview>.makeStream()
+    let work = Task { [weak self] in
+      defer { updates.continuation.finish() }
+      guard let self else { return }
+      _ = try? await self.relatedReview(path: path) { updates.continuation.yield($0) }
+    }
+    enrichments.append(work)
+    if enrichments.count > 32 { enrichments.removeFirst().cancel() }
+    var iterator = updates.stream.makeAsyncIterator()
+    var observed: ApplicationRelatedReview?
+    while let update = await iterator.next() {
+      if update.phase != .shallow {
+        observed = update
+        break
+      }
+    }
+    guard let observed, !cancelled else { return nil }
+    let unknown = ByteAggregate(knownLowerBound: 0, completeTotal: nil)
+    var report = ApplicationReport(
+      path: path, bundleID: app.bundleID, version: app.version, signerTeamID: observed.signerTeamID,
+      logical: unknown, allocated: unknown, knownItemCount: 1, partial: true,
+      related: observed.candidates, manualUninstallerSuggested: false, linkTarget: app.linkTarget,
+      displayRootIdentity: try? DescriptorFileSystem.identity(at: physical))
+    report.isIOSWrapper = (try? DescriptorFileSystem.identity(at: physical + "/Wrapper"))?.kind == .directory
+    return report
   }
 
   public func makeAvailableUninstallPlan(

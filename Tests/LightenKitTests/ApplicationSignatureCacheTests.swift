@@ -207,6 +207,79 @@ struct ApplicationSignatureCacheTests {
     #expect(calls.withLock { $0 } == 2)
   }
 
+  @Test("Fast cached signing never performs a cold read and rejects changed signed metadata")
+  func cachedSigningRequiresPreviousCurrentValidation() throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    let calls = Mutex(0)
+    let cache = ApplicationSignatureCache { _ in
+      calls.withLock { $0 += 1 }
+      return ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [])
+    }
+    #expect(cache.cachedMetadata(at: fixture.app) == nil && calls.withLock { $0 } == 0)
+    #expect(cache.observation(at: fixture.app)?.metadata?.teamID == "TEAM")
+    #expect(cache.cachedMetadata(at: fixture.app)?.teamID == "TEAM" && calls.withLock { $0 } == 1)
+    try rewriteRestoringModification(fixture.resources)
+    #expect(cache.cachedMetadata(at: fixture.app) == nil && calls.withLock { $0 } == 1)
+    #expect(cache.observation(at: fixture.app)?.metadata?.teamID == "TEAM" && calls.withLock { $0 } == 2)
+  }
+
+  @Test("Unchanged team evidence enriches initial exact rows without another signing read")
+  func cachedTeamPreselectsOnlyUniqueExactOwner() async throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    let calls = Mutex(0)
+    let service = fixture.service { _ in
+      calls.withLock { $0 += 1 }
+      return ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [])
+    }
+    let path = RelatedLocation.caches.path(domain: "TEAM." + fixture.bundleID, homeDirectory: fixture.home)
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+    let app = try #require(service.application(at: fixture.app))
+    let cold = await service.initialReview(for: app, progress: nil)
+    #expect(cold.candidates.first { $0.path == path }?.defaultSelected != true && calls.withLock { $0 } == 0)
+    _ = await service.discover(for: app)
+    let reads = calls.withLock { $0 }
+    let warm = await service.initialReview(for: app, progress: nil)
+    #expect(warm.candidates.first { $0.path == path }?.defaultSelected == true)
+    #expect(calls.withLock { $0 } == reads)
+    let copy = fixture.home + "/Applications/Previous.app"
+    try FileManager.default.copyItem(atPath: fixture.app, toPath: copy)
+    let shared = await service.initialReview(for: app, progress: nil)
+    #expect(shared.candidates.first { $0.path == path }?.defaultSelected == false)
+    #expect(calls.withLock { $0 } == reads)
+  }
+
+  @Test("Reference helper evidence shares the service's validated signing cache")
+  func referenceHelpersReuseValidatedServiceSigners() async throws {
+    let fixture = try SignatureFixture()
+    defer { fixture.cleanup() }
+    let helperID = fixture.bundleID + ".helper"
+    let helper = fixture.app + "/Contents/Frameworks/Fixture Helper.app"
+    try FileManager.default.createDirectory(atPath: helper + "/Contents/MacOS", withIntermediateDirectories: true)
+    try PropertyListSerialization.data(
+      fromPropertyList: ["CFBundleIdentifier": helperID, "CFBundleExecutable": "helper"], format: .xml, options: 0
+    )
+    .write(to: URL(fileURLWithPath: helper + "/Contents/Info.plist"))
+    try Data("helper".utf8).write(to: URL(fileURLWithPath: helper + "/Contents/MacOS/helper"))
+    let parent =
+      fixture.home
+      + "/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments"
+    try FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
+    let recent = parent + "/" + helperID.lowercased() + ".sfl4"
+    try Data("recent".utf8).write(to: URL(fileURLWithPath: recent))
+    let calls = Mutex<[String: Int]>([:])
+    let service = fixture.service { path in
+      calls.withLock { $0[path, default: 0] += 1 }
+      return ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [])
+    }
+    let app = try #require(service.application(at: fixture.app))
+    let candidates = await service.discover(for: app)
+    let claimed = try #require(candidates.first { $0.path == recent })
+    #expect(claimed.defaultSelected && claimed.evidenceKinds.contains(.bundleIdentifier))
+    #expect(calls.withLock { $0[fixture.app] } == 1 && calls.withLock { $0[helper] } == 1)
+  }
+
   @Test("Moving an authorized package uses selected stats and no signer while journal is leased")
   func noSigningInsideLease() async throws {
     let fixture = try SignatureFixture()

@@ -65,6 +65,7 @@ struct ApplicationMetadataObservation: Sendable {
   let volumeID: UUID?
   let paths: [ApplicationPathObservation]
   let executableName: String?
+  var displayNames: [String] = []
   let state: State
 
   static func read(at path: String) -> Self {
@@ -73,6 +74,7 @@ struct ApplicationMetadataObservation: Sendable {
     var volumeID: UUID?
     var observations: [ApplicationPathObservation] = []
     var executableName: String?
+    var displayNames: [String] = []
     do {
       let original = try DescriptorFileSystem.identity(at: path)
       observations.append(ApplicationPathObservation(path: path, identity: original))
@@ -136,6 +138,13 @@ struct ApplicationMetadataObservation: Sendable {
         {
           executableName = value
         }
+        for key in ["CFBundleName", "CFBundleDisplayName"] {
+          if let name = value[key] as? String, !name.isEmpty, name.utf8.count <= 1024,
+            !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+          {
+            displayNames.append(name)
+          }
+        }
         if let value = value["CFBundleIdentifier"] {
           guard let id = value as? String, Self.safeLiteral(id) else {
             throw ApplicationMetadataFailure.invalidBundleIdentifier
@@ -151,11 +160,12 @@ struct ApplicationMetadataObservation: Sendable {
       let state: State = declared.first.map(State.declaredID) ?? (hasInfo ? .identifierless : .absentInfo)
       return Self(
         path: path, physicalPath: physical, root: root, volumeID: volumeID,
-        paths: observations, executableName: executableName, state: state)
+        paths: observations, executableName: executableName, displayNames: displayNames, state: state)
     } catch {
       return Self(
         path: path, physicalPath: physical, root: root, volumeID: volumeID,
-        paths: observations, executableName: executableName, state: .unknown(String(describing: error)))
+        paths: observations, executableName: executableName, displayNames: displayNames,
+        state: .unknown(String(describing: error)))
     }
   }
 

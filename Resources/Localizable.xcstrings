@@ -3721,6 +3721,22 @@
         }
       }
     },
+    "Open files could not be fully checked.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open files could not be fully checked."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Açık dosyalar tam olarak denetlenemedi."
+          }
+        }
+      }
+    },
     "Open folder": {
       "localizations": {
         "en": {

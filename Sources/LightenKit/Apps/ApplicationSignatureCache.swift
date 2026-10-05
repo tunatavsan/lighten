@@ -13,6 +13,7 @@ final class ApplicationSignatureCache: Sendable {
   }
 
   private let entries = Mutex<[String: Observation]>([:])
+  private let reads = Mutex(())
   private let reader: @Sendable (String) -> ApplicationSigningMetadata?
 
   init(reader: @escaping @Sendable (String) -> ApplicationSigningMetadata?) {
@@ -21,20 +22,28 @@ final class ApplicationSignatureCache: Sendable {
 
   func observation(at path: String) -> Observation? {
     guard let identity = try? ApplicationSignatureIdentity.capture(path) else { return nil }
-    return entries.withLock { entries in
-      if let cached = entries[path], cached.identity == identity { return cached }
+    if let cached = entries.withLock({ $0[path] }), cached.identity == identity { return cached }
+    return reads.withLock { _ in
+      if let cached = entries.withLock({ $0[path] }), cached.identity == identity { return cached }
       let metadata = reader(path)
       guard (try? ApplicationSignatureIdentity.capture(path)) == identity else {
-        entries.removeValue(forKey: path)
+        entries.withLock { _ = $0.removeValue(forKey: path) }
         return nil
       }
       let observation = Observation(identity: identity, metadata: metadata)
-      entries[path] = observation
+      entries.withLock { $0[path] = observation }
       return observation
     }
   }
 
   func metadata(at path: String) -> ApplicationSigningMetadata? { observation(at: path)?.metadata }
+
+  /// Fast display enrichment reuses only a previously validated, unchanged signer.
+  /// A cold signature still goes through the strict native reader in observation(at:).
+  func cachedMetadata(at path: String) -> ApplicationSigningMetadata? {
+    guard let identity = try? ApplicationSignatureIdentity.capture(path) else { return nil }
+    return entries.withLock { $0[path].flatMap { $0.identity == identity ? $0.metadata : nil } }
+  }
 }
 
 struct ApplicationSignatureIdentity: Sendable, Equatable {

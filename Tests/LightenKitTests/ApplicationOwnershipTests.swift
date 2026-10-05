@@ -258,7 +258,7 @@ struct ApplicationOwnershipTests {
     #expect(scoped == (control == "managed"))
   }
 
-  @Test("An unreadable matching third-party launch record names only the affected exact-ID data")
+  @Test("An unreadable third-party launch record remains a coverage note for independent exact-ID data")
   func unreadableLaunchRecordNamesAffectedRows() async throws {
     let home = try ownerFixture()
     defer { try? FileManager.default.removeItem(atPath: home) }
@@ -285,16 +285,23 @@ struct ApplicationOwnershipTests {
       packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
     let context = service.makeContext()
     let affected = try #require((await service.discover(context: context)).first { $0.bundleID == id })
-    #expect(affected.classification == .uncertain && !affected.canSelect && !affected.defaultSelected)
-    #expect(affected.refusalEvidence.contains { $0.reason == .unknownMetadata && $0.ownerPaths == [unreadable] })
+    #expect(affected.classification == .installed && affected.canSelect && affected.defaultSelected)
+    #expect(affected.refusalEvidence.isEmpty)
     let app = try #require(service.application(at: appPath))
-    #expect(throws: RelatedFailure.self) { try service.planInstalled(app: app, candidate: affected) }
+    let fresh = try service.planInstalled(app: app, candidate: affected)
+    #expect(fresh.items.first?.installedRelatedProof?.bundleID == id)
+    #expect(service.prepareInstalledOwners(plan: fresh).failures.isEmpty)
     let scoped = service.makeStandardContext(app: app, listing: context.installedListing, dataEvidenceSource: context)
     #expect(scoped.inventory.ownershipIssues.contains { $0.path == unreadable })
     let available = await service.makeAvailableUninstallPlan(
       app: app, selectedRelated: [affected], includePackage: false, context: context)
-    #expect(available.plan == nil)
-    #expect(available.refusalEvidence.contains { $0.reason == .unknownMetadata && $0.ownerPaths == [unreadable] })
+    let plan = try #require(available.plan)
+    #expect(available.rejections.isEmpty && available.refusalEvidence.isEmpty)
+    #expect(service.prepareInstalledOwners(plan: plan).failures.isEmpty)
+    #expect(!context.inventory.ownershipComplete)
+    #expect(context.inventory.ownershipIssues.contains { $0.path == unreadable && $0.code == EACCES })
+    let claims = ApplicationAuxiliaryEvidenceProducer.discover(app: app, homeDirectory: home)
+    #expect(!claims.evidence.contains { $0.dataPath == unreadable })
     let unrelated = try #require((await service.discover(context: context)).first { $0.bundleID == unrelatedID })
     #expect(unrelated.canSelect && unrelated.defaultSelected && unrelated.refusalEvidence.isEmpty)
   }

@@ -314,18 +314,18 @@ struct ApplicationFrameworkEvidenceTests {
     }
   }
 
-  @Test("A bounded census failure is unknown sharing, never an empty owner proof")
-  func incompleteLiveCensusRefusesSharing() throws {
+  @Test("A bounded census failure remains informational and never claims complete coverage")
+  func incompleteLiveCensusIsInformational() throws {
     let observed = ApplicationLiveDataObservation.observe(maximumBytes: 1)
     #expect(!observed.complete && observed.records.isEmpty)
     let report = try #require(observed.report)
     #expect(report.incompleteReasons.contains("memory-limit"))
     #expect(!report.complete && report.recordCount == 0)
-    #expect(throws: (any Error).self) {
+    #expect(
       try ApplicationAuxiliaryEvidenceProducer.liveSharedOwnerPaths(
         dataPath: "/unobserved", excludingPackage: "/unobserved.app", applications: [], home: "/unobserved",
-        observation: observed)
-    }
+        observation: observed
+      ).isEmpty)
   }
 
   @Test(

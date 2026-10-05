@@ -1440,9 +1440,9 @@ private func appsBasketPlan(_ paths: [String]) -> ActionPlan {
 }
 
 @Test(
-  "Every app selection route leaves ownership-pending associations unselected",
+  "Every app selection route preselects complete exact claims while global ownership is pending",
   arguments: ["single", "toggle", "range", "legacy", "drop"])
-@MainActor func appsPendingOwnershipHasNoAutomaticChoice(route: String) async throws {
+@MainActor func appsPendingOwnershipAllowsScopedExactChoice(route: String) async throws {
   let path = "/Applications/LightenQA-pending-choice.app"
   let candidate = selectedAppCandidate("/fixture/LightenQA-pending-data")
   var report = selectedAppReport(path, bundleID: "qa.lighten.pending")
@@ -1452,7 +1452,7 @@ private func appsBasketPlan(_ paths: [String]) -> ActionPlan {
   let store = AppsStore(
     pictures: disabledAppsPictures(),
     availableUninstallPlanBuilder: { _, candidates, _ in
-      #expect(candidates.isEmpty)
+      #expect(candidates.map(\.path) == [candidate.path])
       return .init(plan: appsBasketPlan([path]), rejections: [])
     }, droppedReport: { _ in finalReport }, preferences: try appsAutomaticPreferences(),
     running: ClosedAppSource(), events: { stream })
@@ -1468,11 +1468,93 @@ private func appsBasketPlan(_ paths: [String]) -> ActionPlan {
     let intent: AppSelectionIntent = route == "toggle" ? .toggle : route == "range" ? .range : .single
     store.selectApp(path, intent: intent, orderedPaths: [path], actions: actions)
   }
-  #expect(store.packageSelected && store.selectedDataPaths.isEmpty)
-  #expect(!store.automaticSelectionAllowed(candidate))
+  #expect(store.packageSelected && store.selectedDataPaths == [candidate.path])
+  #expect(store.automaticSelectionAllowed(candidate))
   store.togglePackage(actions: actions)
   store.togglePackage(actions: actions)
-  #expect(store.packageSelected && store.selectedDataPaths.isEmpty)
+  #expect(store.packageSelected && store.selectedDataPaths == [candidate.path])
+  continuation.finish()
+  await store.waitForScan()
+}
+
+@Test(
+  "Pending global ownership is claim-scoped and retains Mozilla and configured-directory vetoes",
+  arguments: ["team", "receipt", "launch", "electron", "mozilla", "configured"])
+@MainActor func appsPendingOwnershipRetainsNonexactGates(_ proof: String) async throws {
+  let path = "/Applications/LightenQA-claim-scope.app"
+  var candidate = selectedAppCandidate("/fixture/LightenQA-claim-scope")
+  switch proof {
+  case "team": candidate.evidenceKinds = [.teamIdentifier]
+  case "receipt": candidate.evidenceKinds = [.installerReceipt]
+  case "launch": candidate.evidenceKinds = [.launchService]
+  case "electron": candidate.evidenceKinds = [.electron]
+  case "mozilla": candidate.evidenceKinds = [.bundleIdentifier, .mozilla]
+  default: candidate.evidenceKinds = [.bundleIdentifier, .configuredDirectory]
+  }
+  var report = selectedAppReport(path, bundleID: "qa.lighten.claim.scope")
+  report.related = [candidate]
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(), preferences: try appsAutomaticPreferences(), events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  store.reports = [report]
+  continuation.yield(.related(path: path, candidates: [candidate], ownershipPending: true))
+  #expect(await appsEventually { store.ownershipPendingPaths.contains(path) })
+  store.selectApp(path, intent: .single, orderedPaths: [path], actions: actions)
+  let allowed = ["team", "receipt", "launch"].contains(proof)
+  #expect(store.selectedDataPaths.contains(candidate.path) == allowed)
+  #expect(store.automaticSelectionAllowed(candidate) == allowed)
+  continuation.finish()
+  await store.waitForScan()
+}
+
+@Test("Deferred proof keeps manual choices and deselections while weak rows stay unselected")
+@MainActor func appsDeferredEvidencePreservesExistingChoices() async throws {
+  let path = "/Applications/LightenQA-deferred-proof.app"
+  let app = InstalledApplication(bundleID: "qa.lighten.deferred", path: path, version: nil)
+  let exact = selectedAppCandidate("/fixture/LightenQA-deferred-exact")
+  var manual = selectedAppCandidate("/fixture/LightenQA-deferred-manual")
+  manual.evidenceKinds = [.executableName]
+  var late = selectedAppCandidate("/fixture/LightenQA-deferred-receipt")
+  late.evidenceKinds = [.installerReceipt]
+  let weak = RelatedDataCandidate(
+    id: "/fixture/LightenQA-deferred-weak", path: "/fixture/LightenQA-deferred-weak",
+    classification: .unprovenNameOnly, reason: .nameOnly, snapshot: nil, receipt: nil, matchStrength: .weak,
+    evidenceKinds: [.executableName])
+  let gate = SelectedAppReviewGate()
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    selectedReview: { path, progress in
+      try await gate.review(path: path, progress: progress)
+    }, preferences: try appsAutomaticPreferences(), running: ClosedAppSource(), events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  store.reports = [selectedAppReport(path, bundleID: app.bundleID)]
+  store.selectApp(path, intent: .single, orderedPaths: [path], actions: actions)
+  await gate.waitForRequests(1)
+  await gate.publish(
+    ApplicationRelatedReview(application: app, candidates: [exact, manual], phase: .measuring(completed: 0, total: 2)),
+    request: 0)
+  #expect(await appsEventually { store.selectedDataPaths == [exact.path] })
+  store.toggleData(exact.path, actions: actions)
+  store.toggleData(manual.path, actions: actions)
+  #expect(store.selectedDataPaths == [manual.path])
+  await gate.publish(
+    ApplicationRelatedReview(
+      application: app, candidates: [exact, manual, late, weak], ownershipPending: false, phase: .enriched,
+      openFilesComplete: false), request: 0)
+  #expect(await appsEventually { store.selectedReport?.related.count == 4 })
+  #expect(store.selectedDataPaths == [manual.path, late.path])
+  #expect(!store.selectedDataPaths.contains(exact.path) && !store.selectedDataPaths.contains(weak.path))
+  #expect(
+    store.hasCoverageIssue
+      && store.coverageIssueDescriptions.contains { $0.contains("Open files could not be fully checked.") })
+  await gate.finish(
+    ApplicationRelatedReview(
+      application: app, candidates: [exact, manual, late, weak], ownershipPending: false, phase: .enriched), request: 0)
+  await store.waitForSelectedReview()
   continuation.finish()
   await store.waitForScan()
 }
