@@ -109,7 +109,8 @@ struct PaneGlass: NSViewRepresentable {
   func makeNSView(context: Context) -> NSGlassEffectView {
     let view = NSGlassEffectView()
     view.style = .regular
-    view.tintColor = nil
+    // A dense tint keeps the pane readable over a busy desktop; the tray around it stays clear.
+    view.tintColor = ThemeColor.paneTint.nsColor
     view.cornerRadius = cornerRadius
     view.contentView = NSView()
     view.setAccessibilityHidden(true)

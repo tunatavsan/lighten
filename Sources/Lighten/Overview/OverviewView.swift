@@ -262,7 +262,7 @@ private struct ToolCard: View {
     Button(action: open) {
       VStack(alignment: .leading, spacing: Theme.Space.m) {
         HStack(alignment: .top) {
-          ToolGlyph(symbol: entry.symbol, color: entry.tint, size: Theme.Layout.toolTileLarge)
+          ToolGlyph(symbol: entry.symbol, size: Theme.Layout.toolTileLarge)
           Spacer()
           if presentation?.isWorking == true {
             ProgressView().controlSize(.small)

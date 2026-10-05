@@ -110,18 +110,17 @@ struct RowDivider: View {
   }
 }
 
-/// A brand-coloured rounded square carrying a tool's symbol, like System Settings' pane icons.
+/// A tool's symbol on a quiet neutral tile: monochrome, so colour stays for data and the one main action.
 struct ToolGlyph: View {
   let symbol: String
-  let color: Color
   var size: CGFloat = Theme.Layout.toolTile
 
   var body: some View {
     Image(systemName: symbol)
       .font(size > Theme.Layout.toolTile ? Theme.Font.title2 : Theme.Font.iconSmall)
-      .foregroundStyle(Theme.Palette.inkOnAccent)
+      .foregroundStyle(Theme.Palette.ink)
       .frame(width: size, height: size)
-      .background(color.gradient, in: RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
+      .background(Theme.Palette.well, in: RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
       .accessibilityHidden(true)
   }
 }

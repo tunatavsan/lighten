@@ -38,8 +38,14 @@ struct LightenRootView: View {
     NavigationSplitView {
       LightenSidebar(selection: $model.section, presentations: model.presentations)
     } detail: {
-      detail.contentPane()
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+      ZStack {
+        detail
+          .id(model.section)
+          .transition(Theme.Motion.transition(Theme.Motion.screen, reduceMotion: reduceMotion))
+      }
+      .animation(Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion), value: model.section)
+      .contentPane()
+      .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
     }
     .windowTray()
     .appliesAppearancePreference()
@@ -123,11 +129,7 @@ private struct SidebarRow: View {
 
   var body: some View {
     HStack(spacing: Theme.Space.s) {
-      Label {
-        Text(entry.title).lineLimit(1)
-      } icon: {
-        ToolGlyph(symbol: entry.symbol, color: entry.tint, size: Theme.Layout.sidebarGlyph)
-      }
+      Label(entry.title, systemImage: entry.symbol).lineLimit(1)
       Spacer(minLength: Theme.Space.xs)
       if presentation?.isWorking == true {
         ProgressView().controlSize(.mini)

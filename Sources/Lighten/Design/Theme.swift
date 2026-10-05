@@ -65,6 +65,11 @@ struct ThemeColor: Sendable {
   }
 }
 
+extension ThemeColor {
+  /// The content pane's glass tint: dense enough that the desktop only glows through.
+  static let paneTint = ThemeColor(light: 0xF4F3F8, dark: 0x1E1E23, alpha: 0.86, darkAlpha: 0.84)
+}
+
 extension Theme {
   enum Palette {
     // Brand, from the icon's PALETTE.txt (OKLCH 0.48–0.82).
@@ -96,8 +101,8 @@ extension Theme {
     /// Modules on the glass pane: cards and grouped rows. Translucent so the pane's glass reads
     /// through, as the sidebar's rows do; Increase Contrast makes them opaque.
     static let surface = ThemeColor(
-      light: 0xFFFFFF, dark: 0xFFFFFF, highContrastLight: 0xFFFFFF, highContrastDark: 0x1E1E24, alpha: 0.62,
-      darkAlpha: 0.055, opaqueInHighContrast: true
+      light: 0xFFFFFF, dark: 0xFFFFFF, highContrastLight: 0xFFFFFF, highContrastDark: 0x1E1E24, alpha: 0.9,
+      darkAlpha: 0.06, opaqueInHighContrast: true
     ).color
     /// A recessed well inside a card: tracks, empty treemap tiles, code-like values.
     static let well = ThemeColor(light: 0xEFEEF6, dark: 0x1F1F26, highContrastLight: 0xE4E3EE).color
@@ -118,13 +123,13 @@ extension Theme {
     static let accentTint = ThemeColor(light: 0x6B58CA, dark: 0x8F80EE, alpha: 0.14).color
     static let neutralTint = ThemeColor(light: 0x5A5A70, dark: 0xB4B4C8, alpha: 0.12).color
 
-    /// Tool tiles in the sidebar and on Overview: one brand tone per tool.
-    static let toolSpace = indigo
-    static let toolClean = violet
-    static let toolDuplicates = orchid
-    static let toolApps = ThemeColor(light: 0x4E62D6, dark: 0x7D8CF0).color
-    static let toolHistory = ThemeColor(light: 0x6E6A86, dark: 0x9C98B4).color
-    static let toolComingSoon = ThemeColor(light: 0x8A88A0, dark: 0x77758C).color
+    /// Tool symbols and empty states stay monochrome; colour is kept for data and the main action.
+    static let toolSpace = inkSecondary
+    static let toolClean = inkSecondary
+    static let toolDuplicates = inkSecondary
+    static let toolApps = inkSecondary
+    static let toolHistory = inkSecondary
+    static let toolComingSoon = inkTertiary
 
     // Glass tints (system Liquid Glass, never a blur plus a fill).
     static let glassTintChrome = ThemeColor(light: 0xFFFFFF, dark: 0x2A2933, alpha: 0.18).color
@@ -154,7 +159,8 @@ extension Theme {
     static let tileEdge = ThemeColor(light: 0xFFFFFF, dark: 0xFFFFFF, alpha: 0.35, darkAlpha: 0.08).color
     /// Protected and system blocks in the treemap.
     static let protectedTile = ThemeColor(light: 0xE4E3EC, dark: 0x2A2A31).color
-    static let hatch = ThemeColor(light: 0x000000, dark: 0xFFFFFF, alpha: 0.16).color
+    /// The wash over a hovered tile.
+    static let tileHover = ThemeColor(light: 0x000000, dark: 0xFFFFFF, alpha: 0.08).color
   }
 }
 
@@ -238,6 +244,8 @@ extension Theme {
     static let inspectorIdeal: CGFloat = 300
     static let inspectorMaximum: CGFloat = 380
     static let listColumn: CGFloat = 340
+    /// Where row text starts in a module whose rows lead with a checkbox.
+    static let rowTextInset: CGFloat = 44
     /// Below this content width Space shows the map and the list one at a time.
     static let spaceCompactWidth: CGFloat = 760
     static let basketChipsWidth: CGFloat = 280
@@ -245,6 +253,9 @@ extension Theme {
     static let sidebarGlyph: CGFloat = 20
     static let toolTileLarge: CGFloat = 40
     static let appIcon: CGFloat = 32
+    /// A file's Finder icon in a list row.
+    static let rowIcon: CGFloat = 24
+    static let previewMinimum = CGSize(width: 520, height: 380)
     static let appIconLarge: CGFloat = 64
     static let sizeColumn: CGFloat = 84
     static let statusColumn: CGFloat = 110
@@ -294,5 +305,8 @@ extension Theme {
 
     static let rise = AnyTransition.opacity.combined(with: .offset(y: 8))
     static let pop = AnyTransition.opacity.combined(with: .scale(scale: 0.96))
+    /// Moving between screens: the new one rises into place while the old one fades.
+    static let screen = AnyTransition.asymmetric(
+      insertion: .opacity.combined(with: .offset(y: 10)), removal: .opacity)
   }
 }

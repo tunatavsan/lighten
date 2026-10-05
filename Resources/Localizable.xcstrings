@@ -459,6 +459,23 @@
         }
       }
     },
+    "A warning sign on a tile means its size is at least the amount shown.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A warning sign on a tile means its size is at least the amount shown."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir kutudaki uyarı işareti, boyutun en az gösterilen kadar olduğu anlamına gelir."
+          }
+        }
+      }
+    },
     "A whole standard folder cannot be moved. Choose items inside it.": {
       "localizations": {
         "en": {
@@ -2826,22 +2843,6 @@
         }
       }
     },
-    "Files": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Files"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dosyalar"
-          }
-        }
-      }
-    },
     "Files changed or could not be verified. Review the copies and try again.": {
       "localizations": {
         "en": {
@@ -2902,22 +2903,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Finder etiketleri farklı"
-          }
-        }
-      }
-    },
-    "Folders": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Folders"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Klasörler"
           }
         }
       }
@@ -7759,22 +7744,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Depolama"
-          }
-        }
-      }
-    },
-    "Striped: size is incomplete": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Striped: size is incomplete"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Çizgili: boyut eksik"
           }
         }
       }

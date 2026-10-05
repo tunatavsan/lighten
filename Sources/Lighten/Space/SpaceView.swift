@@ -340,10 +340,7 @@ struct SpaceView: View {
         }
       }
       Spacer(minLength: 0)
-      InfoButton(
-        text: String(localized: "Folders")
-          + ", " + String(localized: "Files").lowercased() + ". "
-          + String(localized: "Striped: size is incomplete"))
+      InfoButton(text: String(localized: "A warning sign on a tile means its size is at least the amount shown."))
     }
     .font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary)
     .padding(.horizontal, Theme.Space.xs)
@@ -373,16 +370,10 @@ struct SpaceView: View {
       }
     } label: {
       shape
-        .fill(isOther ? AnyShapeStyle(Theme.Palette.well) : AnyShapeStyle(color(for: item).gradient))
+        .fill(isOther ? Theme.Palette.well : color(for: item))
         .overlay { shape.strokeBorder(Theme.Palette.tileEdge, lineWidth: Theme.Stroke.hairline) }
         .overlay {
-          if item?.partial == true {
-            PartialHatching().stroke(Theme.Palette.hatch, lineWidth: Theme.Stroke.hairline)
-              .clipShape(shape)
-          }
-          if hovered && !selected {
-            shape.fill(Theme.Palette.hatch.opacity(0.5))
-          }
+          if hovered && !selected { shape.fill(Theme.Palette.tileHover) }
         }
         .overlay {
           if isOther {
@@ -398,7 +389,7 @@ struct SpaceView: View {
         }
         .overlay(alignment: .topTrailing) {
           if width >= Theme.Layout.treemapIconMinimum, height >= Theme.Layout.treemapIconMinimum - 4, let item {
-            Image(systemName: item.isProtected || item.kind == .systemVolume ? "lock.fill" : SpaceText.symbol(item))
+            Image(systemName: tileSymbol(item))
               .font(Theme.Font.iconTiny).foregroundStyle(tileTextColor(for: item).opacity(0.75))
               .padding(Theme.Space.xs + 2)
           }
@@ -426,6 +417,11 @@ struct SpaceView: View {
     .help("\(name) · \(sizeLabel(size))")
     .accessibilityLabel("\(name), \(sizeLabel(size))")
     .accessibilityIdentifier(isOther ? "space-other" : "space-tile-\(tile.id)")
+  }
+
+  private func tileSymbol(_ item: SpaceItem) -> String {
+    if item.isProtected || item.kind == .systemVolume { return "lock.fill" }
+    return item.partial ? "exclamationmark.triangle.fill" : SpaceText.symbol(item)
   }
 
   /// Button fires on each mouse-up. Read the second click inside that action so
@@ -700,17 +696,4 @@ func sizeLabel(_ bytes: ByteAggregate?) -> String {
 func format(_ bytes: Int64?) -> String {
   guard let bytes else { return String(localized: "Unknown") }
   return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-}
-
-private struct PartialHatching: Shape {
-  func path(in rect: CGRect) -> Path {
-    var path = Path()
-    var x = -rect.height
-    while x < rect.width {
-      path.move(to: CGPoint(x: x, y: rect.height))
-      path.addLine(to: CGPoint(x: x + rect.height, y: 0))
-      x += 8
-    }
-    return path
-  }
 }
