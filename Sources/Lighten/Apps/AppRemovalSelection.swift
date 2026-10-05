@@ -10,6 +10,7 @@ struct AppRemovalSelection: Sendable {
   var bundleID: String?
   var packageSelected = false
   var dataPaths: Set<String> = []
+  var automaticDataPaths: Set<String> = []
   var deselectedDataPaths: Set<String> = []
   var manualData: [String: RelatedDataCandidate] = [:]
   var refusalEvidence: [RelatedOwnershipRefusalEvidence] = []

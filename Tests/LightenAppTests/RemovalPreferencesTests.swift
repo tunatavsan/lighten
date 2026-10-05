@@ -11,14 +11,14 @@ import Testing
   defer { defaults.removePersistentDomain(forName: name) }
   let fallbackName = "LightenQA-preferences-fallback-" + UUID().uuidString
   let fallback = try #require(UserDefaults(suiteName: fallbackName))
-  fallback.set(true, forKey: RemovalPreferences.relatedKey)
+  fallback.set(false, forKey: RemovalPreferences.relatedKey)
   fallback.set("permanent", forKey: RemovalPreferences.deletionKey)
   defaults.addSuite(named: fallbackName)
   defer {
     defaults.removeSuite(named: fallbackName)
     fallback.removePersistentDomain(forName: fallbackName)
   }
-  #expect(defaults.bool(forKey: RemovalPreferences.relatedKey))
+  #expect(!defaults.bool(forKey: RemovalPreferences.relatedKey))
   let preferences = RemovalPreferences(defaults: defaults, persistentDomainName: name)
   #expect(preferences.deletionDefault == .trash)
   #expect(preferences.automaticallySelectRelatedData)

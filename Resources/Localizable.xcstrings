@@ -137,6 +137,23 @@
         }
       }
     },
+    "%lld applications omitted from this list": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld applications omitted from this list"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld uygulama bu listede gösterilmiyor"
+          }
+        }
+      }
+    },
     "%lld item outcomes could not be verified. Check History and Finder.": {
       "localizations": {
         "en": {
@@ -149,6 +166,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "%lld öğenin sonucu doğrulanamadı. Geçmiş’i ve Finder’ı kontrol edin."
+          }
+        }
+      }
+    },
+    "%lld related items selected automatically": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld related items selected automatically"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld ilişkili öğe otomatik seçildi"
           }
         }
       }
@@ -617,6 +651,40 @@
         }
       }
     },
+    "Application copy in a hidden folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application copy in a hidden folder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gizli klasördeki uygulama kopyası"
+          }
+        }
+      }
+    },
+    "Application could not be identified": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application could not be identified"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama tanımlanamadı"
+          }
+        }
+      }
+    },
     "Application link": {
       "localizations": {
         "en": {
@@ -633,6 +701,74 @@
         }
       }
     },
+    "Application metadata could not be read": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application metadata could not be read"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama bilgileri okunamadı"
+          }
+        }
+      }
+    },
+    "Application ownership could not be checked": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application ownership could not be checked"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama sahipliği denetlenemedi"
+          }
+        }
+      }
+    },
+    "Application registration lookup did not finish.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application registration lookup did not finish."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama kayıtlarının sorgulanması tamamlanmadı."
+          }
+        }
+      }
+    },
+    "Applications in Trash": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applications in Trash"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çöp'teki uygulamalar"
+          }
+        }
+      }
+    },
     "Apps": {
       "localizations": {
         "en": {
@@ -645,22 +781,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulamalar"
-          }
-        }
-      }
-    },
-    "Apps on disconnected or unindexed external disks were not checked.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apps on disconnected or unindexed external disks were not checked."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bağlı olmayan veya dizine eklenmemiş harici disklerdeki uygulamalar kontrol edilmedi."
           }
         }
       }
@@ -789,6 +909,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sepet"
+          }
+        }
+      }
+    },
+    "Build and development artifacts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Build and development artifacts"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Derleme ve geliştirme çıktıları"
           }
         }
       }
@@ -1965,6 +2102,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Taralı: bilinen en az boyut"
+          }
+        }
+      }
+    },
+    "Helpers inside another application": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Helpers inside another application"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka bir uygulamanın içindeki yardımcılar"
           }
         }
       }
@@ -3284,6 +3438,193 @@
         }
       }
     },
+    "Not selected automatically: a matching name does not prove app ownership.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: a matching name does not prove app ownership."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: eşleşen ad, uygulamaya ait olduğunu kanıtlamaz."
+          }
+        }
+      }
+    },
+    "Not selected automatically: a vendor folder does not prove sole app ownership.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: a vendor folder does not prove sole app ownership."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: üretici klasörü, yalnız bu uygulamaya ait olduğunu kanıtlamaz."
+          }
+        }
+      }
+    },
+    "Not selected automatically: app ownership has not been verified.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: app ownership has not been verified."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: uygulamaya ait olduğu doğrulanmadı."
+          }
+        }
+      }
+    },
+    "Not selected automatically: association evidence is unavailable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: association evidence is unavailable."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: ilişkiyi doğrulayacak kanıt yok."
+          }
+        }
+      }
+    },
+    "Not selected automatically: open files do not prove app ownership.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: open files do not prove app ownership."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: açık dosyalar, uygulamaya ait olduğunu kanıtlamaz."
+          }
+        }
+      }
+    },
+    "Not selected automatically: profiles may contain mail and browsing data.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: profiles may contain mail and browsing data."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: profiller e-posta ve tarayıcı verileri içerebilir."
+          }
+        }
+      }
+    },
+    "Not selected automatically: the association is not a verified exact match.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: the association is not a verified exact match."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: ilişki doğrulanmış bir tam eşleşme değil."
+          }
+        }
+      }
+    },
+    "Not selected automatically: the available evidence does not establish sole app ownership.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: the available evidence does not establish sole app ownership."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: mevcut kanıt, yalnız bu uygulamaya ait olduğunu doğrulamıyor."
+          }
+        }
+      }
+    },
+    "Not selected automatically: this data may be shared with other apps.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: this data may be shared with other apps."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: bu veri başka uygulamalarla ortak olabilir."
+          }
+        }
+      }
+    },
+    "Not selected automatically: this folder may contain your documents.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: this folder may contain your documents."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: bu klasör belgelerinizi içerebilir."
+          }
+        }
+      }
+    },
+    "Not selected automatically: this item requires your explicit choice.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: this item requires your explicit choice."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: bu öğeyi sizin seçmeniz gerekiyor."
+          }
+        }
+      }
+    },
     "OK": {
       "localizations": {
         "en": {
@@ -3456,6 +3797,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Diğer konumlar"
+          }
+        }
+      }
+    },
+    "Outside the standard Applications folders": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Outside the standard Applications folders"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standart Uygulamalar klasörlerinin dışında"
           }
         }
       }
@@ -3860,6 +4218,23 @@
         }
       }
     },
+    "Profiles may contain mail, browsing history, and personal data. Review before removal.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Profiles may contain mail, browsing history, and personal data. Review before removal."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Profiller e-posta, tarayıcı geçmişi ve kişisel veriler içerebilir. Kaldırmadan önce inceleyin."
+          }
+        }
+      }
+    },
     "RSS": {
       "localizations": {
         "en": {
@@ -4034,6 +4409,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "İlişkili işlem etkinliği kontrol edilemedi. Etkinlik Monitörü’nü kontrol edin."
+          }
+        }
+      }
+    },
+    "Related-data ownership could not be verified.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Related-data ownership could not be verified."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişkili verinin uygulamaya ait olduğu doğrulanamadı."
           }
         }
       }
@@ -4790,6 +5182,23 @@
         }
       }
     },
+    "Selected automatically from verified app-specific evidence.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected automatically from verified app-specific evidence."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulamaya özel doğrulanmış kanıtla otomatik seçildi."
+          }
+        }
+      }
+    },
     "Selected copy": {
       "localizations": {
         "en": {
@@ -5160,6 +5569,40 @@
         }
       }
     },
+    "Some application associations could not be verified.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some application associations could not be verified."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı uygulama ilişkileri doğrulanamadı."
+          }
+        }
+      }
+    },
+    "Some applications or related data could not be checked completely.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some applications or related data could not be checked completely."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı uygulamalar veya ilişkili veriler tam olarak denetlenemedi."
+          }
+        }
+      }
+    },
     "Some areas could not be measured, so the size is a minimum. Inspect the folder in Finder.": {
       "localizations": {
         "en": {
@@ -5334,6 +5777,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kullanılan takas alanı"
+          }
+        }
+      }
+    },
+    "System applications": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System applications"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem uygulamaları"
           }
         }
       }
@@ -7116,6 +7576,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "grup"
+          }
+        }
+      }
+    },
+    "iOS application placeholders": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iOS application placeholders"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iOS uygulama yer tutucuları"
           }
         }
       }

@@ -1356,6 +1356,59 @@ func scopedStandardCannotGrantMixedAuthority() async throws {
   }
 }
 
+@Test(
+  "Only an exclusive exact signed team and bundle identifier preselects team-prefixed data",
+  arguments: ["exact", "suffix", "wrong-team", "unsigned", "shared-owner", "alias"])
+func exactTeamIdentifierSelection(state: String) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let domain = "TEAM." + fixture.bundleID + (state == "suffix" ? ".helper" : state == "alias" ? "Alias" : "")
+  let path = RelatedLocation.caches.path(domain: domain, homeDirectory: fixture.home)
+  try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+  if state == "shared-owner" {
+    try FileManager.default.copyItem(atPath: fixture.app, toPath: fixture.appRoot + "/Second.app")
+  }
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in
+      state == "unsigned"
+        ? nil : ApplicationSigningMetadata(teamID: state == "wrong-team" ? "OTHER" : "TEAM", groupIdentifiers: [])
+    }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
+  let candidate = try #require((await service.discover(context: service.makeContext())).first { $0.path == path })
+  #expect(candidate.defaultSelected == (state == "exact"))
+  if state == "exact" {
+    #expect(candidate.classification == .installed && candidate.matchStrength == .strong)
+    #expect(candidate.evidenceKinds == [.teamIdentifier] && candidate.automaticSelectionAllowed)
+  } else if state == "suffix" {
+    #expect(candidate.classification == .installed && candidate.matchStrength == .medium)
+    #expect(!candidate.evidenceKinds.contains(.teamIdentifier) && !candidate.automaticSelectionAllowed)
+  } else if state == "shared-owner" {
+    #expect(candidate.classification == .shared && candidate.reason == .sharedInstalledData)
+    #expect(!candidate.canSelect && !candidate.automaticSelectionAllowed)
+  } else {
+    #expect(!candidate.evidenceKinds.contains(.teamIdentifier) && !candidate.automaticSelectionAllowed)
+  }
+}
+
+@Test("Exact bundle identifier preselection still requires a single physical owner", arguments: [false, true])
+func exactBundleIdentifierSelection(shared: Bool) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  if shared { try FileManager.default.copyItem(atPath: fixture.app, toPath: fixture.appRoot + "/Second.app") }
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
+  let candidate = try #require(
+    (await service.discover(context: service.makeContext())).first { $0.path == fixture.cache })
+  #expect(candidate.evidenceKinds.contains(.bundleIdentifier))
+  #expect(candidate.defaultSelected == !shared && candidate.automaticSelectionAllowed == !shared)
+  if shared {
+    #expect(candidate.classification == .shared && candidate.reason == .sharedInstalledData)
+  } else {
+    #expect(candidate.classification == .installed && candidate.matchStrength == .strong)
+  }
+}
+
 private func writeSessionReceipt(fixture: AppsFixture) throws -> String {
   let identity = try DescriptorFileSystem.identity(at: fixture.cache)
   let receipt = RelatedReceipt(

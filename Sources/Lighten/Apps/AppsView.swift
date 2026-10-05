@@ -10,6 +10,8 @@ struct AppsView: View {
   @State private var showingCompactDetail = false
   @State private var expandedOrphans: Set<String> = []
   @State private var showingOtherLocations = false
+  @State private var showingCoverageDetails = false
+  @State private var showingOmittedDetails = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var filtered: [ApplicationReport] {
@@ -86,6 +88,8 @@ struct AppsView: View {
           }
           .padding(.bottom, 10)
         }
+        coverageNotice
+        omittedApplicationsNotice
         if store.needsRescan {
           Label(
             String(localized: "This list needs a new scan before actions are available."),
@@ -212,6 +216,72 @@ struct AppsView: View {
     }
   }
 
+  @ViewBuilder private var coverageNotice: some View {
+    if store.hasCoverageIssue {
+      VStack(alignment: .leading, spacing: 5) {
+        Label(
+          String(localized: "Some applications or related data could not be checked completely."),
+          systemImage: "exclamationmark.triangle"
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+        DisclosureGroup(String(localized: "Details"), isExpanded: $showingCoverageDetails) {
+          ForEach(store.coverageIssueDescriptions, id: \.self) { reason in
+            Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+              .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+          }
+        }
+        .font(.system(size: 11))
+      }
+      .padding(.bottom, 10)
+    }
+  }
+
+  private var omittedCounts: [AppListScope.ExclusionReason: Int] {
+    let paths =
+      store.omittedApplicationPaths
+      + (store.showsPreviousResult ? store.pictureRows.map(\.path) : store.reports.map(\.path))
+    return AppListScope.omittedCounts(paths: paths, homeDirectory: store.listScopeHomeDirectory)
+  }
+
+  @ViewBuilder private var omittedApplicationsNotice: some View {
+    let counts = omittedCounts
+    let total = counts.values.reduce(0, +)
+    if total > 0 {
+      DisclosureGroup(isExpanded: $showingOmittedDetails) {
+        ForEach(AppListScope.ExclusionReason.allCases, id: \.self) { reason in
+          if let count = counts[reason], count > 0 {
+            Text("\(omissionLabel(reason)): \(count)")
+              .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+          }
+        }
+      } label: {
+        Text(
+          String.localizedStringWithFormat(String(localized: "%lld applications omitted from this list"), Int64(total))
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      }
+      .padding(.bottom, 10)
+    }
+  }
+
+  private func omissionLabel(_ reason: AppListScope.ExclusionReason) -> String {
+    switch reason {
+    case .system: String(localized: "System applications")
+    case .nestedApplication: String(localized: "Helpers inside another application")
+    case .buildArtifact: String(localized: "Build and development artifacts")
+    case .trash: String(localized: "Applications in Trash")
+    case .iosPlaceholder: String(localized: "iOS application placeholders")
+    }
+  }
+
+  private func otherLocationExplanation(_ path: String) -> String? {
+    switch AppListScope.otherLocationReason(of: path, homeDirectory: store.listScopeHomeDirectory) {
+    case .hiddenFolder: String(localized: "Application copy in a hidden folder")
+    case .outsideApplicationsFolders: String(localized: "Outside the standard Applications folders")
+    case nil: nil
+    }
+  }
+
   private var applicationList: some View {
     Group {
       if filtered.isEmpty && otherFiltered.isEmpty && store.orphanCandidates.isEmpty {
@@ -304,6 +374,9 @@ struct AppsView: View {
           .font(.system(size: 12, weight: .medium))
         Text(row.path).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
           .lineLimit(1).truncationMode(.middle)
+        if let reason = otherLocationExplanation(row.path) {
+          Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+        }
       }
       Spacer()
       Text(format(row.logical.completeTotal ?? row.logical.knownLowerBound))
@@ -426,6 +499,14 @@ struct AppsView: View {
             Text(app.bundleID ?? String(localized: "Identity unavailable"))
               .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
               .lineLimit(1).truncationMode(.middle)
+            if let reason = otherLocationExplanation(app.path) {
+              Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+                .lineLimit(2)
+            }
+            if store.ownershipPendingPaths.contains(app.path), !store.busy {
+              Text(String(localized: "Related-data ownership could not be verified."))
+                .font(.system(size: 10)).foregroundStyle(LightenStyle.warning).lineLimit(2)
+            }
             if let reason = store.packageUnavailableReason(app), !store.busy {
               Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
                 .lineLimit(2)
@@ -487,10 +568,6 @@ struct AppsView: View {
             localized: "Package contents are not opened during measurement. Moving to Trash does not free disk space.")
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        if store.externalVolumesUnchecked {
-          Text(String(localized: "Apps on disconnected or unindexed external disks were not checked."))
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-        }
         VStack(alignment: .leading, spacing: 5) {
           metadataRow(String(localized: "Bundle ID"), app.bundleID ?? String(localized: "Unknown"))
           if let target = app.linkTarget {
@@ -719,6 +796,20 @@ struct AppsView: View {
           }
         }
         FailureReasonView(presentation: FailureText.candidate(candidate))
+        if selected, candidate.provenance?.kind == .mozilla || candidate.evidenceKinds.contains(.mozilla) {
+          Text(
+            String(localized: "Profiles may contain mail, browsing history, and personal data. Review before removal.")
+          )
+          .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+        if store.isAutomaticallySelected(candidate, app: app) {
+          Text(String(localized: "Selected automatically from verified app-specific evidence."))
+            .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+        } else if !selected, let reason = automaticSelectionNote(candidate, app: app) {
+          Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         let otherPaths = store.otherInstallationPaths(candidate: candidate, app: app)
         if !otherPaths.isEmpty {
           Text(
@@ -772,6 +863,43 @@ struct AppsView: View {
     }
     .accessibilityElement(children: .contain)
     .anchorPreference(key: RelatedRowPreferenceKey.self, value: .bounds) { [candidate.path: $0] }
+  }
+
+  private func automaticSelectionNote(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> String? {
+    let kinds = candidate.evidenceKinds.isEmpty ? candidate.provenance.map { [$0.kind] } ?? [] : candidate.evidenceKinds
+    if kinds.contains(.mozilla) {
+      return String(localized: "Not selected automatically: profiles may contain mail and browsing data.")
+    }
+    if kinds.contains(.configuredDirectory) {
+      return String(localized: "Not selected automatically: this folder may contain your documents.")
+    }
+    if store.ownershipPendingPaths.contains(app.path) || candidate.reason == .ownershipUnavailable {
+      return String(localized: "Not selected automatically: app ownership has not been verified.")
+    }
+    if candidate.classification == .shared || candidate.path.contains("/Library/Group Containers/") {
+      return String(localized: "Not selected automatically: this data may be shared with other apps.")
+    }
+    if candidate.matchStrength != .strong || candidate.classification == .unprovenNameOnly {
+      return String(localized: "Not selected automatically: the association is not a verified exact match.")
+    }
+    guard !candidate.defaultSelected else { return nil }
+    if kinds.isEmpty {
+      return String(localized: "Not selected automatically: association evidence is unavailable.")
+    }
+    if kinds.allSatisfy({ $0 == .liveProcess }) {
+      return String(localized: "Not selected automatically: open files do not prove app ownership.")
+    }
+    if kinds.allSatisfy({ $0 == .vendorDirectory }) {
+      return String(localized: "Not selected automatically: a vendor folder does not prove sole app ownership.")
+    }
+    if kinds.allSatisfy({ $0 == .executableName }) {
+      return String(localized: "Not selected automatically: a matching name does not prove app ownership.")
+    }
+    if kinds.allSatisfy({ $0 == .explicitUserChoice }) {
+      return String(localized: "Not selected automatically: this item requires your explicit choice.")
+    }
+    return String(
+      localized: "Not selected automatically: the available evidence does not establish sole app ownership.")
   }
 
   private func canSelect(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> Bool {

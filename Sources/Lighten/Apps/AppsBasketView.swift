@@ -4,6 +4,7 @@ import SwiftUI
 struct AppsBasketView: View {
   let store: AppsStore
   let actions: ActionStore
+  @State private var showingAutomaticData = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -36,6 +37,7 @@ struct AppsBasketView: View {
         }
       }
       .scrollIndicators(.hidden)
+      automaticDataDetails
       HStack(spacing: 12) {
         Text(store.reviewExplanation(actions: actions))
           .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
@@ -48,6 +50,36 @@ struct AppsBasketView: View {
       }
     }
     .padding(.top, 10)
+  }
+
+  @ViewBuilder private var automaticDataDetails: some View {
+    let applications = store.basketApplications.sorted { $0.path < $1.path }
+    let count = applications.reduce(0) { total, app in
+      total + app.related.filter { store.isAutomaticallySelected($0, app: app) }.count
+    }
+    if count > 0 {
+      DisclosureGroup(isExpanded: $showingAutomaticData) {
+        ForEach(applications) { app in
+          ForEach(app.related.filter { store.isAutomaticallySelected($0, app: app) }) { candidate in
+            VStack(alignment: .leading, spacing: 2) {
+              Text("\(store.displayName(app)): \(candidate.path)")
+                .font(.system(size: 10)).lineLimit(2).truncationMode(.middle).help(candidate.path)
+              let kinds =
+                candidate.evidenceKinds.isEmpty ? candidate.provenance.map { [$0.kind] } ?? [] : candidate.evidenceKinds
+              ForEach(Array(Set(kinds)).sorted { $0.rawValue < $1.rawValue }, id: \.self) { kind in
+                Text(AppsStore.provenanceLabel(kind)).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+              }
+            }
+            .padding(.vertical, 3)
+          }
+        }
+      } label: {
+        Text(
+          String.localizedStringWithFormat(String(localized: "%lld related items selected automatically"), Int64(count))
+        )
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      }
+    }
   }
 
   private var sizeLabel: String {

@@ -53,10 +53,11 @@ private func flowReport(
     displayRootIdentity: identity)
 }
 
-private func flowCandidate(_ path: String) -> RelatedDataCandidate {
+private func flowCandidate(_ path: String, exactBundleID: String? = nil) -> RelatedDataCandidate {
   RelatedDataCandidate(
     id: path, path: path, classification: .installed, reason: .installed,
-    snapshot: ScanSnapshot(rootPath: path, volumeDevice: 1, entries: [], nodes: []), receipt: nil)
+    snapshot: ScanSnapshot(rootPath: path, volumeDevice: 1, entries: [], nodes: []), receipt: nil,
+    bundleID: exactBundleID, evidenceKinds: exactBundleID == nil ? [] : [.bundleIdentifier])
 }
 
 private func flowPictures(_ root: String) -> ResultPictureStore {
@@ -328,7 +329,7 @@ private actor AppsAvailableGate {
   if !isWrapper {
     try FileManager.default.createSymbolicLink(atPath: appPath, withDestinationPath: physicalPath)
   }
-  let candidate = flowCandidate(root + "/Library/Caches/qa.lighten.flow")
+  let candidate = flowCandidate(root + "/Library/Caches/qa.lighten.flow", exactBundleID: "qa.lighten.flow")
   var report = flowReport(path: appPath, candidates: [candidate])
   report.isIOSWrapper = isWrapper
   report.linkTarget = isWrapper ? nil : physicalPath
@@ -696,7 +697,7 @@ private actor AppsAvailableGate {
   defer { try? FileManager.default.removeItem(atPath: root) }
   let app = root + "/LightenQA-fixture.app"
   try FileManager.default.createDirectory(atPath: app, withIntermediateDirectories: true)
-  let candidate = flowCandidate(root + "/Library/Caches/qa.lighten.flow")
+  let candidate = flowCandidate(root + "/Library/Caches/qa.lighten.flow", exactBundleID: "qa.lighten.flow")
   let report = flowReport(path: app, candidates: [candidate])
   let package = PlanItem(
     id: UUID(), sourcePath: app, inventory: [], ancestors: [], policy: .wholeBundle,
@@ -816,7 +817,13 @@ private func expectSameFlowRoot(_ actual: FileIdentity, _ expected: FileIdentity
 private struct OwnedFlowTrash: TrashMoving {
   let destination: String
   func moveToTrash(path: String) async throws -> String {
-    let target = destination + "/" + URL(fileURLWithPath: path).lastPathComponent
+    let basename = URL(fileURLWithPath: path).lastPathComponent
+    var target = destination + "/" + basename
+    var suffix = 2
+    while FileManager.default.fileExists(atPath: target) {
+      target = destination + "/" + basename + " " + String(suffix)
+      suffix += 1
+    }
     try FileManager.default.moveItem(atPath: path, toPath: target)
     return target
   }
@@ -847,8 +854,8 @@ private func appFileManifest(_ path: String) throws -> [String: String] {
   defer { try? FileManager.default.removeItem(atPath: root) }
   let app = root + "/LightenQA-package.app"
   try FileManager.default.createDirectory(atPath: app, withIntermediateDirectories: false)
-  let first = flowCandidate(root + "/Library/Caches/qa.lighten.flow")
-  let skipped = flowCandidate(root + "/Library/Preferences/qa.lighten.flow.plist")
+  let first = flowCandidate(root + "/Library/Caches/qa.lighten.flow", exactBundleID: "qa.lighten.flow")
+  let skipped = flowCandidate(root + "/Library/Preferences/qa.lighten.flow.plist", exactBundleID: "qa.lighten.flow")
   var medium = flowCandidate(root + "/Library/Application Support/qa.lighten.flow")
   medium.matchStrength = .medium
   let data = PlanItem(id: UUID(), sourcePath: first.path, inventory: [], ancestors: [])
@@ -1630,7 +1637,7 @@ private struct AppsActiveSelectionActivity: ApplicationActivitySource {
   for index in 1...5 {
     let app = root + "/LightenQA-basket-\(index).app"
     let candidates = try ["Caches", "Application Support"].map { category in
-      let path = root + "/Library/\(category)/qa.lighten.\(index)-\(category.replacingOccurrences(of: " ", with: ""))"
+      let path = root + "/Library/\(category)/qa.lighten.\(index)"
       try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
       try Data("fixture data \(index)".utf8).write(to: URL(fileURLWithPath: path + "/payload"))
       let identity = try DescriptorFileSystem.identity(at: path)
@@ -1640,7 +1647,7 @@ private struct AppsActiveSelectionActivity: ApplicationActivitySource {
         snapshot: ScanSnapshot(
           rootPath: path, volumeDevice: identity.device,
           entries: [ScanEntry(parentID: nil, path: path, identity: identity, issues: [], readable: true)], nodes: []),
-        receipt: nil)
+        receipt: nil, bundleID: "qa.lighten.\(index)", evidenceKinds: [.bundleIdentifier])
     }
     try FileManager.default.createDirectory(atPath: app, withIntermediateDirectories: false)
     try Data("fixture app \(index)".utf8).write(to: URL(fileURLWithPath: app + "/payload"))

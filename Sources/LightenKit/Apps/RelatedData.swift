@@ -141,7 +141,13 @@ public struct RelatedDataCandidate: Sendable, Identifiable {
   public var automaticSelectionAllowed: Bool {
     guard canSelect else { return false }
     let kinds = evidenceKinds.isEmpty ? provenance.map { [$0.kind] } ?? [] : evidenceKinds
-    return kinds.isEmpty || kinds.contains { $0 != .liveProcess && $0 != .vendorDirectory && $0 != .executableName }
+    guard !kinds.contains(.mozilla), !kinds.contains(.configuredDirectory) else { return false }
+    return kinds.contains {
+      switch $0 {
+      case .bundleIdentifier, .teamIdentifier, .installerReceipt, .launchService, .electron: true
+      case .mozilla, .configuredDirectory, .vendorDirectory, .liveProcess, .executableName, .explicitUserChoice: false
+      }
+    }
   }
 }
 
@@ -1756,6 +1762,9 @@ public struct RelatedDataService: Sendable {
         return domain.hasPrefix(team + "." + owner.bundleID)
           && (domain == team + "." + owner.bundleID || domain.hasPrefix(team + "." + owner.bundleID + "."))
       }
+      let exactTeamOwners = prefixOwners.filter { owner in
+        signatures[owner.path]?.teamID.map { domain == $0 + "." + owner.bundleID } == true
+      }
       let weakOwners =
         (location == .applicationSupport || location == .logs)
         ? apps.applications.filter {
@@ -1805,7 +1814,7 @@ public struct RelatedDataService: Sendable {
         ? .strong
         : !claims.isEmpty
           ? claimStrength
-          : !prefixOwners.isEmpty ? .medium : !weakOwners.isEmpty ? .weak : .strong
+          : !exactTeamOwners.isEmpty ? .strong : !prefixOwners.isEmpty ? .medium : !weakOwners.isEmpty ? .weak : .strong
       let focusedOwner = app.flatMap { selected in
         owners.contains(where: { $0.path == selected.path }) ? selected.bundleID : nil
       }
@@ -1899,8 +1908,10 @@ public struct RelatedDataService: Sendable {
           classification = .uncertain
           reason = .ownershipUnavailable
         }
-      } else if location != .groupContainers, exactOwners.count > 1 {
-        if let context = authenticatedContext, let owner = exactOwners.first,
+      } else if location != .groupContainers, owners.count > 1,
+        !exactOwners.isEmpty || !exactTeamOwners.isEmpty
+      {
+        if let context = authenticatedContext, let owner = owners.first,
           let shared = sharedOwnerEvidence(
             app: owner, candidatePath: path, context: context,
             discoverySourcesValid: dataSourcesValid, liveObservation: liveSnapshot)
@@ -1946,7 +1957,9 @@ public struct RelatedDataService: Sendable {
       candidate.refusalEvidence = evidence
       candidate.provenance = claims.first?.provenance
       candidate.evidenceKinds = Array(
-        Set(claims.map { $0.provenance.kind } + (exactOwners.isEmpty ? [] : [.bundleIdentifier]))
+        Set(
+          claims.map { $0.provenance.kind } + (exactOwners.isEmpty ? [] : [.bundleIdentifier])
+            + (exactTeamOwners.isEmpty ? [] : [.teamIdentifier]))
       ).sorted { $0.rawValue < $1.rawValue }
       candidate.explicitManualChoiceAvailable = classification == .unprovenNameOnly && evidence.isEmpty
       pending.append(candidate)

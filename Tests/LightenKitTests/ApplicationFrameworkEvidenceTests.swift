@@ -143,6 +143,7 @@ struct ApplicationFrameworkEvidenceTests {
     let app = try #require(related.application(at: fixture.app))
     #expect(candidate.classification == .installed && candidate.canSelect)
     #expect(candidate.provenance?.kind == (mozilla ? .mozilla : .electron))
+    #expect(candidate.automaticSelectionAllowed == !mozilla && candidate.defaultSelected == !mozilla)
     for _ in 0..<2 {
       let outcome = await session.makeAvailableUninstallPlan(
         app: app, selectedRelated: [candidate], includePackage: false)
@@ -173,6 +174,7 @@ struct ApplicationFrameworkEvidenceTests {
     let candidate = try #require((await session.observedRelatedCandidates()).first { $0.path == fixture.dataPath })
     #expect(candidate.classification == .shared && candidate.reason == .sharedInstalledData)
     #expect(!candidate.canSelect && !candidate.explicitManualChoiceAvailable)
+    #expect(!candidate.automaticSelectionAllowed && !candidate.defaultSelected)
     let evidence = try #require(candidate.refusalEvidence.first)
     #expect(evidence.reason == .sharedInstalledOwners)
     #expect(evidence.ownerPaths == [fixture.app, second].sorted())
@@ -349,27 +351,116 @@ struct ApplicationFrameworkEvidenceTests {
     #expect(!discovery.evidence.contains { $0.provenance.kind == .liveProcess })
   }
 
-  @Test("Transient live and vendor proof alone never preselect data")
-  func transientEvidenceNeedsIndependentProof() {
+  private func automaticCandidate(
+    kind: RelatedDataProvenanceKind?, classification: RelatedClassification = .installed,
+    strength: RelatedMatchStrength = .strong, observed: Bool = true, group: Bool = false
+  ) -> RelatedDataCandidate {
+    let path = group ? "/fixture/Library/Group Containers/group.fixture" : "/fixture"
     let identity = FileIdentity(
       device: 1, inode: 1, changeSeconds: 1, changeNanoseconds: 0, logicalBytes: 1,
       allocatedBytes: 512, linkCount: 1, flags: 0, kind: .directory)
-    let entry = ScanEntry(parentID: nil, path: "/fixture", identity: identity, issues: [], readable: true)
-    let snapshot = ScanSnapshot(rootPath: "/fixture", volumeDevice: 1, entries: [entry], nodes: [])
-    var candidate = RelatedDataCandidate(
-      id: "/fixture", path: "/fixture", classification: .installed, reason: .installed, snapshot: snapshot, receipt: nil
-    )
-    let inputs: [[RelatedDataProvenanceKind]] = [[.liveProcess], [.vendorDirectory], [.vendorDirectory, .liveProcess]]
+    let entry = ScanEntry(parentID: nil, path: path, identity: identity, issues: [], readable: true)
+    let snapshot = ScanSnapshot(rootPath: path, volumeDevice: 1, entries: [entry], nodes: [])
+    return RelatedDataCandidate(
+      id: path, path: path, classification: classification, reason: .installed,
+      snapshot: observed ? snapshot : nil, receipt: nil, matchStrength: strength,
+      provenance: kind.map { RelatedDataProvenance(kind: $0) })
+  }
+
+  @Test(
+    "Automatic selection accepts only the approved evidence kinds",
+    arguments: [
+      (RelatedDataProvenanceKind.bundleIdentifier, true), (.teamIdentifier, true), (.installerReceipt, true),
+      (.launchService, true), (.electron, true), (.mozilla, false), (.configuredDirectory, false),
+      (.vendorDirectory, false), (.liveProcess, false), (.executableName, false), (.explicitUserChoice, false),
+    ])
+  func automaticEvidenceAllowlist(kind: RelatedDataProvenanceKind, allowed: Bool) {
+    var candidate = automaticCandidate(kind: kind)
+    #expect(candidate.canSelect)
+    #expect(candidate.automaticSelectionAllowed == allowed && candidate.defaultSelected == allowed)
+    candidate.evidenceKinds = [kind]
+    candidate.provenance = nil
+    #expect(candidate.automaticSelectionAllowed == allowed && candidate.defaultSelected == allowed)
+  }
+
+  @Test(
+    "Approved evidence cannot preselect missing, weak, shared or unverified ownership",
+    arguments: [
+      RelatedDataProvenanceKind.bundleIdentifier, .teamIdentifier, .installerReceipt, .launchService, .electron,
+    ])
+  func approvedEvidenceRetainsSelectionBoundaries(kind: RelatedDataProvenanceKind) {
+    #expect(!automaticCandidate(kind: kind, observed: false).automaticSelectionAllowed)
+    #expect(!automaticCandidate(kind: kind, strength: .weak).automaticSelectionAllowed)
+    #expect(!automaticCandidate(kind: kind, strength: .medium).defaultSelected)
+    #expect(!automaticCandidate(kind: kind, group: true).defaultSelected)
+    for classification in [RelatedClassification.shared, .uncertain, .protected, .unprovenNameOnly] {
+      let candidate = automaticCandidate(kind: kind, classification: classification)
+      #expect(!candidate.automaticSelectionAllowed && !candidate.defaultSelected)
+    }
+    for classification in [RelatedClassification.orphanVerified, .historicallyVerifiedAbsent] {
+      #expect(!automaticCandidate(kind: kind, classification: classification).defaultSelected)
+    }
+  }
+
+  @Test("Missing proof and unapproved combinations never preselect data")
+  func transientEvidenceNeedsIndependentProof() {
+    var candidate = automaticCandidate(kind: nil)
+    #expect(candidate.canSelect && !candidate.automaticSelectionAllowed && !candidate.defaultSelected)
+    let inputs: [[RelatedDataProvenanceKind]] = [
+      [.liveProcess], [.vendorDirectory], [.vendorDirectory, .liveProcess], [.vendorDirectory, .configuredDirectory],
+      [.bundleIdentifier, .mozilla], [.electron, .configuredDirectory],
+    ]
     for kinds in inputs {
       candidate.evidenceKinds = kinds
       #expect(candidate.canSelect && !candidate.automaticSelectionAllowed && !candidate.defaultSelected)
     }
-    candidate.evidenceKinds = [.vendorDirectory, .configuredDirectory]
-    candidate.provenance = RelatedDataProvenance(kind: .configuredDirectory)
-    #expect(candidate.automaticSelectionAllowed && !candidate.defaultSelected)
     candidate.evidenceKinds = [.liveProcess, .electron]
     candidate.provenance = RelatedDataProvenance(kind: .liveProcess)
     #expect(candidate.automaticSelectionAllowed && candidate.defaultSelected)
+  }
+
+  @Test("A configured data directory stays manual while explicit Trash remains available")
+  func configuredDataIsManual() async throws {
+    let fixture = try FrameworkFixture()
+    defer { fixture.cleanup() }
+    try fixture.directory(fixture.dataPath)
+    try fixture.directory(fixture.home + "/Library/Preferences")
+    try PropertyListSerialization.data(
+      fromPropertyList: ["dataDirectoryPath": fixture.dataPath], format: .xml, options: 0
+    ).write(to: URL(fileURLWithPath: fixture.home + "/Library/Preferences/" + fixture.bundleID + ".plist"))
+    let related = service(fixture)
+    let context = related.makeContext()
+    let candidate = try #require((await related.discover(context: context)).first { $0.path == fixture.dataPath })
+    #expect(candidate.classification == .installed && candidate.canSelect)
+    #expect(candidate.evidenceKinds == [.configuredDirectory])
+    #expect(!candidate.automaticSelectionAllowed && !candidate.defaultSelected)
+    let explicit = await related.makeAvailableRemainingDataPlan(selected: [candidate])
+    #expect(explicit.rejections.isEmpty && explicit.plan?.items.first?.userSelection == true)
+  }
+
+  @Test(
+    "Launch services preselect only a native executable inside the owning package",
+    arguments: ["LaunchAgents", "LaunchDaemons"], [false, true])
+  func launchServiceSelection(directory: String, ownsProgram: Bool) async throws {
+    let fixture = try FrameworkFixture()
+    defer { fixture.cleanup() }
+    let program = (ownsProgram ? fixture.app : fixture.home + "/Other.app") + "/Contents/MacOS/helper"
+    try fixture.write(program, "fixture executable")
+    let path = fixture.home + "/Library/" + directory + "/qa.lighten.launcher.plist"
+    try fixture.directory((path as NSString).deletingLastPathComponent)
+    try PropertyListSerialization.data(
+      fromPropertyList: ["Label": "qa.lighten.launcher", "Program": program], format: .xml, options: 0
+    ).write(to: URL(fileURLWithPath: path))
+    let related = service(fixture)
+    let candidates = await related.discover(context: related.makeContext())
+    let candidate = candidates.first { $0.path == path }
+    if ownsProgram {
+      let selected = try #require(candidate)
+      #expect(selected.evidenceKinds.contains(.launchService))
+      #expect(selected.classification == .installed && selected.automaticSelectionAllowed && selected.defaultSelected)
+    } else {
+      #expect(candidate?.automaticSelectionAllowed != true && candidate?.defaultSelected != true)
+    }
   }
 
   @Test("General framework and tool names never become a vendor folder claim")
