@@ -409,7 +409,7 @@ public actor ApplicationScanSession {
   private let lightweightListing: ApplicationListing.Collector
   private let measurement: @Sendable (String, String) async -> ApplicationDiscovery.Measurement
   private let metadata = ApplicationContextMetadata()
-  private var ownership: Task<AuthenticApplicationContext, Never>?
+  private var ownership: Task<AuthenticApplicationContext, any Error>?
   private var listing: Task<BundleInventory, Never>?
   private var displayListingTask: Task<[ApplicationListEntry], Never>?
   private var worker: Task<Void, Never>?
@@ -512,24 +512,28 @@ public actor ApplicationScanSession {
     return await task.value
   }
 
-  func context(base: BundleInventory? = nil) async -> AuthenticApplicationContext {
-    if let ownership { return await ownership.value }
+  func context(base: BundleInventory? = nil) async throws -> AuthenticApplicationContext {
+    try Task.checkCancellation()
+    guard !cancelled else { throw CancellationError() }
+    if let ownership { return try await ownership.value }
     let listing: BundleInventory
     if let base { listing = base } else { listing = await installedListing() }
-    if let ownership { return await ownership.value }
+    if let ownership { return try await ownership.value }
     let service = related
     let metadata = self.metadata
-    let task = Task.detached(priority: .utility) { service.makeContext(base: listing, metadata: metadata) }
+    let task = Task.detached(priority: .utility) {
+      try await service.ownershipContext(base: listing, metadata: metadata)
+    }
     ownership = task
     if cancelled { task.cancel() }
-    return await task.value
+    return try await task.value
   }
 
   /// Includes uncertain, protected and unmatched rows for an honest review
   /// denominator. These observations cannot authorize an action.
   public func observedRelatedCandidates() async -> [RelatedDataCandidate] {
     if let relatedCandidates { return await relatedCandidates.value }
-    let context = await self.context()
+    guard let context = try? await self.context() else { return [] }
     if let relatedCandidates { return await relatedCandidates.value }
     let service = related
     let task = Task.detached(priority: .utility) { await service.discover(context: context) }
@@ -569,7 +573,7 @@ public actor ApplicationScanSession {
       guard let self else { return }
       var ready = shallowReady.stream.makeAsyncIterator()
       guard await ready.next() != nil, !Task.isCancelled else { return }
-      let context = await self.context()
+      guard let context = try? await self.context() else { return }
       guard !Task.isCancelled, await self.isActive else { return }
       let enriched = await service.review(for: app, context: context)
       // Computing evidence is independent of sizing. Publish it last so an
@@ -627,7 +631,7 @@ public actor ApplicationScanSession {
     {
       let listing = await installedListing()
       let evidenceSource: AuthenticApplicationContext?
-      if let ownership { evidenceSource = await ownership.value } else { evidenceSource = nil }
+      if let ownership { evidenceSource = try? await ownership.value } else { evidenceSource = nil }
       let service = related
       let metadata = self.metadata
       context = await Task.detached(priority: .userInitiated) {
@@ -635,7 +639,9 @@ public actor ApplicationScanSession {
           app: app, listing: listing, metadata: metadata, dataEvidenceSource: evidenceSource)
       }.value
     } else {
-      context = await self.context()
+      do { context = try await self.context() } catch {
+        return .init(plan: nil, rejections: [PlanRejection(.unavailable, path: path, ruleID: "cancelled")])
+      }
     }
     guard !cancelled, !Task.isCancelled else {
       return .init(
@@ -658,9 +664,7 @@ public actor ApplicationScanSession {
   public func ownershipRefusalEvidence(for plan: ActionPlan) async -> [RelatedOwnershipRefusalEvidence] {
     guard !cancelled, !Task.isCancelled else { return [] }
     let service = related
-    let evidence = await Task.detached(priority: .userInitiated) {
-      service.ownershipRefusalEvidence(for: plan)
-    }.value
+    let evidence = await service.asyncOwnershipRefusalEvidence(for: plan)
     return cancelled || Task.isCancelled ? [] : evidence
   }
 
@@ -670,7 +674,10 @@ public actor ApplicationScanSession {
     guard !cancelled, !Task.isCancelled else {
       return .init(plan: nil, rejections: [PlanRejection(.unavailable, path: candidate.path, ruleID: "cancelled")])
     }
-    let context = await self.context()
+    let context: AuthenticApplicationContext
+    do { context = try await self.context() } catch {
+      return .init(plan: nil, rejections: [PlanRejection(.unavailable, path: candidate.path, ruleID: "cancelled")])
+    }
     guard !cancelled, !Task.isCancelled else {
       return .init(plan: nil, rejections: [PlanRejection(.unavailable, path: candidate.path, ruleID: "cancelled")])
     }
@@ -694,7 +701,7 @@ public actor ApplicationScanSession {
     continuation?.finish()
     continuation = nil
     await worker?.value
-    _ = await ownership?.value
+    _ = try? await ownership?.value
     _ = await listing?.value
     _ = await displayListingTask?.value
     _ = await relatedCandidates?.value

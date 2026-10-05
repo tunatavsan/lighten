@@ -74,7 +74,7 @@ private struct ClosedAppSource: RunningApplicationSource {
   continuation.yield(.completed(inventory, [measured]))
   continuation.finish()
   await Task.yield()
-  #expect(store.needsRescan)
+  #expect(!store.needsRescan)
   #expect(!store.inventoryComplete)
   #expect(store.scannedAt == nil)
   #expect(store.selectedReport?.path == path)
@@ -113,6 +113,8 @@ private actor AppsPlanGate {
       for (_, waiter) in ready { waiter.resume() }
     }
   }
+
+  var requestCount: Int { received }
 
   func waitForRequest(_ count: Int) async {
     if received >= count { return }
@@ -161,14 +163,16 @@ private actor AppsPlanGate {
   await gate.waitForRequest(1)
   store.toggleData(dataPath, actions: actions)
   store.toggleData(dataPath, actions: actions)
+  await gate.waitForRequest(2)
   await gate.finish(.success(plan))
   await staleResult.value
-  #expect(actions.pending == nil)
-  #expect(store.message == nil)
-  #expect(!store.preparing)
+  #expect(actions.pending == nil && store.preparing)
+  await gate.finish(.success(plan))
+  #expect(await appsEventually { actions.pending?.plan == plan })
+  store.deactivate(actions: actions)
 
   let staleError = Task { await store.prepareSelectedData(actions: actions) }
-  await gate.waitForRequest(2)
+  await gate.waitForRequest(3)
   store.deactivate(actions: actions)
   await gate.finish(.failure(AppsGateFailure.injected))
   await staleError.value
@@ -176,7 +180,7 @@ private actor AppsPlanGate {
   #expect(store.message == nil)
 
   let current = Task { await store.prepareSelectedData(actions: actions) }
-  await gate.waitForRequest(3)
+  await gate.waitForRequest(4)
   await gate.finish(.success(plan))
   await current.value
   #expect(actions.pending?.plan == plan)
@@ -498,7 +502,7 @@ private func selectedAppCandidate(_ path: String) -> RelatedDataCandidate {
   continuation.yield(.related(path: secondPath, candidates: [candidate], ownershipPending: false))
   continuation.finish()
   await Task.yield()
-  #expect(store.needsRescan)
+  #expect(!store.needsRescan)
   #expect(store.selectedReviewPublishedAt == nil)
   #expect(store.backgroundCancelledAt != nil)
   #expect(!store.canSelect(candidate, app: try #require(store.selectedReport)))
@@ -809,4 +813,280 @@ func appsProvenanceLabelsAreHonest(kind: RelatedDataProvenanceKind, phrase: Stri
   store.toggleData(late.path, actions: actions)
   #expect(actions.pending == nil)
   #expect(store.selectedDataPaths == [ready.path, late.path])
+}
+
+private actor AppsManualDeadline {
+  private var signalled = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+  func wait() async {
+    if signalled { return }
+    await withCheckedContinuation { waiters.append($0) }
+  }
+  func reset() { signalled = false }
+  func signal() {
+    signalled = true
+    for waiter in waiters { waiter.resume() }
+    waiters = []
+  }
+}
+
+@MainActor private func appsEventually(_ condition: @escaping @MainActor () async -> Bool) async -> Bool {
+  let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+  while !(await condition()) {
+    if ContinuousClock.now >= deadline { return false }
+    try? await Task.sleep(for: .milliseconds(1))
+  }
+  return true
+}
+
+private func appsPackagePlan(_ path: String, bundleID: String) -> ActionPlan {
+  ActionPlan(
+    snapshotRunID: UUID(), kind: .trash,
+    items: [
+      PlanItem(
+        id: UUID(), sourcePath: path, inventory: [], ancestors: [], policy: .wholeBundle,
+        applicationBundleID: bundleID)
+    ])
+}
+
+@Test("An injected deadline returns preparation promptly and discards a late non-cancellable builder")
+@MainActor func appsPreparationDeadlineDiscardsLateBuilder() async throws {
+  let path = "/fixture/LightenQA-timeout.app"
+  let bundleID = "qa.lighten.timeout"
+  let plan = appsPackagePlan(path, bundleID: bundleID)
+  let planning = AppsPlanGate()
+  let deadline = AppsManualDeadline()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(), uninstallPlanBuilder: { _, _, _ in try await planning.next() },
+    preparationTimeout: { await deadline.wait() }, running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [selectedAppReport(path, bundleID: bundleID)]
+  store.select(path, actions: actions)
+  var finished = false
+  let preparation = Task {
+    await store.prepareSelectedData(actions: actions)
+    finished = true
+  }
+  await planning.waitForRequest(1)
+  #expect(store.reviewExplanation(actions: actions).contains("Checking selected items"))
+  await deadline.signal()
+  #expect(await appsEventually { finished })
+  #expect(!store.preparing && store.packageSelected && store.selectedPath == path)
+  #expect(actions.pending == nil && store.message?.contains("took too long") == true)
+  #expect(store.canReviewSelectedData(actions: actions))
+  await preparation.value
+  await deadline.reset()
+  let retryPlan = appsPackagePlan(path, bundleID: bundleID)
+  let retry = Task { await store.prepareSelectedData(actions: actions) }
+  await planning.waitForRequest(2)
+  await planning.finish(.success(plan))
+  #expect(actions.pending == nil)
+  await planning.finish(.success(retryPlan))
+  await retry.value
+  #expect(actions.pending?.plan == retryPlan && retryPlan.id != plan.id)
+  await deadline.signal()
+}
+
+@Test("Changing an explicit choice while preparation is pending starts a new review of that choice")
+@MainActor func appsSelectionChangeContinuesReviewIntent() async throws {
+  let firstPath = "/fixture/LightenQA-first-choice.app"
+  let secondPath = "/fixture/LightenQA-second-choice.app"
+  let bundleID = "qa.lighten.choice"
+  let oldPlan = appsPackagePlan(firstPath, bundleID: bundleID)
+  let newPlan = appsPackagePlan(secondPath, bundleID: bundleID)
+  let planning = AppsPlanGate()
+  let deadline = AppsManualDeadline()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(), uninstallPlanBuilder: { _, _, _ in try await planning.next() },
+    preparationTimeout: { await deadline.wait() }, running: ClosedAppSource(), events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.reports = [selectedAppReport(firstPath, bundleID: bundleID), selectedAppReport(secondPath, bundleID: bundleID)]
+  store.select(firstPath, actions: actions)
+  let oldPreparation = Task { await store.prepareSelectedData(actions: actions) }
+  await planning.waitForRequest(1)
+  store.select(secondPath, actions: actions)
+  #expect(await appsEventually { await planning.requestCount == 2 })
+  await planning.finish(.success(oldPlan))
+  await oldPreparation.value
+  #expect(actions.pending == nil)
+  await planning.finish(.success(newPlan))
+  #expect(await appsEventually { actions.pending?.plan.id == newPlan.id })
+  #expect(store.selectedPath == secondPath && store.packageSelected)
+  await deadline.signal()
+}
+
+@Test(
+  "Late related data becomes unselected retained data with independent restoration orders",
+  arguments: [false, true], [false, true])
+@MainActor func appsLateRelatedDataSupportsIndependentUndo(restorePackageFirst: Bool, hasSnapshot: Bool) async throws {
+  let path = "/fixture/LightenQA-late-data.app"
+  let otherPath = "/fixture/LightenQA-other-data.app"
+  let bundleID = "qa.lighten.late.data"
+  let app = InstalledApplication(bundleID: bundleID, path: path, version: "1")
+  let identity = FileIdentity(
+    device: 1, inode: 11, changeSeconds: 2, changeNanoseconds: 0,
+    logicalBytes: 0, allocatedBytes: 0, linkCount: 1, flags: 0, kind: .directory,
+    birthSeconds: 2, birthNanoseconds: 0)
+  let candidatePath = "/fixture/LightenQA-late-cache"
+  var candidate = RelatedDataCandidate(
+    id: candidatePath, path: candidatePath, classification: .uncertain, reason: .ownershipUnavailable,
+    snapshot: hasSnapshot
+      ? ScanSnapshot(
+        rootPath: candidatePath, volumeDevice: 1,
+        entries: [ScanEntry(parentID: nil, path: candidatePath, identity: identity, issues: [], readable: true)],
+        nodes: []) : nil,
+    receipt: nil, bundleID: bundleID)
+  candidate.displayRootIdentity = identity
+  let lateCandidate = candidate
+  let package = PlanItem(
+    id: UUID(), sourcePath: path, inventory: [], ancestors: [], policy: .wholeBundle,
+    applicationBundleID: bundleID)
+  let packagePlan = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [package])
+  let data = PlanItem(id: UUID(), sourcePath: candidatePath, inventory: [], ancestors: [])
+  let dataPlan = ActionPlan(snapshotRunID: UUID(), kind: .trash, items: [data])
+  let reviews = SelectedAppReviewGate()
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  defer { continuation.finish() }
+  let store = AppsStore(
+    pictures: disabledAppsPictures(), uninstallPlanBuilder: { _, _, _ in packagePlan },
+    selectedReview: { path, progress in try await reviews.review(path: path, progress: progress) },
+    remainingDataPlanBuilder: { selected in
+      #expect(selected.map(\.path) == [candidatePath])
+      return .init(plan: dataPlan, rejections: [])
+    }, running: ClosedAppSource(), events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  continuation.yield(
+    .inventory(
+      BundleInventory(applications: [app], unidentifiedPaths: [], complete: false, observedAt: Date()),
+      [selectedAppReport(path, bundleID: bundleID), selectedAppReport(otherPath, bundleID: bundleID)]))
+  #expect(await appsEventually { store.reports.count == 2 })
+  store.select(path, actions: actions)
+  await reviews.waitForRequests(1)
+  await store.prepareSelectedData(actions: actions)
+  try #require(actions.pending?.plan == packagePlan)
+  actions.pending = nil
+  actions.result = ActionResult(
+    planID: packagePlan.id, items: [ItemActionResult(itemID: package.id, outcome: .applied)])
+  store.observeResult(actions: actions)
+  store.select(otherPath, actions: actions)
+  await reviews.waitForRequests(2)
+  await reviews.publish(ApplicationRelatedReview(application: app, candidates: [lateCandidate]), request: 0)
+  #expect(await appsEventually { store.orphanCandidates.contains { $0.path == candidatePath } })
+  continuation.yield(.related(path: path, candidates: [candidate], ownershipPending: true))
+  continuation.yield(.orphans([]))
+  await reviews.finish(ApplicationRelatedReview(application: app, candidates: [candidate]), request: 0)
+  await reviews.finish(
+    ApplicationRelatedReview(
+      application: InstalledApplication(bundleID: bundleID, path: otherPath, version: "1"), candidates: []), request: 1)
+  await store.waitForSelectedReview()
+  #expect(store.retainedAppData[candidatePath]?.appPath == path)
+  #expect(store.retainedAppData[candidatePath]?.wasSelected == false)
+  #expect(store.selectedOrphanPaths.isEmpty && !store.selectedDataPaths.contains(candidatePath))
+  store.toggleOrphan(candidatePath, actions: actions)
+  await store.prepareOrphans(actions: actions)
+  try #require(actions.pending?.plan == dataPlan && dataPlan.id != packagePlan.id)
+  let dataChange = ActionDisplayItem(
+    planID: dataPlan.id, itemID: data.id, path: candidatePath,
+    identity: identity, size: .unknown, label: "Late data", returnedTrashPath: nil)
+  store.applyDisplayChange(ActionDisplayChange(kind: .applied, items: [dataChange]))
+  actions.pending = nil
+  actions.result = ActionResult(planID: dataPlan.id, items: [ItemActionResult(itemID: data.id, outcome: .applied)])
+  store.observeResult(actions: actions)
+  let packageChange = ActionDisplayItem(
+    planID: packagePlan.id, itemID: package.id, path: path,
+    identity: nil, size: .unknown, label: "App", returnedTrashPath: nil)
+  if restorePackageFirst {
+    store.applyDisplayChange(ActionDisplayChange(kind: .restored, items: [packageChange]))
+    #expect(store.reports.first { $0.path == path }?.related.isEmpty == true)
+    store.applyDisplayChange(ActionDisplayChange(kind: .restored, items: [dataChange]))
+  } else {
+    store.applyDisplayChange(ActionDisplayChange(kind: .restored, items: [dataChange]))
+    #expect(store.retainedAppData[candidatePath]?.appPath == path)
+    #expect(store.selectedOrphanPaths.isEmpty)
+    store.applyDisplayChange(ActionDisplayChange(kind: .restored, items: [packageChange]))
+  }
+  #expect(store.reports.first { $0.path == path }?.related.map(\.path) == [candidatePath])
+  #expect(!store.orphanCandidates.contains { $0.path == candidatePath })
+  #expect(store.retainedAppData[candidatePath] == nil)
+  store.cancelScan()
+  continuation.finish()
+}
+
+private actor AppsSuspendedFinalActivity: ApplicationActivitySource {
+  private var continuation: CheckedContinuation<ApplicationActivity, Never>?
+  private var arrival: CheckedContinuation<Void, Never>?
+  func activity(applicationPath: String) async -> ApplicationActivity {
+    await withCheckedContinuation {
+      continuation = $0
+      arrival?.resume()
+      arrival = nil
+    }
+  }
+  func waitForArrival() async {
+    if continuation != nil { return }
+    await withCheckedContinuation { arrival = $0 }
+  }
+  func finish() {
+    continuation?.resume(returning: ApplicationActivity(state: .clearObservedProcesses, scope: .currentUser))
+    continuation = nil
+  }
+}
+
+@Test("A final running-app observation has the same bounded deadline and cannot present a late result")
+@MainActor func appsRunningObservationDeadlineIsNamed() async throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent("LightenQA-\(UUID())").path
+  try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: false)
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let path = root + "/LightenQA-running-timeout.app"
+  try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
+  let bundleID = "qa.lighten.running.timeout"
+  let planner = PlanService(homeDirectory: root)
+  let deadline = AppsManualDeadline()
+  let activity = AppsSuspendedFinalActivity()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(), preparationTimeout: { await deadline.wait() }, userPlanner: planner)
+  let actions = ActionStore(planService: planner, userSelectionApplicationActivity: activity)
+  store.reports = [selectedAppReport(path, bundleID: bundleID)]
+  store.select(path, actions: actions)
+  let preparation = Task { await store.prepareSelectedData(actions: actions) }
+  await activity.waitForArrival()
+  #expect(store.reviewExplanation(actions: actions).contains("apps are running"))
+  await deadline.signal()
+  await preparation.value
+  #expect(!store.preparing && store.canReviewSelectedData(actions: actions))
+  #expect(store.message?.contains("Checking running apps took too long") == true)
+  #expect(actions.pending == nil && store.packageSelected)
+  await activity.finish()
+  #expect(actions.pending == nil)
+}
+
+@Test("Late data for a failed package removal remains app data rather than becoming removed-app data")
+@MainActor func appsFailedRemovalNeverCreatesLateOrphans() async throws {
+  let path = "/fixture/LightenQA-kept.app"
+  let bundleID = "qa.lighten.kept"
+  let plan = appsPackagePlan(path, bundleID: bundleID)
+  let candidate = selectedAppCandidate("/fixture/LightenQA-kept-data")
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  defer { continuation.finish() }
+  let store = AppsStore(pictures: disabledAppsPictures(), uninstallPlanBuilder: { _, _, _ in plan }, events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  continuation.yield(
+    .inventory(
+      BundleInventory(applications: [], unidentifiedPaths: [], complete: false, observedAt: Date()),
+      [selectedAppReport(path, bundleID: bundleID)]))
+  #expect(await appsEventually { store.reports.count == 1 })
+  store.select(path, actions: actions)
+  await store.prepareSelectedData(actions: actions)
+  try #require(actions.pending?.plan == plan)
+  actions.pending = nil
+  actions.result = ActionResult(
+    planID: plan.id, items: [ItemActionResult(itemID: plan.items[0].id, outcome: .failed, detail: "changedItem")])
+  store.observeResult(actions: actions)
+  continuation.yield(.related(path: path, candidates: [candidate], ownershipPending: false))
+  #expect(await appsEventually { store.reports.first?.related.count == 1 })
+  #expect(store.orphanCandidates.isEmpty && store.retainedAppData.isEmpty)
+  #expect(store.reports.first?.related.first?.classification == candidate.classification)
+  store.cancelScan()
 }

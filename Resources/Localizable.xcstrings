@@ -971,6 +971,57 @@
         }
       }
     },
+    "Checking running apps took too long. Your selection is unchanged. Try reviewing again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking running apps took too long. Your selection is unchanged. Try reviewing again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çalışan uygulamaları kontrol etmek çok uzun sürdü. Seçiminiz korunuyor. Yeniden gözden geçirmeyi deneyin."
+          }
+        }
+      }
+    },
+    "Checking selected items before opening the removal review…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking selected items before opening the removal review…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaldırma incelemesini açmadan önce seçilen öğeler kontrol ediliyor…"
+          }
+        }
+      }
+    },
+    "Checking selected items took too long. Your selection is unchanged. Try reviewing again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking selected items took too long. Your selection is unchanged. Try reviewing again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen öğeleri kontrol etmek çok uzun sürdü. Seçiminiz korunuyor. Yeniden gözden geçirmeyi deneyin."
+          }
+        }
+      }
+    },
     "Checking this app’s data. You can review the app itself now.": {
       "localizations": {
         "en": {
@@ -983,6 +1034,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu uygulamanın verileri denetleniyor. Uygulamanın kendisini şimdi inceleyebilirsiniz."
+          }
+        }
+      }
+    },
+    "Checking whether selected apps are running…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking whether selected apps are running…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen uygulamaların çalışıp çalışmadığı kontrol ediliyor…"
           }
         }
       }
@@ -3840,6 +3908,40 @@
         }
       }
     },
+    "Related discovery stopped before all files were found.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Related discovery stopped before all files were found."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tüm dosyalar bulunmadan ilişkili dosyaların aranması durduruldu."
+          }
+        }
+      }
+    },
+    "Related discovery stopped. Review the app and files already listed, or scan again to find more.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Related discovery stopped. Review the app and files already listed, or scan again to find more."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlişkili dosyaların aranması durduruldu. Listelenen uygulamayı ve dosyaları gözden geçirin veya daha fazlasını bulmak için yeniden tarayın."
+          }
+        }
+      }
+    },
     "Related process activity could not be checked. Check Activity Monitor.": {
       "localizations": {
         "en": {
@@ -4384,22 +4486,6 @@
         }
       }
     },
-    "Scan stopped before review was complete. Scan again.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scan stopped before review was complete. Scan again."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tarama inceleme tamamlanmadan durdu. Yeniden tarayın."
-          }
-        }
-      }
-    },
     "Scan to inspect candidate areas": {
       "localizations": {
         "en": {
@@ -4684,6 +4770,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Seçili tarama"
+          }
+        }
+      }
+    },
+    "Selection changed. Select an item to continue the removal review.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selection changed. Select an item to continue the removal review."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçim değişti. Kaldırma incelemesine devam etmek için bir öğe seçin."
           }
         }
       }
@@ -6724,6 +6827,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Geçerli inceleme veya taramanın bitmesini bekleyin."
+          }
+        }
+      }
+    },
+    "Waiting for the current action to finish.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for the current action to finish."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Devam eden işlemin bitmesi bekleniyor."
           }
         }
       }

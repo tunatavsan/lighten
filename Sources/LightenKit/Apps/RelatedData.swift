@@ -527,9 +527,18 @@ public struct RelatedDataService: Sendable {
     return errno == ENOENT
   }
 
-  func makeContext(
+  func ownershipContext(
     base: BundleInventory? = nil, including selected: [InstalledApplication] = [],
     metadata: ApplicationContextMetadata? = nil
+  ) async throws -> AuthenticApplicationContext {
+    try await ApplicationOwnershipWork.shared.perform { cancelled in
+      self.makeContext(base: base, including: selected, metadata: metadata, cancelled: cancelled)
+    }
+  }
+
+  func makeContext(
+    base: BundleInventory? = nil, including selected: [InstalledApplication] = [],
+    metadata: ApplicationContextMetadata? = nil, cancelled: @Sendable () -> Bool = { false }
   )
     -> AuthenticApplicationContext
   {
@@ -550,6 +559,10 @@ public struct RelatedDataService: Sendable {
     var complete = listing.complete && registered.complete
     var lineage = listing.observedDirectories
     for path in registered.paths {
+      if cancelled() {
+        complete = false
+        break
+      }
       if ApplicationRegistration.isTrash(path) { continue }
       do {
         let identity = try DescriptorFileSystem.identity(at: path)
@@ -633,9 +646,17 @@ public struct RelatedDataService: Sendable {
       }
     }
     for app in selected where !apps.contains(where: { $0.path == app.path }) {
+      if cancelled() {
+        complete = false
+        break
+      }
       if readApplication(at: app.path, allowProtected: false) == app { apps.append(app) }
     }
     for app in apps {
+      if cancelled() {
+        complete = false
+        break
+      }
       let path = app.linkTarget ?? app.path
       for metadataPath in [path, Self.infoPlistPath(ofBundleAt: path)] {
         if let identity = try? DescriptorFileSystem.identity(at: metadataPath) {
@@ -650,10 +671,10 @@ public struct RelatedDataService: Sendable {
         complete = false
       }
     }
-    ownershipCollected()
+    if !cancelled() { ownershipCollected() }
     let owners = ApplicationOwnershipInventory.collect(
       roots: ownershipRoots, applications: apps, additionalCodePaths: registeredCodePaths.sorted(),
-      onNativeRead: nativeRead)
+      onNativeRead: nativeRead, cancelled: cancelled)
     for root in ownershipRoots {
       if let identity = owners.roots[root] {
         lineage.append(ApplicationPathObservation(path: root, identity: identity))
@@ -680,7 +701,7 @@ public struct RelatedDataService: Sendable {
     let inventory = BundleInventory(
       applications: apps.sorted { $0.path < $1.path }, unidentifiedPaths: unidentifiedPaths,
       complete: complete, observedAt: listing.observedAt, ownershipCandidates: owners.candidates,
-      ownershipComplete: owners.thirdPartyComplete && registered.complete
+      ownershipComplete: !cancelled() && owners.thirdPartyComplete && registered.complete
         && issues.allSatisfy(\.systemScope), ownershipIssues: owners.issues + issues,
       metadataIssues: metadataIssues + owners.metadataIssues, scopeExclusions: scopeExclusions,
       registrationReport: registered.report,
@@ -1048,10 +1069,13 @@ public struct RelatedDataService: Sendable {
   }
 
   public func discover() async -> [RelatedDataCandidate] {
-    let context = makeContext()
+    guard let context = try? await ownershipContext() else { return [] }
+    let signatures = await ApplicationEvidenceWork.perform(cancelledValue: [:]) { cancellation in
+      self.signatures(inventory: context.inventory, context: context, cancelled: { cancellation.isCancelled })
+    }
+    guard !Task.isCancelled else { return [] }
     return await discover(
-      inventory: context.inventory, only: nil,
-      signatures: signatures(inventory: context.inventory, context: context), authenticatedContext: context)
+      inventory: context.inventory, only: nil, signatures: signatures, authenticatedContext: context)
   }
 
   /// A focused observation for a dropped or selected application.
@@ -1063,9 +1087,14 @@ public struct RelatedDataService: Sendable {
     -> (candidates: [RelatedDataCandidate], signerTeamID: String?)
   {
     guard let physical = application(at: app.linkTarget ?? app.path), physical.bundleID == app.bundleID,
-      let context = try? selectedContext(app: physical, base: makeContext(including: [physical]))
+      let base = try? await ownershipContext(including: [physical]),
+      let context = try? selectedContext(app: physical, base: base)
     else { return ([], nil) }
-    let signatures = signatures(inventory: context.inventory, context: context, selected: physical)
+    let signatures = await ApplicationEvidenceWork.perform(cancelledValue: [:]) { cancellation in
+      self.signatures(
+        inventory: context.inventory, context: context, selected: physical, cancelled: { cancellation.isCancelled })
+    }
+    guard !Task.isCancelled else { return ([], nil) }
     return (
       await discover(
         inventory: context.inventory, only: physical, signatures: signatures, authenticatedContext: context,
@@ -3218,6 +3247,13 @@ public struct RelatedDataService: Sendable {
           reason: .unknownMetadata, ownerPaths: [observation.physicalPath], nextStep: "inspect-owner-metadata",
           detail: detail)
       }
+    }
+  }
+
+  func asyncOwnershipRefusalEvidence(for plan: ActionPlan) async -> [RelatedOwnershipRefusalEvidence] {
+    await ApplicationEvidenceWork.perform(cancelledValue: []) { cancellation in
+      let evidence = self.ownershipRefusalEvidence(for: plan)
+      return cancellation.isCancelled ? [] : evidence
     }
   }
 

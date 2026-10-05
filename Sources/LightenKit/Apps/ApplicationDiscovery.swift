@@ -158,7 +158,7 @@ public struct ApplicationDiscovery: Sendable {
             metadata, session: session, homeDirectory: related.homeDirectory, uptime: uptime, emit: emit))
       }
       group.addTask {
-        let context = await session.context(base: listing)
+        guard let context = try? await session.context(base: listing) else { return .related(listing, []) }
         guard !Task.isCancelled else { return .related(context.inventory, []) }
         emit(.ownershipReady(context.inventory))
         guard includeAllRelated else { return .related(context.inventory, []) }

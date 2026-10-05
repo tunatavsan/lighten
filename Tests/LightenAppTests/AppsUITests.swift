@@ -210,5 +210,36 @@ func applicationViewportTracksViewportChanges() {
   #expect(!store.canReviewSelectedData(actions: actions))
   actions.busy = false
   store.cancelScan()
+  #expect(store.canReviewSelectedData(actions: actions))
+  #expect(store.packageSelected && !store.needsRescan)
+}
+
+@Test("Stopping a stale result picture never grants package or related-root authority")
+@MainActor func appsStoppedPictureStillRequiresFreshDiscovery() {
+  let path = "/fixture/LightenQA-old-picture.app"
+  let report = ApplicationReport(
+    path: path, bundleID: "qa.lighten.old.picture", version: nil, signerTeamID: nil,
+    logical: ByteAggregate(knownLowerBound: 0, completeTotal: nil),
+    allocated: ByteAggregate(knownLowerBound: 0, completeTotal: nil),
+    knownItemCount: 0, partial: true, related: [], manualUninstallerSuggested: false)
+  let store = AppsStore(events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.pictureRows = AppsPicture(reports: [report], inventoryComplete: false).rows
+  store.busy = true
+  store.selectedPath = path
+  store.packageSelected = true
+  store.cancelScan()
+  store.select(path, actions: actions)
+  #expect(store.needsRescan && !store.packageSelected)
   #expect(!store.canReviewSelectedData(actions: actions))
+}
+
+@Test("The current action and preparation stages have explicit waiting explanations")
+@MainActor func appsReviewWaitingReasonsAreExplicit() {
+  let store = AppsStore(events: { AsyncStream { $0.finish() } })
+  let actions = ActionStore()
+  store.preparing = true
+  #expect(store.reviewExplanation(actions: actions).contains("Checking selected items"))
+  actions.busy = true
+  #expect(store.reviewExplanation(actions: actions) == String(localized: "Waiting for the current action to finish."))
 }

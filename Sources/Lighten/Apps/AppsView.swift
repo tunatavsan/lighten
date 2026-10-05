@@ -370,6 +370,7 @@ struct AppsView: View {
             Text(bundleID).font(.system(size: 11, weight: .medium))
           }
         }
+        if store.preparing || actions.busy { reviewExplanation }
         Button(String(localized: "Review selected removed-app data")) {
           Task { await store.prepareOrphans(actions: actions) }
         }.disabled(
@@ -379,14 +380,8 @@ struct AppsView: View {
   }
 
   private var reviewExplanation: some View {
-    Text(
-      store.needsRescan
-        ? String(localized: "Scan again to review data")
-        : store.selectedReviewPending
-          ? String(localized: "Checking this app’s data. You can review the app itself now.")
-          : String(localized: "Select the app, its data, or both")
-    )
-    .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+    Text(store.reviewExplanation(actions: actions))
+      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
   }
 
   private var reviewButton: some View {
@@ -591,9 +586,11 @@ struct AppsView: View {
         Text(
           store.needsRescan
             ? String(localized: "Scan again to review related data")
-            : store.selectedReviewPending && !store.selectedShallowComplete
-              ? String(localized: "Related data is being reviewed")
-              : String(localized: "No matching standard data locations found")
+            : store.relatedDiscoveryStopped
+              ? String(localized: "Related discovery stopped before all files were found.")
+              : store.selectedReviewPending && !store.selectedShallowComplete
+                ? String(localized: "Related data is being reviewed")
+                : String(localized: "No matching standard data locations found")
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         .anchorPreference(key: RelatedRowPreferenceKey.self, value: .bounds) {

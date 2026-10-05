@@ -889,6 +889,162 @@ func selectedReviewPrecedesOwnership() async throws {
   await session.cancel()
 }
 
+@Test("Blocking ownership runs outside Swift tasks and cancellation leaves listed roots actionable")
+func blockingOwnershipDoesNotOccupyCooperativeTask() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let started = AsyncStream<Void>.makeStream()
+  let finished = AsyncStream<Void>.makeStream()
+  let release = DispatchSemaphore(value: 0)
+  let insideSwiftTask = Mutex(false)
+  let walkFinished = Mutex(false)
+  let nativeReads = Mutex(0)
+  let ownershipReadyEvents = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil },
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    ownershipCollected: {
+      insideSwiftTask.withLock { $0 = withUnsafeCurrentTask { $0 != nil } }
+      started.continuation.yield(())
+      started.continuation.finish()
+      _ = release.wait(timeout: .now() + 5)
+      walkFinished.withLock { $0 = true }
+      finished.continuation.yield(())
+      finished.continuation.finish()
+    },
+    nativeRead: { _ in nativeReads.withLock { $0 += 1 } })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  let observed = Task {
+    for await event in await session.events(includeAllRelated: true) {
+      if case .ownershipReady = event { ownershipReadyEvents.withLock { $0 += 1 } }
+    }
+  }
+  defer { release.signal() }
+  var arrival = started.stream.makeAsyncIterator()
+  _ = try #require(await arrival.next())
+  #expect(!insideSwiftTask.withLock { $0 })
+  let review = try #require(try await session.relatedReview(path: fixture.app))
+  #expect(review.candidates.contains { $0.path == fixture.cache })
+  let available = await session.makeAvailableUninstallPlan(
+    path: fixture.app, expectedBundleID: fixture.bundleID, selectedRelated: [], includePackage: true)
+  #expect(available.rejections.isEmpty && available.plan?.items.map(\.sourcePath) == [fixture.app])
+  await session.cancel()
+  #expect(!walkFinished.withLock { $0 })
+  release.signal()
+  var completed = finished.stream.makeAsyncIterator()
+  _ = try #require(await completed.next())
+  await observed.value
+  _ = try await ApplicationOwnershipWork.shared.perform { _ in () }
+  #expect(nativeReads.withLock { $0 } == 0)
+  #expect(ownershipReadyEvents.withLock { $0 } == 0)
+}
+
+@Test("Cancelling queued and active ownership work never waits for the blocked native call")
+func cancelledOwnershipWorkSkipsNativeReads() async throws {
+  let lane = ApplicationOwnershipWork(label: "lighten.tests.ownership." + UUID().uuidString)
+  let started = AsyncStream<Void>.makeStream()
+  let queued = AsyncStream<Void>.makeStream()
+  let release = DispatchSemaphore(value: 0)
+  let nativeReturned = Mutex(false)
+  let sawCancellation = Mutex(false)
+  let skippedReads = Mutex(0)
+  let active = Task {
+    try await lane.perform { cancelled in
+      started.continuation.yield(())
+      started.continuation.finish()
+      _ = release.wait(timeout: .now() + 5)
+      nativeReturned.withLock { $0 = true }
+      sawCancellation.withLock { $0 = cancelled() }
+      return 1
+    }
+  }
+  defer { release.signal() }
+  var arrival = started.stream.makeAsyncIterator()
+  _ = try #require(await arrival.next())
+  let waiting = Task {
+    queued.continuation.yield(())
+    queued.continuation.finish()
+    return try await lane.perform { _ in
+      skippedReads.withLock { $0 += 1 }
+      return 2
+    }
+  }
+  var submitted = queued.stream.makeAsyncIterator()
+  _ = try #require(await submitted.next())
+  waiting.cancel()
+  switch await waiting.result {
+  case .success: Issue.record("Cancelled queued ownership work returned a result")
+  case .failure(let error): #expect(error is CancellationError)
+  }
+  active.cancel()
+  switch await active.result {
+  case .success: Issue.record("Cancelled active ownership work returned a result")
+  case .failure(let error): #expect(error is CancellationError)
+  }
+  #expect(!nativeReturned.withLock { $0 })
+  release.signal()
+  _ = try await lane.perform { _ in 3 }
+  #expect(sawCancellation.withLock { $0 })
+  #expect(skippedReads.withLock { $0 } == 0)
+}
+
+@Test("Direct async discovery runs ownership and signature callbacks outside Swift tasks", arguments: [false, true])
+func directDiscoveryUsesBlockingLanes(focused: Bool) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let ownershipTasks = Mutex<[Bool]>([])
+  let signatureTasks = Mutex<[Bool]>([])
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in
+      signatureTasks.withLock { $0.append(withUnsafeCurrentTask { $0 != nil }) }
+      return nil
+    },
+    ownershipCollected: {
+      ownershipTasks.withLock { $0.append(withUnsafeCurrentTask { $0 != nil }) }
+    })
+  let candidates: [RelatedDataCandidate]
+  if focused {
+    let app = try #require(service.application(at: fixture.app))
+    candidates = await service.discover(for: app)
+  } else {
+    candidates = await service.discover()
+  }
+  #expect(candidates.contains { $0.path == fixture.cache })
+  #expect(ownershipTasks.withLock { !$0.isEmpty && $0.allSatisfy { !$0 } })
+  #expect(signatureTasks.withLock { !$0.isEmpty && $0.allSatisfy { !$0 } })
+}
+
+@Test("Async refusal evidence runs fresh native validation outside Swift tasks")
+func asyncRefusalEvidenceUsesBlockingLane() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let observing = Mutex(false)
+  let registrationTasks = Mutex<[Bool]>([])
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    registeredByID: { _ in
+      if observing.withLock({ $0 }) {
+        registrationTasks.withLock { $0.append(withUnsafeCurrentTask { $0 != nil }) }
+      }
+      return ApplicationRegistrationObservation(paths: [], complete: true)
+    })
+  let app = try #require(service.application(at: fixture.app))
+  let candidate = try #require(
+    (await service.initialReview(for: app, progress: nil)).candidates.first { $0.path == fixture.cache })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  let available = await session.makeAvailableUninstallPlan(
+    app: app, selectedRelated: [candidate], includePackage: false)
+  let plan = try #require(available.plan)
+  #expect(available.rejections.isEmpty)
+  observing.withLock { $0 = true }
+  #expect(await session.ownershipRefusalEvidence(for: plan).isEmpty)
+  #expect(registrationTasks.withLock { !$0.isEmpty && $0.allSatisfy { !$0 } })
+  await session.cancel()
+}
+
 @Test(
   "Current owner metadata, installation roots and registered lineage invalidate a session",
   arguments: ["info", "install", "registration"])

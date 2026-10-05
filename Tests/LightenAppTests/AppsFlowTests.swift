@@ -239,7 +239,10 @@ private actor AppsAvailableGate {
   await gate.finish(.init(plan: nil, rejections: [PlanRejection(.needsAdministrator, path: app)]))
   await preparation.value
   #expect(actions.pending == nil && actions.result == nil && actions.resultRejections.isEmpty)
-  #expect(actions.completedSummary == nil && store.message == nil && !store.preparing)
+  #expect(actions.completedSummary == nil && !store.preparing)
+  #expect(
+    store.message
+      == (cancelTask ? nil : String(localized: "Selection changed. Select an item to continue the removal review.")))
   #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
 }
 
@@ -310,7 +313,7 @@ private actor AppsAvailableGate {
       plan: plan, rejections: [PlanRejection(.unavailable, path: root + "/late-refusal")]))
   await preparation.value
   #expect(actions.pending == nil)
-  #expect(store.message == nil)
+  #expect(store.message == String(localized: "Selection changed. Select an item to continue the removal review."))
   #expect(!store.preparing)
 }
 
@@ -1552,5 +1555,51 @@ private struct AppsActiveSelectionActivity: ApplicationActivitySource {
   let presentation = try #require(actions.pending)
   #expect(presentation.plan.items.map(\.sourcePath) == [path])
   #expect(presentation.hasRunningApplications)
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+}
+
+@Test("Stopping background discovery retains fresh observed roots and explicit choices", arguments: [false, true])
+@MainActor func appsStoppedDiscoveryKeepsRootReview(cancel: Bool) async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let path = root + "/LightenQA-stopped.app"
+  let dataPath = root + "/data"
+  for path in [path, dataPath] {
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
+  }
+  var candidate = RelatedDataCandidate(
+    id: dataPath, path: dataPath, classification: .uncertain,
+    reason: .ownershipUnavailable, snapshot: nil, receipt: nil)
+  candidate.displayRootIdentity = try DescriptorFileSystem.identity(at: dataPath)
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let planner = PlanService(homeDirectory: root)
+  let store = AppsStore(pictures: flowPictures(root), userPlanner: planner, events: { stream })
+  let actions = ActionStore(
+    journal: JSONLActionJournal(path: root + "/journal.jsonl"),
+    planService: planner, applicationActivity: ClearFlowApplicationActivity())
+  store.startScan(actions: actions)
+  continuation.yield(
+    .listed([
+      ApplicationListEntry(
+        path: path, name: "Stopped fixture",
+        bundleID: "qa.lighten.stopped", version: "1", displayRootIdentity: try DescriptorFileSystem.identity(at: path))
+    ]))
+  try await waitFlow { store.reports.count == 1 }
+  continuation.yield(.related(path: path, candidates: [candidate], ownershipPending: true))
+  try await waitFlow { store.reports.first?.related.count == 1 }
+  store.select(path, actions: actions)
+  store.toggleData(dataPath, actions: actions)
+  if cancel {
+    store.cancelScan()
+    continuation.finish()
+  } else {
+    continuation.finish()
+  }
+  try await waitFlow { !store.busy }
+  #expect(!store.needsRescan && store.packageSelected && store.selectedDataPaths == [dataPath])
+  #expect(store.canReviewSelectedData(actions: actions))
+  await store.prepareSelectedData(actions: actions)
+  #expect(Set(actions.pending?.plan.items.map(\.sourcePath) ?? []) == [path, dataPath])
+  #expect(actions.pending?.plan.items.allSatisfy { $0.userSelection == true } == true)
   #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
 }

@@ -1,5 +1,73 @@
 import Darwin
 import Foundation
+import Synchronization
+
+/// Ownership walks and native registration can block. A serial dispatch lane
+/// keeps that work outside Swift's cooperative executor without unbounded fan-out.
+final class ApplicationOwnershipWork: Sendable {
+  static let shared = ApplicationOwnershipWork(label: "com.tavsn.lighten.application-ownership")
+  private let queue: DispatchQueue
+
+  init(label: String) { queue = DispatchQueue(label: label, qos: .utility) }
+
+  private final class Pending<Value: Sendable>: Sendable {
+    private struct State {
+      var cancelled = false
+      var continuation: CheckedContinuation<Value, any Error>?
+    }
+    private let state = Mutex(State())
+    var isCancelled: Bool { state.withLock { $0.cancelled } }
+
+    func start(_ continuation: CheckedContinuation<Value, any Error>) -> Bool {
+      state.withLock {
+        guard !$0.cancelled else { return false }
+        $0.continuation = continuation
+        return true
+      }
+    }
+
+    func cancel() {
+      let continuation = state.withLock {
+        $0.cancelled = true
+        let continuation = $0.continuation
+        $0.continuation = nil
+        return continuation
+      }
+      continuation?.resume(throwing: CancellationError())
+    }
+
+    func finish(_ value: Value) {
+      let continuation = state.withLock {
+        let continuation = $0.continuation
+        $0.continuation = nil
+        return continuation
+      }
+      continuation?.resume(returning: value)
+    }
+  }
+
+  func perform<Value: Sendable>(
+    _ work: @escaping @Sendable (@escaping @Sendable () -> Bool) -> Value
+  ) async throws -> Value {
+    let pending = Pending<Value>()
+    let result = try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        guard pending.start(continuation) else {
+          continuation.resume(throwing: CancellationError())
+          return
+        }
+        queue.async {
+          guard !pending.isCancelled else { return }
+          pending.finish(work { pending.isCancelled })
+        }
+      }
+    } onCancel: {
+      pending.cancel()
+    }
+    try Task.checkCancellation()
+    return result
+  }
+}
 
 private enum ApplicationOwnershipFailure: Error {
   case traversalLimitExceeded
@@ -43,7 +111,8 @@ struct ApplicationOwnershipInventory {
 
   static func collect(
     roots: [String], applications: [InstalledApplication], additionalCodePaths: [String] = [],
-    onNativeRead: (@Sendable (String) -> Void)? = nil
+    onNativeRead: (@Sendable (String) -> Void)? = nil,
+    cancelled: @Sendable () -> Bool = { false }
   ) -> Self {
     var candidates: [ApplicationOwnerCandidate] = []
     var seen: Set<String> = []
@@ -76,7 +145,7 @@ struct ApplicationOwnershipInventory {
       parentFD: Int32? = nil, name: String? = nil, expected: FileIdentity? = nil
     ) {
       guard visitedDirectories.insert(path).inserted else { return }
-      guard !Task.isCancelled else {
+      guard !Task.isCancelled, !cancelled() else {
         uncertain(path, CancellationError())
         return
       }
@@ -154,7 +223,7 @@ struct ApplicationOwnershipInventory {
         executable = ApplicationIdentity.executablePath(ofBundleAt: path)
       }
       for name in children {
-        if Task.isCancelled {
+        if Task.isCancelled || cancelled() {
           uncertain(path, CancellationError())
           break
         }
@@ -292,6 +361,10 @@ struct ApplicationOwnershipInventory {
       }
     }
     for root in roots {
+      if Task.isCancelled || cancelled() {
+        uncertain(root, CancellationError())
+        break
+      }
       do {
         let identity = try DescriptorFileSystem.identity(at: root)
         guard identity.kind == .directory else {
@@ -305,6 +378,10 @@ struct ApplicationOwnershipInventory {
       } catch FileSystemFailure.systemCall(_, let code) { unavailable(root, code) } catch { uncertain(root, error) }
     }
     for app in applications {
+      if Task.isCancelled || cancelled() {
+        uncertain(app.path, CancellationError())
+        break
+      }
       let physical = app.linkTarget ?? app.path
       if !seen.contains(physical) { visit(physical, package: app.path, mainExecutable: nil, depth: 0) }
       if physical != app.path {
@@ -314,6 +391,10 @@ struct ApplicationOwnershipInventory {
       }
     }
     for path in additionalCodePaths where !seen.contains(path) {
+      if Task.isCancelled || cancelled() {
+        uncertain(path, CancellationError())
+        break
+      }
       visit(path, package: path, mainExecutable: nil, depth: 0)
     }
     return Self(
