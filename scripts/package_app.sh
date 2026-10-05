@@ -23,6 +23,7 @@ readonly IDENTITY_SOURCE="$ROOT_DIR/Sources/LightenKit/LightenIdentity.swift"
 readonly LOCALIZATION_CATALOG="$ROOT_DIR/Resources/Localizable.xcstrings"
 readonly PRIVACY_MANIFEST="$ROOT_DIR/Resources/PrivacyInfo.xcprivacy"
 readonly ASSET_CATALOG="$ROOT_DIR/Resources/Assets.xcassets"
+readonly APP_ICON="$ROOT_DIR/Resources/AppIcon.icon"
 
 usage() {
   printf 'Usage: %s [debug|release]\n' "$(basename "$0")" >&2
@@ -100,15 +101,18 @@ read_versions() {
 
 compile_assets() {
   local actool_info_plist="$DIST_DIR/actool-partial-info.plist"
-  local actool_arguments=(
-    "$ASSET_CATALOG"
+  local actool_arguments=()
+
+  [[ -d "$APP_ICON" ]] && actool_arguments+=("$APP_ICON")
+  [[ -d "$ASSET_CATALOG" ]] && actool_arguments+=("$ASSET_CATALOG")
+  actool_arguments+=(
     --compile "$RESOURCES_DIR"
     --platform macosx
     --minimum-deployment-target 26.0
     --output-partial-info-plist "$actool_info_plist"
   )
 
-  if [[ -d "$ASSET_CATALOG/AppIcon.appiconset" ]]; then
+  if [[ -d "$APP_ICON" || -d "$ASSET_CATALOG/AppIcon.appiconset" ]]; then
     actool_arguments+=(--app-icon AppIcon)
   fi
 
@@ -143,6 +147,9 @@ verify_package() {
       fail "Missing $language localization in packaged app."
   done
   [[ -s "$RESOURCES_DIR/PrivacyInfo.xcprivacy" ]] || fail "Missing privacy manifest in packaged app."
+  if [[ -d "$APP_ICON" ]]; then
+    [[ -s "$RESOURCES_DIR/Assets.car" && -s "$RESOURCES_DIR/AppIcon.icns" ]] || fail "Missing compiled app icon."
+  fi
   [[ -d "$kit_bundle" && ! -L "$kit_bundle" ]] ||
     fail "Missing bundled LightenKit resources in packaged app."
   if [[ -e "$kit_bundle/Contents/Info.plist" || -L "$kit_bundle/Contents/Info.plist" ]]; then
@@ -257,7 +264,7 @@ main() {
     fi
   fi
 
-  if [[ -d "$ASSET_CATALOG" ]]; then
+  if [[ -d "$APP_ICON" || -d "$ASSET_CATALOG" ]]; then
     compile_assets
   fi
 
