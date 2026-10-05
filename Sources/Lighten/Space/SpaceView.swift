@@ -233,11 +233,8 @@ struct SpaceView: View {
       NoticeBar(message)
     }
     if actions.completedSummary != nil {
-      ScrollView {
-        ActionFeedbackView(actions: actions)
-      }
-      .frame(maxHeight: Theme.Layout.inlineResultMaximum)
-      .accessibilityIdentifier("space.feedback-viewport")
+      ActionFeedbackView(actions: actions)
+        .accessibilityIdentifier("space.feedback-viewport")
     }
   }
 

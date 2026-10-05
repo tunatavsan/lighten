@@ -22,6 +22,7 @@ final class LightenModel {
   var showingWelcome = false
   private(set) var previousSummaries: [LightenSection: ToolSummary] = [:]
   @ObservationIgnored private var prepared = false
+  @ObservationIgnored private var historyReload: Task<Void, Never>?
 
   var presentations: [LightenSection: ToolPresentation] {
     var spacePhase: ToolPhase {
@@ -83,9 +84,22 @@ final class LightenModel {
       if apps?.scannedAt != nil { apps?.startScan(actions: actions) }
       if let folder = duplicates?.folderPath { duplicates?.startScan(folder: folder, actions: actions) }
     }
-    await actions.reloadHistory()
+    await reloadHistory()
     await access.refresh()
     showingWelcome = onboarding.shouldPresent(for: access.state)
+  }
+
+  /// Reads history once at a time: a request that arrives while a read is running waits for that read
+  /// instead of starting a second one, which the history journal would refuse.
+  func reloadHistory() async {
+    if let running = historyReload {
+      await running.value
+      return
+    }
+    let task = Task { await actions.reloadHistory() }
+    historyReload = task
+    await task.value
+    historyReload = nil
   }
 
   func loadPreviousSummaries() async {

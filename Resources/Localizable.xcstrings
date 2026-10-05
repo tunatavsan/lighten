@@ -3596,6 +3596,23 @@
         }
       }
     },
+    "Items you move to Trash appear here, ready to restore.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Items you move to Trash appear here, ready to restore."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çöp’e taşıdığınız öğeler geri yüklenmeye hazır olarak burada görünür."
+          }
+        }
+      }
+    },
     "Keep": {
       "localizations": {
         "en": {
@@ -4511,22 +4528,6 @@
         }
       }
     },
-    "Name": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Name"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ad"
-          }
-        }
-      }
-    },
     "Needs review": {
       "localizations": {
         "en": {
@@ -4555,6 +4556,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sonraki dosya"
+          }
+        }
+      }
+    },
+    "No actions yet": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No actions yet"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Henüz işlem yok"
           }
         }
       }

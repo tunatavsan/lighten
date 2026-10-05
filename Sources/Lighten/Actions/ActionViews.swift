@@ -209,51 +209,58 @@ struct ConfirmationView: View {
   }
 }
 
+/// The latest action's result on one line: what happened, where it went, and any item that stayed,
+/// each with its full reason in a popover.
 struct ActionFeedbackView: View {
   @Bindable var actions: ActionStore
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     if let summary = actions.completedSummary {
-      VStack(alignment: .leading, spacing: 5) {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-          Text(summary).font(.system(size: 12, weight: .medium))
-            .fixedSize(horizontal: false, vertical: true)
-          Spacer(minLength: 4)
-          if !actions.latestTrashPaths.isEmpty {
-            Button(String(localized: "Show in Trash")) {
-              NSWorkspace.shared.activateFileViewerSelecting(actions.latestTrashPaths.map { URL(fileURLWithPath: $0) })
-            }
+      let problems = actions.resultFailures.count + actions.resultRejections.count
+      HStack(spacing: Theme.Space.s) {
+        Image(systemName: problems > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+          .font(Theme.Font.iconSmall)
+          .foregroundStyle(problems > 0 ? Theme.Palette.warning : Theme.Palette.positive)
+          .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+          Text(summary).font(Theme.Font.calloutMedium).lineLimit(2)
+          if actions.resultKind == .trash && actions.canUndoLatest {
+            Text(String(localized: "Empty Trash to free disk space."))
+              .font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary)
           }
         }
-        if actions.resultKind == .trash && actions.canUndoLatest {
-          Text(String(localized: "Empty Trash to free disk space."))
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        }
-        if !actions.resultFailures.isEmpty || !actions.resultRejections.isEmpty {
-          if actions.result == nil {
-            Text(String(localized: "Items that stayed in place"))
-              .font(.system(size: 11, weight: .medium))
+        .help(summary)
+        Spacer(minLength: Theme.Space.s)
+        if problems > 0 {
+          DetailChip(
+            actions.result != nil && actions.unverifiedResultCount > 0
+              ? String(localized: "Items needing review") : String(localized: "Items that stayed in place"),
+            symbol: "exclamationmark.triangle.fill"
+          ) {
             failureReasons
-          } else {
-            DisclosureGroup(
-              actions.unverifiedResultCount > 0
-                ? String(localized: "Items needing review") : String(localized: "Items that stayed in place")
-            ) {
-              failureReasons
-            }
-            .font(.system(size: 11))
           }
+        }
+        if !actions.latestTrashPaths.isEmpty {
+          Button(String(localized: "Show in Trash")) {
+            NSWorkspace.shared.activateFileViewerSelecting(actions.latestTrashPaths.map { URL(fileURLWithPath: $0) })
+          }
+          .controlSize(.small)
         }
       }
+      .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
+      .background(
+        problems > 0 ? Theme.Palette.warningTint : Theme.Palette.positiveTint,
+        in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+      )
       .accessibilityElement(children: .contain)
       .accessibilityIdentifier("action.completed-result")
-      .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .bottom)))
+      .transition(Theme.Motion.transition(Theme.Motion.rise, reduceMotion: reduceMotion))
     }
   }
 
   private var failureReasons: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: Theme.Space.m) {
       ForEach(actions.resultRejections, id: \.path) { rejection in
         FailureReasonView(presentation: FailureText.presentation(rejection), path: rejection.path)
       }
@@ -261,7 +268,7 @@ struct ActionFeedbackView: View {
         if let presentation = item.presentation {
           FailureReasonView(presentation: presentation, path: item.path)
         } else {
-          Text(item.detail).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+          Text(item.detail).font(Theme.Font.caption).foregroundStyle(Theme.Palette.warning)
             .fixedSize(horizontal: false, vertical: true).help(item.path)
         }
       }
@@ -271,169 +278,163 @@ struct ActionFeedbackView: View {
 
 struct HistoryView: View {
   @Bindable var actions: ActionStore
+  /// How the screen asks for a fresh read of history; the window shares one so reads never overlap.
+  var reload: (() async -> Void)?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    LegacyToolScreen(String(localized: "History")) {
-      GeometryReader { geometry in
-        VStack(alignment: .leading, spacing: 0) {
-          Text(String(localized: "History shows actions taken in Lighten."))
-            .font(.callout).foregroundStyle(LightenStyle.muted).padding(.bottom, 12)
-          ScrollViewReader { proxy in
-            ScrollView {
-              VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                  Text(String(localized: "Pending Trash"))
-                    .font(.system(size: 13, weight: .medium))
-                  Text("\(actions.pendingTrashCount) \(String(localized: "items"))")
-                    .font(.system(size: 13)).monospacedDigit()
-                  Spacer()
-                  Text(PlanItemSize.text(actions.pendingTrashSize.logical))
-                    .font(.system(size: 17, weight: .semibold)).monospacedDigit()
+    ToolScreen(String(localized: "History"), subtitle: String(localized: "History shows actions taken in Lighten.")) {
+      ScrollViewReader { proxy in
+        ScrollView {
+          VStack(alignment: .leading, spacing: Theme.Space.l) {
+            header
+            if let issues = actions.history?.issues, !issues.isEmpty {
+              NoticeBar(String(localized: "Some history records could not be read. Archive them to continue safely.")) {
+                Button(String(localized: "Archive history and start again")) {
+                  Task { await actions.repairHistory() }
                 }
-                Text(String(localized: "Trash items have not freed disk space."))
-                  .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-                  .padding(.top, 3).padding(.bottom, 12)
-                if let issues = actions.history?.issues, !issues.isEmpty {
-                  VStack(alignment: .leading, spacing: 8) {
-                    Text(String(localized: "Some history records could not be read. Archive them to continue safely."))
-                      .font(.system(size: 12)).foregroundStyle(LightenStyle.warning)
-                    Button(String(localized: "Archive history and start again")) {
-                      Task { await actions.repairHistory() }
-                    }
-                    .disabled(actions.busy)
-                    .help(
-                      String(localized: "The original history is kept. Items still in Trash keep their Undo action."))
-                  }
-                  .padding(.bottom, 12)
-                }
-                if let message = actions.message {
-                  Text(message)
-                    .font(.system(size: 12)).foregroundStyle(LightenStyle.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, 12)
-                }
-                ActionFeedbackView(actions: actions).padding(.bottom, 12)
-                Divider()
-                HStack {
-                  Text(String(localized: "Name"))
-                  Spacer()
-                  Text(String(localized: "Size"))
-                    .frame(width: 90, alignment: .trailing)
-                  Text(String(localized: "Status"))
-                    .frame(width: 105, alignment: .trailing)
-                }
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(LightenStyle.muted)
-                .padding(.horizontal, 8).padding(.vertical, 9)
-                Divider()
-                LazyVStack(spacing: 0) {
-                  // Newest first: the action just taken, and its Undo, are at the top.
-                  ForEach((actions.history?.plans ?? []).reversed()) { plan in
-                    let expanded = actions.expandedHistoryGroups.contains(plan.id)
-                    VStack(alignment: .leading, spacing: 0) {
-                      HStack(spacing: 10) {
-                        Button {
-                          Task { await actions.setHistoryGroupExpanded(plan.id, expanded: !expanded) }
-                        } label: {
-                          Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .frame(width: 12, height: 24)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(
-                          expanded
-                            ? String(localized: "Hide history details") : String(localized: "Show history details")
-                        )
-                        .accessibilityIdentifier("history.group.\(plan.id.uuidString)")
-                        VStack(alignment: .leading, spacing: 3) {
-                          Text(title(plan))
-                            .font(.system(size: 13, weight: .medium)).lineLimit(1)
-                          Text(plan.createdAt, format: .dateTime.month().day().hour().minute())
-                            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-                          if plan.metadata.count == 1, let path = plan.metadata.first?.sourcePath {
-                            Text(path)
-                              .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-                              .lineLimit(1).truncationMode(.middle).help(path)
-                          }
-                          if plan.kind == .catalogDelete {
-                            Text(String(localized: "Undo unavailable — permanently cleaned"))
-                              .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-                          }
-                          if plan.deletedCount > 0 {
-                            Text(
-                              "\(plan.deletedCount) \(String(localized: "entries removed")) · \(format(plan.deletedLogicalBytes))"
-                            )
-                            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-                          }
-                        }
-                        .accessibilityElement(children: .combine)
-                        .accessibilityIdentifier("history.summary.\(plan.id.uuidString)")
-                        Spacer(minLength: 5)
-                        if plan.canUndo {
-                          Button(String(localized: "Undo")) {
-                            Task {
-                              await actions.undo(plan)
-                              proxy.scrollTo(plan.id, anchor: .top)
-                            }
-                          }
-                          .buttonStyle(.bordered)
-                          .disabled(actions.busy || actions.loadingHistoryGroups.contains(plan.id))
-                          .accessibilityLabel(String(localized: "Undo") + " " + title(plan))
-                          .accessibilityIdentifier("history.undo.\(plan.id.uuidString)")
-                        }
-                        Text(
-                          plan.deletedCount > 0
-                            ? format(plan.deletedLogicalBytes) : PlanItemSize.text(actions.historySize(plan).logical)
-                        )
-                        .font(.system(size: 12)).monospacedDigit()
-                        .frame(width: 90, alignment: .trailing)
-                        .accessibilityIdentifier("history.size.\(plan.id.uuidString)")
-                        Text(status(plan.state))
-                          .font(.system(size: 12)).foregroundStyle(statusColor(plan.state))
-                          .frame(width: 105, alignment: .trailing)
-                          .accessibilityLabel(String(localized: "Status"))
-                          .accessibilityValue(status(plan.state))
-                          .accessibilityIdentifier("history.status.\(plan.id.uuidString)")
-                      }
-                      .accessibilityElement(children: .contain)
-                      if expanded {
-                        if actions.loadingHistoryGroups.contains(plan.id) {
-                          ProgressView(String(localized: "Loading history details…"))
-                            .controlSize(.small)
-                        }
-                        if plan.detailsLoaded {
-                          ForEach(plan.items, id: \.itemID) { item in
-                            historyItem(item, plan: plan)
-                          }
-                        }
-                      }
-                    }
-                    .accessibilityElement(children: .contain)
-                    .id(plan.id)
-                    .padding(.horizontal, 8).padding(.vertical, 7)
-                    Divider()
-                  }
+                .disabled(actions.busy)
+                .help(String(localized: "The original history is kept. Items still in Trash keep their Undo action."))
+              }
+            }
+            if let message = actions.message {
+              NoticeBar(message).textSelection(.enabled)
+            }
+            ActionFeedbackView(actions: actions)
+            let plans = (actions.history?.plans ?? []).reversed()
+            if plans.isEmpty {
+              EmptyState(
+                symbol: "clock.arrow.circlepath", title: String(localized: "No actions yet"),
+                message: String(localized: "Items you move to Trash appear here, ready to restore."),
+                tint: Theme.Palette.toolHistory)
+            } else {
+              VStack(spacing: 0) {
+                // Newest first: the action just taken, and its Undo, are at the top.
+                ForEach(Array(plans.enumerated()), id: \.element.id) { index, plan in
+                  if index > 0 { RowDivider(leading: Theme.Layout.rowTextInset) }
+                  planRow(plan, proxy: proxy)
                 }
               }
-              .frame(maxWidth: .infinity, alignment: .leading)
+              .moduleSurface()
             }
-            .frame(minHeight: 0, maxHeight: .infinity)
           }
+          .screenColumn()
+          .padding(.bottom, Theme.Space.xl)
         }
-        .padding(.vertical, 12)
-        // History content must not increase the split view's minimum window height.
-        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
       }
     } toolbar: {
-      Button(String(localized: "Refresh")) { Task { await actions.reloadHistory() } }
+      ToolbarItem(placement: .primaryAction) {
+        Button(String(localized: "Refresh"), systemImage: "arrow.clockwise") {
+          Task { await reloadHistory() }
+        }
         .disabled(actions.busy)
         .accessibilityIdentifier("history.refresh")
+      }
     }
-    .tint(LightenStyle.accent)
-    .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: actions.displayRevision)
-    .task { await actions.reloadHistory() }
+    .animation(Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion), value: actions.displayRevision)
+    .task { await reloadHistory() }
+  }
+
+  private func reloadHistory() async {
+    if let reload { await reload() } else { await actions.reloadHistory() }
+  }
+
+  private var header: some View {
+    HStack(alignment: .bottom, spacing: Theme.Space.xl) {
+      HeroMetric(
+        value: .aggregate(actions.pendingTrashSize.logical),
+        caption: String(localized: "Pending Trash") + " · "
+          + String.localizedStringWithFormat(String(localized: "%lld items"), Int64(actions.pendingTrashCount)),
+        tone: actions.pendingTrashCount > 0 ? .hero : .neutral)
+      Spacer(minLength: Theme.Space.l)
+      InfoButton(text: String(localized: "Trash items have not freed disk space."))
+    }
+    .padding(.top, Theme.Space.l)
+  }
+
+  private func planRow(_ plan: HistoryPlan, proxy: ScrollViewProxy) -> some View {
+    let expanded = actions.expandedHistoryGroups.contains(plan.id)
+    return VStack(alignment: .leading, spacing: 0) {
+      HStack(spacing: Theme.Space.m) {
+        Button {
+          Task { await actions.setHistoryGroupExpanded(plan.id, expanded: !expanded) }
+        } label: {
+          Image(systemName: "chevron.right").font(Theme.Font.iconSmall)
+            .rotationEffect(.degrees(expanded ? 90 : 0))
+            .foregroundStyle(Theme.Palette.inkSecondary)
+            .frame(width: Theme.Space.l, height: Theme.Space.xl)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+          expanded ? String(localized: "Hide history details") : String(localized: "Show history details")
+        )
+        .accessibilityIdentifier("history.group.\(plan.id.uuidString)")
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+          Text(title(plan)).font(Theme.Font.bodyMedium).lineLimit(1).truncationMode(.middle)
+          HStack(spacing: Theme.Space.xs) {
+            Text(plan.createdAt, format: .dateTime.month().day().hour().minute())
+            if plan.kind == .catalogDelete {
+              Text(verbatim: "·")
+              Text(String(localized: "Undo unavailable — permanently cleaned"))
+            } else if plan.deletedCount > 0 {
+              Text(verbatim: "·")
+              Text(
+                "\(plan.deletedCount) \(String(localized: "entries removed")) · \(format(plan.deletedLogicalBytes))")
+            }
+          }
+          .font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary).lineLimit(1)
+        }
+        .help(plan.metadata.count == 1 ? plan.metadata.first?.sourcePath ?? "" : "")
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("history.summary.\(plan.id.uuidString)")
+        Spacer(minLength: Theme.Space.s)
+        Text(
+          plan.deletedCount > 0
+            ? format(plan.deletedLogicalBytes) : PlanItemSize.text(actions.historySize(plan).logical)
+        )
+        .font(Theme.Font.mono).foregroundStyle(Theme.Palette.ink).lineLimit(1).fixedSize()
+        .accessibilityIdentifier("history.size.\(plan.id.uuidString)")
+        Chip(title: status(plan.state), tone: tone(plan.state))
+          .accessibilityLabel(String(localized: "Status"))
+          .accessibilityValue(status(plan.state))
+          .accessibilityIdentifier("history.status.\(plan.id.uuidString)")
+        if plan.canUndo {
+          Button(String(localized: "Undo"), systemImage: "arrow.uturn.backward") {
+            Task {
+              await actions.undo(plan)
+              proxy.scrollTo(plan.id, anchor: .top)
+            }
+          }
+          .labelStyle(.titleAndIcon)
+          .controlSize(.small)
+          .fixedSize()
+          .disabled(actions.busy || actions.loadingHistoryGroups.contains(plan.id))
+          .accessibilityLabel(String(localized: "Undo") + " " + title(plan))
+          .accessibilityIdentifier("history.undo.\(plan.id.uuidString)")
+        }
+      }
+      .padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.s + 2)
+      .accessibilityElement(children: .contain)
+      if expanded {
+        VStack(alignment: .leading, spacing: 0) {
+          if actions.loadingHistoryGroups.contains(plan.id) {
+            ScanStatusRow(status: String(localized: "Loading history details…"))
+              .padding(.vertical, Theme.Space.xs)
+          }
+          if plan.detailsLoaded {
+            ForEach(plan.items, id: \.itemID) { item in
+              historyItem(item, plan: plan)
+            }
+          }
+        }
+        .padding(.leading, Theme.Layout.rowTextInset).padding(.trailing, Theme.Space.l)
+        .padding(.bottom, Theme.Space.s)
+        .transition(Theme.Motion.transition(Theme.Motion.rise, reduceMotion: reduceMotion))
+      }
+    }
+    .accessibilityElement(children: .contain)
+    .id(plan.id)
   }
 
   private func title(_ plan: HistoryPlan) -> String {
@@ -453,25 +454,25 @@ struct HistoryView: View {
     let detail =
       showProblem
       ? actions.undoResults[plan.id]?.items.first { $0.itemID == item.itemID }?.detail ?? item.detail : nil
-    return VStack(alignment: .leading, spacing: 3) {
-      HStack(alignment: .firstTextBaseline, spacing: 10) {
-        Text(path ?? item.itemID.uuidString)
-          .font(.system(size: 11)).lineLimit(2).truncationMode(.middle)
-          .textSelection(.enabled)
-        Spacer(minLength: 4)
-        Text(PlanItemSize.text(size.logical)).font(.system(size: 10)).monospacedDigit()
-        Text(status(item.state))
-          .font(.system(size: 10)).foregroundStyle(statusColor(item.state))
+    return VStack(alignment: .leading, spacing: Theme.Space.xs) {
+      HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+        Text(path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? item.itemID.uuidString)
+          .font(Theme.Font.callout).lineLimit(1).truncationMode(.middle)
+          .help(path ?? "")
+        Spacer(minLength: Theme.Space.xs)
+        Text(PlanItemSize.text(size.logical)).font(Theme.Font.monoSmall).foregroundStyle(Theme.Palette.inkSecondary)
+        Text(status(item.state)).font(Theme.Font.caption).foregroundStyle(tone(item.state).foreground)
       }
+      if let path { PathLabel(path: path).textSelection(.enabled) }
       if let detail {
         FailureReasonView(presentation: FailureText.presentation(detail))
       }
       if item.detail == String(describing: UndoFailure.trashItemMissing) {
         HStack {
           Text(SpaceText.trashMissing())
-            .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+            .font(Theme.Font.caption).foregroundStyle(Theme.Palette.warning)
             .fixedSize(horizontal: false, vertical: true)
-          Spacer(minLength: 4)
+          Spacer(minLength: Theme.Space.xs)
           Button(String(localized: "Show Trash in Finder")) {
             NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash"))
           }
@@ -480,20 +481,21 @@ struct HistoryView: View {
       }
       if item.state == .inTrash && !item.canUndo {
         Text(String(localized: "Cannot restore yet. Resolve the reason above, then refresh History."))
-          .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+          .font(Theme.Font.caption).foregroundStyle(Theme.Palette.warning)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
-    .padding(.leading, 10).padding(.vertical, 4)
+    .padding(.vertical, Theme.Space.xs + 2)
     .accessibilityElement(children: .combine)
     .accessibilityIdentifier("history.item.\(item.itemID.uuidString)")
   }
 
-  private func statusColor(_ state: HistoryState) -> Color {
+  private func tone(_ state: HistoryState) -> Tone {
     switch state {
-    case .uncertain, .failed: LightenStyle.warning
-    case .inTrash: LightenStyle.accent
-    default: LightenStyle.muted
+    case .uncertain, .failed: .warning
+    case .inTrash: .accent
+    case .reversed: .positive
+    default: .neutral
     }
   }
 

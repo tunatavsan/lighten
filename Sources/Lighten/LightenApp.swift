@@ -90,7 +90,7 @@ struct LightenRootView: View {
     case .apps:
       AppsView(store: model.apps, actions: model.actions)
     case .history:
-      HistoryView(actions: model.actions)
+      HistoryView(actions: model.actions, reload: model.reloadHistory)
     }
   }
 }

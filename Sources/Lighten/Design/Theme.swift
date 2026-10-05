@@ -257,6 +257,10 @@ extension Theme {
     static let rowIcon: CGFloat = 24
     static let previewMinimum = CGSize(width: 520, height: 380)
     static let appIconLarge: CGFloat = 64
+    static let basketIcon: CGFloat = 22
+    static let basketIconLimit = 4
+    /// Below this content width Apps shows the list and one app's details one at a time.
+    static let appsCompactWidth: CGFloat = 720
     static let sizeColumn: CGFloat = 84
     static let statusColumn: CGFloat = 110
     static let capacityBarHeight: CGFloat = 10
@@ -274,8 +278,6 @@ extension Theme {
     static let emptyStateWidth: CGFloat = 380
     static let popoverMaximumHeight: CGFloat = 420
     static let treemapGap: CGFloat = 3
-    /// The tallest an inline action result grows before it scrolls.
-    static let inlineResultMaximum: CGFloat = 140
     static let treemapLabelMinimumWidth: CGFloat = 92
     static let treemapLabelMinimumHeight: CGFloat = 44
     static let treemapIconMinimum: CGFloat = 26
