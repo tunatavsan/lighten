@@ -4,7 +4,7 @@ Lighten is a Swift Package Manager project for macOS 26 and later. It has no Xco
 
 - `Lighten` is the executable target and owns the SwiftUI application entry point. It declares no SwiftPM resources.
 - `LightenKit` is the library target. It contains reusable application logic and a bundled Clean catalog that can be exercised independently by `LightenKitTests`.
-- `CLightenPlatform` provides a narrow current-user process metadata check without reading process arguments or environment, and parses `getattrlistbulk` directory metadata for the scanner.
+- `CLightenPlatform` is a small C layer over Darwin APIs. It parses `getattrlistbulk` directory metadata for the scanner; reads memory pressure, swap and per-process resource usage; observes which current-user processes run from or hold files under a path, without reading process arguments or environment; and sends SIGTERM or SIGKILL only to a process record it has just revalidated.
 - `LightenBench` is a command-line measurement tool (`lighten-bench`) for scan engines. It creates and reads only its own synthetic trees and otherwise observes metadata.
 - `LightenKitTests` verifies the library and repository resource contracts.
 - `LightenAppTests` verifies application state and confirmation flow.
