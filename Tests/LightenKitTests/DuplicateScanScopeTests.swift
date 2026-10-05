@@ -41,7 +41,9 @@ func duplicateScopeExcludedFolders(path: String, reason: DuplicateScanScope.Excl
 
 @Test(
   "Package interiors are omitted even when the requested root is inside one",
-  arguments: ["app", "APP", "photoslibrary", "rtfd", "pages", "framework"])
+  arguments: [
+    "app", "APP", "photoslibrary", "photolibrary", "migratedphotolibrary", "backupbundle", "rtfd", "pages", "framework",
+  ])
 func duplicateScopePackageBoundaries(suffix: String) {
   let scope = DuplicateScanScope(minimumBytes: 1)
   let package = "/fixture/Collection." + suffix
@@ -67,6 +69,10 @@ func duplicateScopeHomeLibraryBoundary() {
   let home = "/fixture/home"
   let scope = DuplicateScanScope(minimumBytes: 1, homeDirectory: home)
   #expect(scope.exclusionReason(for: home + "/Library", isDirectory: true, scanRoot: home) == .homeLibrary)
+  #expect(scope.traversesDirectory(path: home + "/Library", scanRoot: home))
+  #expect(!scope.traversesDirectory(path: home + "/Library/Preferences", scanRoot: home))
+  #expect(scope.includesFile(path: home + "/Library/Mobile Documents/local.bin", logicalBytes: 4096, scanRoot: home))
+  #expect(!scope.includesFile(path: home + "/Library/CloudStorage/local.bin", logicalBytes: 4096, scanRoot: home))
   #expect(!scope.includesFile(path: home + "/Library/Preferences/copy.plist", logicalBytes: 4096, scanRoot: home))
   #expect(scope.includesFile(path: home + "/Documents/copy.bin", logicalBytes: 4096, scanRoot: home))
   #expect(

@@ -61,7 +61,7 @@ enum SpaceText {
   static func state(_ item: SpaceItem) -> String? {
     switch item.state {
     case .complete: return nil
-    case .measuring: return String(localized: "Measuring. The size shown is a known minimum.")
+    case .measuring: return String(localized: "Measuring. The size shown is at least the space found so far.")
     case .protectedMetadataOnly:
       return String(
         localized:

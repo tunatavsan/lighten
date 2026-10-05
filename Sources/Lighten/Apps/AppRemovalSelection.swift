@@ -11,6 +11,9 @@ struct AppRemovalSelection: Sendable {
   var packageSelected = false
   var dataPaths: Set<String> = []
   var automaticDataPaths: Set<String> = []
+  var lateAutomaticDataPaths: Set<String> = []
+  var hasReceivedRelatedRows = false
+  var hasPresentedRemovalReview = false
   var deselectedDataPaths: Set<String> = []
   var manualData: [String: RelatedDataCandidate] = [:]
   var refusalEvidence: [RelatedOwnershipRefusalEvidence] = []

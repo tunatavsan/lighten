@@ -537,7 +537,8 @@ func readableArtifactClaimsHaveScopedSelection(_ kind: String) async throws {
   try claim.validate()
   let service = RelatedDataService(
     homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
-    signingMetadata: { _ in nil }, registration: { ApplicationRegistrationObservation(paths: [], complete: false) })
+    signingMetadata: { _ in nil }, registration: { ApplicationRegistrationObservation(paths: [], complete: false) },
+    registeredByID: { _ in ApplicationRegistrationObservation(paths: [], complete: true) })
   let context = service.makeContext()
   context.recordDataClaims(
     [path: [.auxiliary(claim)]],
@@ -552,6 +553,50 @@ func readableArtifactClaimsHaveScopedSelection(_ kind: String) async throws {
   let candidate = try #require(review.candidates.first { $0.path == path })
   #expect(candidate.defaultSelected && candidate.refusalEvidence.isEmpty)
   #expect(candidate.evidenceKinds.contains(kind == "launch" ? .launchService : .installerReceipt))
+}
+
+@Test("Identifier-scoped registration must complete before any automatic exact selection", arguments: [false, true])
+func exactIdentifierSelectionWaitsForRegisteredCopies(complete: Bool) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    registration: { ApplicationRegistrationObservation(paths: [], complete: true) },
+    registeredByID: { _ in ApplicationRegistrationObservation(paths: [], complete: complete) },
+    liveData: { ApplicationLiveDataObservation(records: [], complete: false) })
+  let app = try #require(service.application(at: fixture.app))
+  let initial = await service.initialReview(for: app, progress: nil)
+  let exact = try #require(initial.candidates.first { $0.path == fixture.cache })
+  #expect(exact.defaultSelected == complete)
+  if !complete { #expect(exact.reason == .registrationUnavailable) }
+  let enriched = await service.review(for: app, context: service.makeContext())
+  let final = try #require(enriched.candidates.first { $0.path == fixture.cache })
+  #expect(final.defaultSelected == complete)
+  if !complete { #expect(final.reason == .registrationUnavailable) }
+}
+
+@Test(
+  "Unreadable matching application entries veto only the plausible owner's exact selection", arguments: [false, true])
+func unreadableApplicationEntryIsPlausibleCopy(matching: Bool) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil },
+    registeredByID: { _ in
+      ApplicationRegistrationObservation(paths: [], complete: true)
+    })
+  let app = try #require(service.application(at: fixture.app))
+  let unreadable = fixture.home + "/Unreadable/" + (matching ? "Fixture.APP" : "Unrelated.app")
+  var listing = service.installedListing()
+  // The directory entry was enumerated, but its metadata could not be read.
+  listing.ownershipIssues.append(ApplicationOwnershipIssue(path: unreadable, code: EACCES))
+  let observed = listing
+  let review = await service.initialReview(for: app, listing: { observed }, progress: nil)
+  let exact = try #require(review.candidates.first { $0.path == fixture.cache })
+  #expect(exact.defaultSelected == !matching)
+  #expect(exact.refusalEvidence.contains { $0.ownerPaths == [unreadable] } == matching)
 }
 
 @Test(
@@ -673,6 +718,251 @@ func partialLiveCoveragePreservesPositiveSharing() async throws {
   let candidate = try #require((await service.discover()).first { $0.path == fixture.cache })
   #expect(candidate.classification == .shared && !candidate.defaultSelected)
   #expect(candidate.refusalEvidence.contains { Set($0.ownerPaths) == [fixture.app, other] })
+  let app = try #require(service.application(at: fixture.app))
+  let initial = await service.initialReview(for: app, progress: nil)
+  #expect(initial.candidates.first { $0.path == fixture.cache }?.defaultSelected == true)
+  let enriched = await service.review(for: app, context: service.makeContext())
+  let shared = try #require(enriched.candidates.first { $0.path == fixture.cache })
+  #expect(shared.classification == .shared && !shared.defaultSelected)
+  #expect(shared.refusalEvidence.contains { Set($0.ownerPaths) == [fixture.app, other] })
+  let scoped = await service.review(for: app, context: service.makeContext(), scopedOnly: true)
+  #expect(scoped.candidates.first { $0.path == fixture.cache }?.classification == .shared)
+}
+
+@Test("Selected claim enrichment signs no unrelated package and retains strict group proof")
+func scopedEnrichmentDoesNotSignUnrelatedPackages() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let other = fixture.appRoot + "/Other.app"
+  try FileManager.default.copyItem(atPath: fixture.app, toPath: other)
+  try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": "qa.lighten.unrelated", "CFBundleExecutable": "fixture"],
+    format: .xml, options: 0
+  ).write(to: URL(fileURLWithPath: other + "/Contents/Info.plist"))
+  let group = fixture.home + "/Library/Group Containers/group.qa.lighten.scoped"
+  let team = fixture.home + "/Library/Caches/TEAM." + fixture.bundleID
+  for path in [group, team] {
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+  }
+  let signed = Mutex<[String]>([])
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { path in
+      signed.withLock { $0.append(path) }
+      return ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: ["group.qa.lighten.scoped"])
+    }, packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) },
+    liveData: { ApplicationLiveDataObservation(records: [], complete: true) })
+  let app = try #require(service.application(at: fixture.app))
+  let context = service.makeContext()
+  for _ in 0..<2 {
+    let scoped = await service.review(for: app, context: context, scopedOnly: true)
+    #expect(scoped.ownershipPending)
+    #expect(scoped.candidates.first { $0.path == fixture.cache }?.defaultSelected == true)
+    #expect(scoped.candidates.first { $0.path == team }?.defaultSelected == true)
+    #expect(scoped.candidates.first { $0.path == group }?.defaultSelected == false)
+  }
+  #expect(signed.withLock { $0 == [fixture.app] })
+  #expect(context.observedDataClaims() == nil)
+}
+
+@Test("Changed signer identity expires an immutable context observation and a fresh context reads it again")
+func contextSignatureRefreshesChangedCodeIdentity() throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let reads = Mutex(0)
+  let cache = ApplicationSignatureCache(reader: { _ in
+    reads.withLock { $0 += 1 }
+    return ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [])
+  })
+  let context = fixture.service.makeContext()
+  #expect(context.signature(at: fixture.app, cache: cache) != nil)
+  #expect(context.signature(at: fixture.app, cache: cache) != nil)
+  #expect(reads.withLock { $0 } == 1)
+  try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": fixture.bundleID, "CFBundleShortVersionString": "updated-version"],
+    format: .xml, options: 0
+  ).write(to: URL(fileURLWithPath: fixture.app + "/Contents/Info.plist"))
+  #expect(context.signature(at: fixture.app, cache: cache) == nil)
+  #expect(reads.withLock { $0 } == 1)
+  let fresh = fixture.service.makeContext()
+  #expect(fresh.signature(at: fixture.app, cache: cache) != nil)
+  #expect(reads.withLock { $0 } == 2)
+}
+
+@Test("Initial main-bundle native cache claims do not wait for signing or process evidence")
+func initialNativeCacheClaimUsesCheapMainMetadata() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let parent = fixture.home + "/Native/C"
+  let cache = parent + "/" + fixture.bundleID
+  try FileManager.default.createDirectory(atPath: cache, withIntermediateDirectories: true)
+  let heavyReads = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in
+      heavyReads.withLock { $0 += 1 }
+      return nil
+    },
+    liveData: {
+      heavyReads.withLock { $0 += 1 }
+      return ApplicationLiveDataObservation(records: [], complete: false)
+    }, referenceDirectories: .init(cache: parent, temporary: nil))
+  let app = try #require(service.application(at: fixture.app))
+  let review = await service.initialReview(for: app, progress: nil)
+  let native = try #require(review.candidates.first { $0.path == cache })
+  #expect(native.defaultSelected && native.matchStrength == .strong)
+  #expect(native.evidenceKinds.contains(.bundleIdentifier))
+  #expect(heavyReads.withLock { $0 } == 0)
+}
+
+@Test("Explicit session invalidation replaces cached registration and owner observations")
+func sessionInvalidationRebuildsOwnerUniverse() async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let registered = Mutex<[String]>([])
+  let walks = Mutex(0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { _ in nil },
+    registration: { ApplicationRegistrationObservation(paths: registered.withLock { $0 }, complete: true) },
+    ownershipCollected: { walks.withLock { $0 += 1 } })
+  let session = ApplicationDiscovery(related: service).scanSession()
+  let first = try await session.context()
+  let cached = try await session.context()
+  #expect(first === cached && walks.withLock { $0 } == 1)
+  let copy = fixture.home + "/Outside/Fixture.app"
+  try FileManager.default.createDirectory(
+    atPath: (copy as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+  try FileManager.default.copyItem(atPath: fixture.app, toPath: copy)
+  registered.withLock { $0 = [copy] }
+  await session.invalidateCachedObservations()
+  let fresh = try await session.context()
+  #expect(first !== fresh && walks.withLock { $0 } == 2)
+  #expect(fresh.inventory.applications.contains { $0.path == copy })
+  await session.cancel()
+}
+
+private actor ApplicationEvidenceManualDeadline {
+  private var signalled = false
+  private var requests = 0
+  private var pending: [UUID: AsyncStream<Void>.Continuation] = [:]
+  private var arrivals: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+
+  func wait() async {
+    guard !signalled else { return }
+    let id = UUID()
+    // Cancellation ends only this waiter's stream, never a later deadline.
+    let waiter = AsyncStream<Void>.makeStream()
+    pending[id] = waiter.continuation
+    requests += 1
+    let ready = arrivals.filter { $0.count <= requests }
+    arrivals.removeAll { $0.count <= requests }
+    for arrival in ready { arrival.continuation.resume() }
+    var iterator = waiter.stream.makeAsyncIterator()
+    _ = await iterator.next()
+    pending.removeValue(forKey: id)
+  }
+
+  func waitForRequests(_ count: Int) async {
+    guard requests < count else { return }
+    await withCheckedContinuation { arrivals.append((count, $0)) }
+  }
+
+  func signal() {
+    signalled = true
+    for continuation in pending.values {
+      continuation.yield(())
+      continuation.finish()
+    }
+  }
+}
+
+@Test(
+  "Global evidence survives selected cancellation and stalled work has a terminal deadline", arguments: [false, true])
+func selectedGlobalEvidenceDeadlineIsTerminal(cancelSelection: Bool) async throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let other = fixture.appRoot + "/Other.app"
+  try FileManager.default.copyItem(atPath: fixture.app, toPath: other)
+  try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": "qa.lighten.other", "CFBundleExecutable": "fixture"],
+    format: .xml, options: 0
+  ).write(to: URL(fileURLWithPath: other + "/Contents/Info.plist"))
+  try FileManager.default.createDirectory(
+    atPath: fixture.home + "/Library/Application Support/example", withIntermediateDirectories: true)
+  let stalled = AsyncStream<Void>.makeStream()
+  let deadline = ApplicationEvidenceManualDeadline()
+  let release = DispatchSemaphore(value: 0)
+  defer { release.signal() }
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    signingMetadata: { path in
+      if path == other {
+        stalled.continuation.yield(())
+        _ = release.wait(timeout: .now() + 5)
+      }
+      return ApplicationSigningMetadata(teamID: "TEAM", groupIdentifiers: [])
+    }, liveData: { ApplicationLiveDataObservation(records: [], complete: true) })
+  let session = ApplicationScanSession(
+    related: service, uptime: { 0 },
+    evidenceTimeout: { await deadline.wait() })
+  _ = try await session.context()
+  var blocked = stalled.stream.makeAsyncIterator()
+  _ = await blocked.next()
+  let updates = AsyncStream<ApplicationRelatedReview>.makeStream()
+  let requestID = UUID()
+  _ = try await session.relatedReview(path: fixture.app, requestID: requestID) { updates.continuation.yield($0) }
+  var iterator = updates.stream.makeAsyncIterator()
+  var scoped: ApplicationRelatedReview?
+  while let review = await iterator.next() {
+    if review.globalEvidencePending {
+      scoped = review
+      break
+    }
+  }
+  let available = try #require(scoped)
+  #expect(available.candidates.first { $0.path == fixture.cache }?.defaultSelected == true)
+  await deadline.waitForRequests(1)
+  if cancelSelection {
+    await session.cancelSelectedReview(requestID: requestID)
+    _ = try await session.relatedReview(path: fixture.app) { updates.continuation.yield($0) }
+    await deadline.waitForRequests(2)
+    release.signal()
+    var completed: ApplicationRelatedReview?
+    while let review = await iterator.next() {
+      if review.phase == .enriched && !review.globalEvidencePending {
+        completed = review
+        break
+      }
+    }
+    let fresh = try #require(completed)
+    #expect(!fresh.globalEvidenceUnavailable && !fresh.ownershipPending)
+    await session.cancel()
+    return
+  }
+  await deadline.signal()
+  var terminal: ApplicationRelatedReview?
+  while let review = await iterator.next() {
+    if review.globalEvidenceUnavailable {
+      terminal = review
+      break
+    }
+  }
+  let finished = try #require(terminal)
+  #expect(!finished.globalEvidencePending && finished.ownershipPending)
+  #expect(finished.candidates.first { $0.path == fixture.cache }?.defaultSelected == true)
+  _ = try await session.relatedReview(path: fixture.app) { updates.continuation.yield($0) }
+  var repeatedTerminal: ApplicationRelatedReview?
+  while let review = await iterator.next() {
+    if review.globalEvidenceUnavailable {
+      repeatedTerminal = review
+      break
+    }
+  }
+  let repeated = try #require(repeatedTerminal)
+  #expect(!repeated.globalEvidencePending && repeated.ownershipPending)
+  release.signal()
+  await session.cancel()
 }
 
 @Test("Native session reports expose exact row selection before stalled sizes and reuse one ownership walk")

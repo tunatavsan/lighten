@@ -25,6 +25,8 @@ struct SpaceView: View {
   @State private var mapDirection: CGFloat = 1
   @State private var compactSurface: CompactSurface = .map
   @State private var showingCompactInspector = false
+  @State private var showingCompletenessDetails = false
+  @State private var searchText = ""
 
   private var navigationAnimation: Animation? {
     reduceMotion ? nil : .easeInOut(duration: 0.23)
@@ -46,58 +48,87 @@ struct SpaceView: View {
 
   private var visibleItems: [SpaceItem] {
     guard let group = store.group else { return [] }
-    return store.showingOther ? group.other : group.items
+    let items = store.showingOther ? group.other : group.items
+    let term = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    return term.isEmpty
+      ? items : items.filter { $0.name.localizedStandardContains(term) || $0.path.localizedStandardContains(term) }
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      header
-      Divider()
-      if store.current != nil {
-        breadcrumb
+    ToolScreen(String(localized: "Space")) {
+      VStack(spacing: 0) {
+        header
         Divider()
-        GeometryReader { geometry in
-          let sidePaneWidth: CGFloat = 310
-          let dividerWidth: CGFloat = 1
-          Group {
-            if geometry.size.width < 760 {
-              compactPane
-            } else {
-              HStack(alignment: .top, spacing: 0) {
-                mapColumn.frame(
-                  width: max(0, geometry.size.width - sidePaneWidth - dividerWidth),
-                  height: max(0, geometry.size.height),
-                  alignment: .topLeading)
-                Divider().frame(width: dividerWidth)
-                sidePane.frame(
-                  width: sidePaneWidth, height: max(0, geometry.size.height),
+        if store.current != nil {
+          breadcrumb
+          Divider()
+          GeometryReader { geometry in
+            let sidePaneWidth: CGFloat = 310
+            let dividerWidth: CGFloat = 1
+            Group {
+              if geometry.size.width < 760 {
+                compactPane
+              } else {
+                HStack(alignment: .top, spacing: 0) {
+                  mapColumn.frame(
+                    width: max(0, geometry.size.width - sidePaneWidth - dividerWidth),
+                    height: max(0, geometry.size.height),
+                    alignment: .topLeading)
+                  Divider().frame(width: dividerWidth)
+                  sidePane.frame(
+                    width: sidePaneWidth, height: max(0, geometry.size.height),
+                    alignment: .topLeading)
+                }
+                .frame(
+                  width: max(0, geometry.size.width), height: max(0, geometry.size.height),
                   alignment: .topLeading)
               }
-              .frame(
-                width: max(0, geometry.size.width), height: max(0, geometry.size.height),
-                alignment: .topLeading)
             }
+            .frame(
+              width: max(0, geometry.size.width), height: max(0, geometry.size.height),
+              alignment: .topLeading
+            )
+            .clipped()
           }
-          .frame(
-            width: max(0, geometry.size.width), height: max(0, geometry.size.height),
-            alignment: .topLeading
+        } else {
+          ContentUnavailableView(
+            String(localized: "Choose a folder and scan"),
+            systemImage: "square.grid.2x2"
           )
-          .clipped()
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-      } else {
-        ContentUnavailableView(
-          String(localized: "Choose a folder and scan"),
-          systemImage: "square.grid.2x2"
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Divider()
+        basketDock
       }
-      Divider()
-      basketDock
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    } toolbar: {
+      Menu {
+        Button(String(localized: "Choose folder")) { store.chooseFolder() }
+        Divider()
+        ForEach(store.volumes, id: \.path) { volume in
+          Button(volume.lastPathComponent.isEmpty ? "/" : volume.lastPathComponent) { store.selectRoot(volume) }
+        }
+      } label: {
+        Label(String(localized: "Choose folder"), systemImage: "folder")
+      }
+      Button(store.phase == .scanning ? String(localized: "Cancel scan") : String(localized: "Scan")) {
+        if store.phase == .scanning { store.cancel() } else { store.startScan() }
+      }
+      .accessibilityIdentifier("space.scan-control")
+      if !actions.basket.isEmpty {
+        Button(String(localized: "Review removal")) {
+          Task { await actions.prepare(scanRoot: store.selectedRoot.path, runID: store.tree?.runID) }
+        }
+        .buttonStyle(.borderedProminent).disabled(actions.busy || store.isShowingCache)
+        .accessibilityIdentifier("space.review-removal")
+      }
+      Button(String(localized: "History"), action: showHistory)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background(LightenStyle.canvas)
+    .searchable(text: $searchText, prompt: String(localized: "Search items in this folder"))
+    .onChange(of: searchText) { _, text in
+      if !text.isEmpty { compactSurface = .list }
+    }
     .tint(LightenStyle.accent)
-    .navigationTitle(String(localized: "Space"))
     .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: store.displayRevision)
     .onAppear {
       store.spaceDidAppear()
@@ -118,7 +149,7 @@ struct SpaceView: View {
         Divider()
         inspector.frame(maxHeight: .infinity)
       }
-      .frame(width: 440, height: 260)
+      .frame(width: 440, height: 340)
       .background(LightenStyle.canvas)
     }
     .alert(
@@ -134,107 +165,62 @@ struct SpaceView: View {
   }
 
   private var header: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(alignment: .top, spacing: 16) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(store.selectedRoot.lastPathComponent)
-            .font(.system(size: 24, weight: .semibold))
-            .lineLimit(1)
-          HStack(spacing: 8) {
-            Text(store.selectedRoot.path)
-              .lineLimit(1).truncationMode(.middle)
-              .textSelection(.enabled)
-              .help(store.selectedRoot.path)
-              .accessibilityIdentifier("selected-folder")
-            Text(phaseLabel)
-              .foregroundStyle(store.phase == .partial ? .orange : LightenStyle.muted)
-              .fixedSize()
-          }
-          .font(.system(size: 12))
-          .foregroundStyle(LightenStyle.muted)
-        }
-        Spacer(minLength: 10)
-        Picker(
-          String(localized: "Volume"),
-          selection: Binding(
-            get: { store.selectedRoot.path },
-            set: { store.selectRoot(URL(fileURLWithPath: $0)) }
-          )
-        ) {
-          ForEach(store.volumes, id: \.path) { volume in
-            Text(volume.lastPathComponent.isEmpty ? "/" : volume.lastPathComponent)
-              .tag(volume.path)
-          }
-          if !store.volumes.contains(where: { $0.path == store.selectedRoot.path }) {
-            Text(store.selectedRoot.lastPathComponent).tag(store.selectedRoot.path)
-          }
-        }
-        .frame(width: 170)
-        Button(String(localized: "Choose folder")) { store.chooseFolder() }
-        if store.phase == .scanning {
-          Button(String(localized: "Cancel")) { store.cancel() }
-        } else {
-          Button(String(localized: "Scan")) { store.startScan() }
-            .buttonStyle(.borderedProminent)
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 8) {
+        Label(
+          store.selectedRoot.lastPathComponent.isEmpty ? "/" : store.selectedRoot.lastPathComponent,
+          systemImage: "folder"
+        )
+        .font(.headline).lineLimit(1)
+        Spacer(minLength: 8)
+        Text(phaseLabel).font(.caption).foregroundStyle(LightenStyle.muted)
+      }
+      Text(store.selectedRoot.path)
+        .font(.caption).foregroundStyle(LightenStyle.muted)
+        .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+        .help(store.selectedRoot.path).accessibilityIdentifier("selected-folder")
+      HStack(spacing: 16) {
+        metricValue(String(localized: "Volume used"), store.volumeMeasure?.usedBytes)
+        metricValue(String(localized: "Volume free"), store.volumeMeasure?.freeBytes)
+        Spacer(minLength: 0)
+        VStack(alignment: .trailing, spacing: 2) {
+          Text(String(localized: "Folder size")).font(.caption).foregroundStyle(LightenStyle.muted)
+          Text(sizeLabel(store.current?.bytes(store.metric)))
+            .font(.headline).monospacedDigit()
+            .contentTransition(reduceMotion ? .identity : .numericText())
         }
       }
-      HStack(alignment: .center, spacing: 18) {
-        VStack(alignment: .leading, spacing: 4) {
-          HStack(spacing: 14) {
-            metricValue(String(localized: "Volume used"), store.volumeMeasure?.usedBytes)
-            metricValue(String(localized: "Volume free"), store.volumeMeasure?.freeBytes)
-            Image(systemName: "info.circle")
-              .foregroundStyle(LightenStyle.muted)
-              .help(
-                String(
-                  localized: "Volume use includes snapshots and shared storage; scan covers only the selected folder.")
-              )
-              .accessibilityLabel(
-                String(
-                  localized: "Volume use includes snapshots and shared storage; scan covers only the selected folder."))
-          }
-          if let total = store.volumeMeasure?.totalBytes,
-            let used = store.volumeMeasure?.usedBytes, total > 0, used >= 0
-          {
-            ProgressView(value: min(1, Double(used) / Double(total)))
-              .tint(LightenStyle.accent)
-              .frame(maxWidth: 270)
-              .accessibilityLabel(String(localized: "Volume used"))
+      Text(
+        String(
+          localized:
+            "Volume used includes snapshots and shared storage. Folder size includes only the items measured here.")
+      )
+      .font(.caption).foregroundStyle(LightenStyle.muted)
+      .fixedSize(horizontal: false, vertical: true)
+      if store.phase == .scanning {
+        ToolScanProgress(
+          status: String(localized: "Measuring this folder"), count: store.progress?.itemsSeen ?? 0,
+          bytes: store.current?.bytes(store.metric).knownLowerBound)
+      } else if case .error(let detail) = store.phase {
+        PartialResultNotice(reason: detail)
+      } else if store.phase == .partial || store.phase == .cancelled {
+        PartialResultNotice(
+          reason: store.phase == .cancelled
+            ? String(localized: "The scan was cancelled. Sizes shown may be incomplete.")
+            : String(localized: "Some items could not be measured. Folder sizes show at least the space found."))
+        DisclosureGroup(String(localized: "Details"), isExpanded: $showingCompletenessDetails) {
+          if let root = store.rootSummary, let reason = SpaceText.state(root) {
+            Text(reason).textSelection(.enabled)
           }
         }
-        Spacer(minLength: 10)
-        VStack(alignment: .trailing, spacing: 2) {
-          Text(String(localized: "Selected scan"))
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          Text(sizeLabel(store.current?.bytes(store.metric)))
-            .font(.system(size: 16, weight: .semibold))
-            .monospacedDigit()
-            .contentTransition(reduceMotion ? .identity : .numericText())
-            .animation(navigationAnimation, value: store.metric)
-        }
+        .font(.caption).foregroundStyle(LightenStyle.muted)
       }
       if let cachedAt = store.cachedAt {
-        HStack(spacing: 8) {
-          if store.phase == .scanning { ProgressView().controlSize(.small) }
-          Text(
-            "\(String(localized: "Last scan")): \(cachedAt.formatted(date: .abbreviated, time: .shortened))"
-              + (store.phase == .scanning ? " — \(String(localized: "refreshing"))" : ""))
-        }
-        .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-      } else if store.phase == .scanning {
-        HStack(spacing: 8) {
-          ProgressView().controlSize(.small)
-          Text("\((store.progress?.itemsSeen ?? 0).formatted()) \(String(localized: "items scanned"))")
-            .monospacedDigit()
-          Text(String(localized: "Sizes grow as folders are measured"))
-            .lineLimit(1)
-        }
-        .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-      } else if case .error(let detail) = store.phase {
-        Text(detail).font(.system(size: 12)).foregroundStyle(.red).lineLimit(2)
+        Text("\(String(localized: "Last scan")): \(cachedAt.formatted(date: .abbreviated, time: .shortened))")
+          .font(.caption).foregroundStyle(LightenStyle.muted)
       }
     }
-    .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 14)
+    .padding(.vertical, 12)
   }
 
   private func metricValue(_ title: String, _ value: Int64?) -> some View {
@@ -249,7 +235,7 @@ struct SpaceView: View {
     case .idle: String(localized: "Ready")
     case .scanning: String(localized: "Scanning")
     case .cancelled: String(localized: "Cancelled")
-    case .partial: String(localized: "Partial scan")
+    case .partial: String(localized: "Incomplete sizes")
     case .complete: String(localized: "Scan complete")
     case .error: String(localized: "Scan failed")
     }
@@ -280,14 +266,14 @@ struct SpaceView: View {
       }
       .scrollIndicators(.hidden)
       Picker(String(localized: "Size metric"), selection: $store.metric) {
-        Text(String(localized: "Logical")).tag(SpaceMetric.logical)
-        Text(String(localized: "Allocated")).tag(SpaceMetric.allocated)
+        Text(String(localized: "File size")).tag(SpaceMetric.logical)
+        Text(String(localized: "On disk")).tag(SpaceMetric.allocated)
       }
       .pickerStyle(.segmented)
       .labelsHidden()
       .frame(width: 220)
     }
-    .padding(.horizontal, 20).padding(.vertical, 9)
+    .padding(.vertical, 9)
 
   }
 
@@ -339,11 +325,20 @@ struct SpaceView: View {
             }
           }
         }
-        HStack(spacing: 14) {
-          Label(String(localized: "Folders"), systemImage: "folder")
-          Label(String(localized: "Files"), systemImage: "doc")
-          Label(String(localized: "Hatched: known minimum"), systemImage: "line.3.horizontal.decrease")
-          Spacer(minLength: 0)
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 14) {
+            Label(String(localized: "Folders"), systemImage: "folder")
+            Label(String(localized: "Files"), systemImage: "doc")
+            Label(String(localized: "Striped: size is incomplete"), systemImage: "line.3.horizontal.decrease")
+          }
+          .fixedSize(horizontal: true, vertical: false)
+          VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 14) {
+              Label(String(localized: "Folders"), systemImage: "folder")
+              Label(String(localized: "Files"), systemImage: "doc")
+            }
+            Label(String(localized: "Striped: size is incomplete"), systemImage: "line.3.horizontal.decrease")
+          }
         }
         .foregroundStyle(LightenStyle.muted)
       }
@@ -487,6 +482,7 @@ struct SpaceView: View {
             .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
             .monospacedDigit().fixedSize()
           Button(String(localized: "Details")) { showingCompactInspector = true }
+            .accessibilityIdentifier("space.details")
         }
       }
       .padding(.horizontal, 12).padding(.vertical, 8)
@@ -581,8 +577,8 @@ struct SpaceView: View {
               .lineLimit(2).truncationMode(.middle).textSelection(.enabled)
               .help(item.path)
             HStack(spacing: 18) {
-              inspectorMetric(String(localized: "Logical"), item.logical)
-              inspectorMetric(String(localized: "Allocated"), item.allocated)
+              inspectorMetric(String(localized: "File size"), item.logical)
+              inspectorMetric(String(localized: "On disk"), item.allocated)
             }
             if store.isShowingCache {
               Text(String(localized: "Refreshing previous scan. Actions become available after checking changes."))
@@ -651,12 +647,7 @@ struct SpaceView: View {
         if !actions.basket.isEmpty {
           Button(String(localized: "Clear basket")) { actions.clearBasket() }
             .disabled(actions.busy)
-          Button(String(localized: "Review removal")) {
-            Task { await actions.prepare(scanRoot: store.selectedRoot.path, runID: store.tree?.runID) }
-          }
-          .buttonStyle(.borderedProminent).disabled(actions.busy || store.isShowingCache)
         }
-        Button(String(localized: "History"), action: showHistory)
       }
       if !actions.basket.isEmpty {
         ScrollView(.horizontal) {
@@ -697,7 +688,7 @@ struct SpaceView: View {
           .fixedSize(horizontal: false, vertical: true)
       }
     }
-    .padding(.horizontal, 20).padding(.vertical, 10)
+    .padding(.vertical, 10)
     .background(LightenStyle.canvas)
     .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: actions.result?.planID)
   }
@@ -715,7 +706,7 @@ func sizeLabel(_ bytes: ByteAggregate?) -> String {
   guard let bytes else { return String(localized: "Unknown") }
   if let total = bytes.completeTotal { return format(total) }
   if bytes.knownLowerBound > 0 {
-    return "\(String(localized: "Known minimum")) \(format(bytes.knownLowerBound))"
+    return "\(String(localized: "At least")) \(format(bytes.knownLowerBound))"
   }
   return String(localized: "Unknown")
 }

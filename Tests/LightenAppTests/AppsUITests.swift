@@ -1,9 +1,9 @@
 import AppKit
 import Foundation
-import LightenKit
 import Testing
 
 @testable import Lighten
+@testable import LightenKit
 
 @Test("Related-list drawing rejects partial row waves and counts only the clipped detail viewport")
 func relatedViewportRequiresCompleteGeometry() {
@@ -265,4 +265,29 @@ func applicationViewportTracksViewportChanges() {
   #expect(store.selectedAppPaths == [paths[0], paths[4]])
   store.selectApp(paths[1], actions: actions)
   #expect(store.selectedAppPaths == [paths[1]])
+}
+
+@Test("App data labels describe known files and folders without guessing from a name", arguments: [false, true])
+@MainActor func appDataCopyUsesObservedType(turkish: Bool) {
+  func candidate(_ kind: EntryKind?) -> RelatedDataCandidate {
+    var value = RelatedDataCandidate(
+      id: "/fixture/settings.plist", path: "/fixture/settings.plist",
+      classification: .installed, reason: .installed, snapshot: nil, receipt: nil)
+    if let kind {
+      value.displayRootIdentity = FileIdentity(
+        device: 1, inode: 2, changeSeconds: 0, changeNanoseconds: 0,
+        logicalBytes: 1, allocatedBytes: 1, linkCount: 1, flags: 0, kind: kind)
+    }
+    return value
+  }
+  let file = AppsSurfaceText.associatedData(candidate(.regular), turkish: turkish)
+  let folder = AppsSurfaceText.associatedData(candidate(.directory), turkish: turkish)
+  let unknown = AppsSurfaceText.associatedData(candidate(nil), turkish: turkish)
+  #expect(file.contains(turkish ? "dosya" : "file"))
+  #expect(!file.contains(turkish ? "klasör" : "folder"))
+  #expect(folder.contains(turkish ? "klasör" : "folder"))
+  #expect(unknown.contains(turkish ? "öğe" : "item"))
+  #expect(!unknown.contains(turkish ? "dosya" : "file"))
+  let sharedCopy = FailureText.presentation("associatedData", turkish: turkish).text
+  #expect(!sharedCopy.contains(turkish ? "klasör" : "folder"))
 }

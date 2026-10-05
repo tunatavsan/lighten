@@ -417,6 +417,21 @@ enum FailureText {
         "The chosen item is not a folder. Choose a folder to scan.",
         "Seçilen öğe bir klasör değil. Taramak için bir klasör seçin."
       )
+    case "unreadable":
+      copy = (
+        "Lighten could not read this item. Check its access permissions in Finder.",
+        "Lighten bu öğeyi okuyamadı. Finder’da erişim izinlerini kontrol edin."
+      )
+    case "outOfScope":
+      copy = (
+        "This item is in a location excluded from duplicate removal. Review its location in Finder.",
+        "Bu öğenin konumu kopya kaldırma işleminin kapsamı dışında. Konumunu Finder’da inceleyin."
+      )
+    case "protectedArea":
+      copy = (
+        "This item is in a protected location and cannot be removed here. Inspect it in Finder.",
+        "Bu öğe korunan bir konumda ve buradan kaldırılamaz. Finder’da inceleyin."
+      )
     case "unavailable", "childUnavailable", "invalidPath":
       copy = (
         "The location is missing or unreadable. Inspect it in Finder.",
@@ -484,8 +499,8 @@ enum FailureText {
       )
     case "associatedData":
       copy = (
-        "This folder is associated with the app. Review it separately before moving it to Trash.",
-        "Bu klasör uygulamayla ilişkilidir. Çöp’e taşımadan önce ayrıca inceleyin."
+        "This item is app data. Review it before removal.",
+        "Bu öğe uygulama verisidir. Kaldırmadan önce inceleyin."
       )
     case "removedOwner":
       copy = (

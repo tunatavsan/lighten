@@ -1547,6 +1547,8 @@ private func appsBasketPlan(_ paths: [String]) -> ActionPlan {
       openFilesComplete: false), request: 0)
   #expect(await appsEventually { store.selectedReport?.related.count == 4 })
   #expect(store.selectedDataPaths == [manual.path, late.path])
+  #expect(store.lateSelectedDataCount >= 1)
+  #expect(store.lateSelectedDataNote?.contains("more files were found and selected") == true)
   #expect(!store.selectedDataPaths.contains(exact.path) && !store.selectedDataPaths.contains(weak.path))
   #expect(
     store.hasCoverageIssue
@@ -1557,6 +1559,173 @@ private func appsBasketPlan(_ paths: [String]) -> ActionPlan {
   await store.waitForSelectedReview()
   continuation.finish()
   await store.waitForScan()
+}
+
+@Test(
+  "Shared evidence invalidates preparing and open automatic reviews, while explicit choices survive",
+  arguments: [false, true], [false, true])
+@MainActor func appsAutomaticDowngradeInvalidatesReview(alreadyPresented: Bool, manual: Bool) async throws {
+  let path = "/Applications/LightenQA-review-downgrade.app"
+  let candidate = selectedAppCandidate("/fixture/LightenQA-review-downgrade-data")
+  var report = selectedAppReport(path, bundleID: "qa.lighten.review.downgrade")
+  report.related = [candidate]
+  let planning = AppsPlanGate()
+  let plan = appsBasketPlan([path, candidate.path])
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    basketPlanBuilder: { _, _ in .init(plan: try? await planning.next(), rejections: []) },
+    preferences: try appsAutomaticPreferences(), running: ClosedAppSource(), events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  store.reports = [report]
+  store.selectApp(path, actions: actions)
+  if manual {
+    store.toggleData(candidate.path, actions: actions)
+    store.toggleData(candidate.path, actions: actions)
+  }
+  #expect(store.isAutomaticallySelected(candidate, app: report) == !manual)
+  let preparation = Task { await store.prepareBasket(actions: actions) }
+  await planning.waitForRequest(1)
+  if alreadyPresented {
+    await planning.finish(.success(plan))
+    await preparation.value
+    try #require(actions.pending?.plan == plan)
+  }
+  let shared = RelatedDataCandidate(
+    id: candidate.id, path: candidate.path, classification: .shared, reason: .sharedInstalledData,
+    snapshot: candidate.snapshot, receipt: nil, evidenceKinds: [.bundleIdentifier])
+  continuation.yield(.related(path: path, candidates: [shared], ownershipPending: false))
+  #expect(await appsEventually { store.selectedReport?.related.first?.classification == .shared })
+  if !alreadyPresented {
+    await planning.finish(.success(plan))
+    await preparation.value
+  }
+  if manual {
+    #expect(store.selectedDataPaths == [candidate.path] && actions.pending?.plan == plan)
+    #expect(store.message == nil)
+  } else {
+    #expect(store.selectedDataPaths.isEmpty && actions.pending == nil && !store.preparing)
+    #expect(store.message?.contains("automatic selection evidence changed") == true)
+    #expect(store.message?.contains(candidate.path) == true)
+  }
+  continuation.finish()
+  await store.waitForScan()
+}
+
+@Test("Late strong rows are visibly counted before review and remain unselected after review closes")
+@MainActor func appsLateSelectionsAreVisibleAndFrozenAfterReview() async throws {
+  let path = "/Applications/LightenQA-late-selection.app"
+  let first = selectedAppCandidate("/fixture/LightenQA-late-selection-first")
+  let second = selectedAppCandidate("/fixture/LightenQA-late-selection-second")
+  let afterReview = selectedAppCandidate("/fixture/LightenQA-late-selection-after-review")
+  var report = selectedAppReport(path, bundleID: "qa.lighten.late.selection")
+  report.related = [first]
+  let plan = appsBasketPlan([path, first.path, second.path])
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(), basketPlanBuilder: { _, _ in .init(plan: plan, rejections: []) },
+    preferences: try appsAutomaticPreferences(), running: ClosedAppSource(), events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  store.reports = [report]
+  store.selectApp(path, actions: actions)
+  #expect(store.lateSelectedDataNote == nil)
+  continuation.yield(.related(path: path, candidates: [first, second], ownershipPending: false))
+  #expect(await appsEventually { store.selectedDataPaths == [first.path, second.path] })
+  #expect(store.lateSelectedDataCount == 1 && store.lateSelectedDataNote != nil)
+  await store.prepareBasket(actions: actions)
+  try #require(actions.pending?.plan == plan)
+  continuation.yield(.related(path: path, candidates: [first, second, afterReview], ownershipPending: false))
+  #expect(await appsEventually { store.selectedReport?.related.count == 3 })
+  #expect(store.selectedDataPaths == [first.path, second.path] && store.lateSelectedDataCount == 1)
+  store.toggleData(second.path, actions: actions)
+  #expect(actions.pending == nil)
+  continuation.yield(.related(path: path, candidates: [first, second, afterReview], ownershipPending: false))
+  await Task.yield()
+  store.togglePackage(actions: actions)
+  store.togglePackage(actions: actions)
+  #expect(!store.selectedDataPaths.contains(afterReview.path))
+  store.toggleData(afterReview.path, actions: actions)
+  #expect(store.selectedDataPaths.contains(afterReview.path))
+  #expect(!store.isAutomaticallySelected(afterReview, app: report))
+  continuation.finish()
+  await store.waitForScan()
+}
+
+@Test("Scoped selection keeps global checking visible and failed completion supplies a named terminal note")
+@MainActor func appsScopedEvidenceRemainsPendingUntilTerminalReview() async throws {
+  let path = "/Applications/LightenQA-scoped-pending.app"
+  let app = InstalledApplication(bundleID: "qa.lighten.scoped.pending", path: path, version: nil)
+  let candidate = selectedAppCandidate("/fixture/LightenQA-scoped-pending-data")
+  let reviews = SelectedAppReviewGate()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    selectedReview: { path, progress in try await reviews.review(path: path, progress: progress) },
+    preferences: try appsAutomaticPreferences(), running: ClosedAppSource())
+  store.reports = [selectedAppReport(path, bundleID: app.bundleID)]
+  store.selectApp(path, actions: ActionStore())
+  await reviews.waitForRequests(1)
+  await reviews.publish(
+    ApplicationRelatedReview(
+      application: app, candidates: [candidate], phase: .enriched, globalEvidencePending: true), request: 0)
+  #expect(await appsEventually { store.selectedDataPaths == [candidate.path] && store.selectedEvidencePending })
+  #expect(store.ownershipPendingPaths.contains(path) && store.selectedEnrichedListDrawnAt == nil)
+  await reviews.finish(
+    ApplicationRelatedReview(
+      application: app, candidates: [candidate], phase: .enriched, globalEvidenceUnavailable: true), request: 0)
+  await store.waitForSelectedReview()
+  #expect(!store.selectedEvidencePending && store.ownershipPendingPaths.contains(path))
+  #expect(store.message?.contains("ownership checks could not finish") == true)
+}
+
+@Test("Removal and restoration restart surviving selected evidence after observation invalidation")
+@MainActor func appsDisplayChangesRestartSelectedEvidence() async throws {
+  let path = "/Applications/LightenQA-observation-refresh.app"
+  let app = InstalledApplication(bundleID: "qa.lighten.observation.refresh", path: path, version: nil)
+  let candidate = selectedAppCandidate("/fixture/LightenQA-observation-refresh-data")
+  let reviews = SelectedAppReviewGate()
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  defer { continuation.finish() }
+  let session = ApplicationDiscovery(
+    related: RelatedDataService(homeDirectory: "/fixture", applicationRoots: [], writeVerifiedReceipts: false)
+  ).scanSession()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    selectedReview: { path, progress in try await reviews.review(path: path, progress: progress) },
+    preferences: try appsAutomaticPreferences(), running: ClosedAppSource(), events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  continuation.yield(.session(session))
+  continuation.yield(
+    .inventory(
+      BundleInventory(applications: [app], unidentifiedPaths: [], complete: true, observedAt: Date()),
+      [selectedAppReport(path, bundleID: app.bundleID)]))
+  #expect(await appsEventually { store.reports.count == 1 })
+  store.selectApp(path, actions: actions)
+  await reviews.waitForRequests(1)
+  await reviews.finish(
+    ApplicationRelatedReview(application: app, candidates: [candidate], ownershipPending: false, phase: .enriched),
+    request: 0)
+  await store.waitForSelectedReview()
+  let item = ActionDisplayItem(
+    planID: UUID(), itemID: UUID(), path: candidate.path, identity: nil, size: .unknown,
+    label: "App data", returnedTrashPath: nil)
+  store.applyDisplayChange(ActionDisplayChange(kind: .applied, items: [item]))
+  await reviews.waitForRequests(2)
+  #expect(store.selectedEvidencePending && store.selectedPath == path)
+  await reviews.finish(
+    ApplicationRelatedReview(application: app, candidates: [], ownershipPending: false, phase: .enriched), request: 1)
+  await store.waitForSelectedReview()
+  #expect(!store.selectedEvidencePending && store.selectedReport?.related.isEmpty == true)
+  store.applyDisplayChange(ActionDisplayChange(kind: .restored, items: [item]))
+  await reviews.waitForRequests(3)
+  await reviews.finish(
+    ApplicationRelatedReview(application: app, candidates: [candidate], ownershipPending: false, phase: .enriched),
+    request: 2)
+  await store.waitForSelectedReview()
+  #expect(!store.selectedEvidencePending && store.selectedReport?.related.map(\.path) == [candidate.path])
+  store.cancelScan()
 }
 
 @Test("Proof downgrades remove automatic choices while preserving explicit choices and deselections")
@@ -1741,8 +1910,8 @@ private func appsBasketPlan(_ paths: [String]) -> ActionPlan {
   await store.waitForScan()
 }
 
-@Test("Automatic basket data retains its proof label in confirmation")
-@MainActor func appsBasketAutomaticChoiceShowsProof() async throws {
+@Test("Confirmation distinguishes automatic proof from explicit selection", arguments: [false, true])
+@MainActor func appsBasketAutomaticChoiceShowsProof(manual: Bool) async throws {
   let path = "/Applications/LightenQA-proof-label.app"
   let candidate = selectedAppCandidate("/fixture/LightenQA-proof-label-data")
   var report = selectedAppReport(path, bundleID: "qa.lighten.proof-label")
@@ -1757,12 +1926,41 @@ private func appsBasketPlan(_ paths: [String]) -> ActionPlan {
   let actions = ActionStore()
   store.reports = [report]
   store.selectApp(path, actions: actions)
+  if manual {
+    store.toggleData(candidate.path, actions: actions)
+    store.toggleData(candidate.path, actions: actions)
+  }
   await store.prepareBasket(actions: actions)
   let summary = try #require(actions.pending?.items.first)
   #expect(summary.path == candidate.path)
-  #expect(summary.reason.contains(AppsStore.provenanceLabel(.bundleIdentifier)))
+  #expect(summary.reason.contains(AppsStore.provenanceLabel(.bundleIdentifier)) == !manual)
+  #expect(summary.reason.contains(String(localized: "Automatically selected.")) == !manual)
+  #expect(summary.reason.contains(String(localized: "Selected by you.")) == manual)
+  #expect(summary.applicationGroup?.path == path)
   #expect(
     summary.reason.contains(
       String(localized: "Selected app data. Preferences and support files may contain personal settings or documents."))
   )
+}
+
+@Test("Basket confirmation groups requested paths by app while multiply requested data stays neutral")
+@MainActor func appsBasketGroupsOnlyUniqueRequestedOwners() async throws {
+  let paths = ["/Applications/LightenQA-group-a.app", "/Applications/LightenQA-group-b.app"]
+  let shared = selectedAppCandidate("/fixture/LightenQA-group-shared")
+  var reports = paths.map { selectedAppReport($0, bundleID: "qa.lighten.group") }
+  for index in reports.indices { reports[index].related = [shared] }
+  let plan = appsBasketPlan(paths + [shared.path])
+  let store = AppsStore(
+    pictures: disabledAppsPictures(), basketPlanBuilder: { _, _ in .init(plan: plan, rejections: []) },
+    preferences: try appsAutomaticPreferences(), running: ClosedAppSource())
+  let actions = ActionStore()
+  store.reports = reports
+  store.selectApp(paths[0], actions: actions)
+  store.selectApp(paths[1], intent: .toggle, actions: actions)
+  await store.prepareBasket(actions: actions)
+  let items = try #require(actions.pending?.items)
+  for path in paths {
+    #expect(items.first { $0.path == path }?.applicationGroup?.path == path)
+  }
+  #expect(items.first { $0.path == shared.path }?.applicationGroup == nil)
 }

@@ -188,9 +188,11 @@ public struct DuplicateFileComparator: Sendable {
     guard let expected = entry.identity, expected.kind == .regular,
       expected.hasStableTrashProof, expected.flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0,
       entry.readable, entry.issues.isEmpty,
-      ProtectionPolicy.rule(for: entry.path, homeDirectory: NSHomeDirectory()) == nil,
-      discovery || (!ScanService.isPackage(entry.path) && !ScanService.isInsidePackage(entry.path)),
-      !entry.path.split(separator: "/").contains(where: { PackageNames.isPackage(String($0)) }),
+      ProtectionPolicy.rule(for: entry.path, homeDirectory: NSHomeDirectory()) == nil
+        || (discovery
+          && ProtectionPolicy.rule(for: entry.path, homeDirectory: NSHomeDirectory())?.id == "mobile-documents"),
+      !PackageNames.isPackage(atPath: entry.path),
+      !PackageNames.containsPackage(in: entry.path, isDirectory: false),
       discovery || (try? DescriptorFileSystem.volumeID(at: entry.path)) == volumeID
     else { throw DuplicateFailure.unavailable }
     let (parent, name) = try DescriptorFileSystem.openParent(of: entry.path)

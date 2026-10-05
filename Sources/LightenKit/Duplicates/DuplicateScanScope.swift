@@ -25,6 +25,23 @@ public struct DuplicateScanScope: Sendable, Equatable {
       && exclusionReason(for: path, isDirectory: false, scanRoot: scanRoot) == nil
   }
 
+  /// Library itself is only a corridor to local iCloud Drive files during a Home scan.
+  public func traversesDirectory(path: String, scanRoot: String) -> Bool {
+    if Self.components(scanRoot) == Self.components(homeDirectory),
+      Self.components(path) == Self.components(homeDirectory + "/Library")
+    {
+      return true
+    }
+    return exclusionReason(for: path, isDirectory: true, scanRoot: scanRoot) == nil
+  }
+
+  public func isLocalICloudPath(_ path: String) -> Bool {
+    guard let components = Self.components(path),
+      let cloud = Self.components(homeDirectory + "/Library/Mobile Documents")
+    else { return false }
+    return components.starts(with: cloud)
+  }
+
   public func exclusionReason(for path: String, isDirectory: Bool, scanRoot: String) -> ExclusionReason? {
     guard let components = Self.components(path), let root = Self.components(scanRoot) else {
       return .invalidPath
@@ -32,7 +49,7 @@ public struct DuplicateScanScope: Sendable, Equatable {
     guard components.starts(with: root) else { return .outsideScanRoot }
     let directories = isDirectory ? components : Array(components.dropLast())
     if let home = Self.components(homeDirectory), root == home, directories.count > root.count,
-      directories[root.count].lowercased() == "library"
+      directories[root.count].lowercased() == "library", !isLocalICloudPath(path)
     {
       return .homeLibrary
     }
@@ -52,6 +69,7 @@ public struct DuplicateScanScope: Sendable, Equatable {
       if PackageNames.isPackage(name) { return .package }
       if index >= firstScopedDirectory, name.hasPrefix(".") { return .hiddenDirectory }
     }
+    if PackageNames.containsPackage(in: path, isDirectory: isDirectory) { return .package }
     return nil
   }
 

@@ -4,6 +4,11 @@ import LightenKit
 import Observation
 import SwiftUI
 
+struct ActionApplicationGroup: Sendable, Equatable {
+  let path: String
+  let name: String
+}
+
 struct ActionItemSummary: Sendable {
   let id: UUID
   let label: String
@@ -14,10 +19,12 @@ struct ActionItemSummary: Sendable {
   let warning: ProtectiveWarning?
   let observedSize: ObservedPlanSize
   let warningPaths: [String]
+  let applicationGroup: ActionApplicationGroup?
 
   nonisolated init(
     id: UUID, label: String, path: String, reason: String, logicalBytes: Int64?, allocatedBytes: Int64?,
-    warning: ProtectiveWarning? = nil, observedSize: ObservedPlanSize? = nil, warningPaths: [String] = []
+    warning: ProtectiveWarning? = nil, observedSize: ObservedPlanSize? = nil, warningPaths: [String] = [],
+    applicationGroup: ActionApplicationGroup? = nil
   ) {
     self.id = id
     self.label = label
@@ -27,6 +34,7 @@ struct ActionItemSummary: Sendable {
     self.allocatedBytes = allocatedBytes
     self.warning = warning
     self.warningPaths = Array(warningPaths.prefix(3))
+    self.applicationGroup = applicationGroup
     self.observedSize =
       observedSize?.validated
       ?? ObservedPlanSize(
@@ -323,7 +331,8 @@ final class ActionStore {
             ? summary.warningPaths
             : item.userSelectionWarnings?.map(\.examplePath)
               ?? (summary.warning ?? ProtectiveWarning.evaluate(item, homeDirectory: planService.homeDirectory))?
-              .examplePaths(item, homeDirectory: planService.homeDirectory) ?? [])
+              .examplePaths(item, homeDirectory: planService.homeDirectory) ?? [],
+          applicationGroup: summary.applicationGroup)
       },
       permanentPlanBuilder: plan.kind == .trash ? { @MainActor in } : nil,
       rejectedItems: rejectedItems, hasRunningApplications: hasRunningApplications)

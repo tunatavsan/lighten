@@ -31,197 +31,123 @@ struct DuplicateView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      HStack(alignment: .top) {
-        VStack(alignment: .leading, spacing: 5) {
-          Text(String(localized: "Duplicates"))
-            .font(.system(size: 24, weight: .semibold))
-          Text(String(localized: "Exact local file copies in a folder you choose"))
-            .foregroundStyle(LightenStyle.muted)
+    ToolScreen(String(localized: "Duplicates")) {
+      VStack(alignment: .leading, spacing: 12) {
+        Text(String(localized: "Exact local file copies in a folder you choose"))
+          .foregroundStyle(LightenStyle.muted)
+        if let folder = store.folderPath {
+          Label(folder, systemImage: "folder")
+            .font(.callout).foregroundStyle(.secondary)
+            .lineLimit(1).truncationMode(.middle).help(folder)
         }
-        Spacer()
-        Menu(String(localized: "Scan location")) {
-          Button(String(localized: "Home")) { scanLocation(store.homeDirectory) }
-          Button(String(localized: "Desktop")) { scanLocation(store.homeDirectory + "/Desktop") }
-          Button(String(localized: "Documents")) { scanLocation(store.homeDirectory + "/Documents") }
-          Button(String(localized: "Downloads")) { scanLocation(store.homeDirectory + "/Downloads") }
-          Button(String(localized: "Pictures")) { scanLocation(store.homeDirectory + "/Pictures") }
-        }
-        .disabled(actions.busy || store.busy)
-        Button(String(localized: "Choose folder")) { chooseFolder() }
-          .disabled(actions.busy)
         if store.busy {
-          Button(String(localized: "Cancel scan")) { store.cancelScan() }
-        } else if let path = store.folderPath {
-          Button(String(localized: "Scan again")) { store.startScan(folder: path, actions: actions) }
-            .disabled(actions.busy)
+          ToolScanProgress(
+            status: store.checkingPreviousResult
+              ? String(localized: "Verifying previous copies") : String(localized: "Scanning and comparing files"),
+            count: store.scanned, bytes: store.scannedLogicalBytes)
+          Text(String.localizedStringWithFormat(String(localized: "%lld files compared"), Int64(store.compared)))
+            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            .contentTransition(reduceMotion ? .identity : .numericText())
+        } else if let date = store.picture?.observedAt ?? store.scannedAt {
+          Text(String(localized: "Last scan") + ": " + date.formatted())
+            .font(.caption).foregroundStyle(.secondary)
         }
-      }
-      .padding(.bottom, 14)
-      if let folder = store.folderPath {
-        Label(folder, systemImage: "folder")
-          .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-          .lineLimit(1).truncationMode(.middle).help(folder)
-          .padding(.bottom, 8)
-      }
-      if let date = store.picture?.observedAt ?? store.scannedAt {
-        Text(String(localized: "Last scan") + ": " + date.formatted())
-          .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-          .padding(.bottom, 8)
-      }
-      if store.picture != nil {
-        Text(String(localized: "Previous result. Selecting copies verifies these files again."))
-          .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-          .padding(.bottom, 8)
-      }
-      if store.busy || store.report != nil || store.cancelled || store.picture != nil {
-        HStack {
-          Text(
-            store.busy
-              ? (store.checkingPreviousResult
-                ? String(localized: "Verifying previous copies") : String(localized: "Scanning and comparing files"))
-              : store.needsRescan
-                ? String(localized: "Scan is out of date after this operation")
-                : store.cancelled
-                  ? String(localized: "Scan cancelled")
-                  : String(localized: "Comparison complete")
-          )
-          Spacer()
-          Text("\(store.scanned) \(String(localized: "scanned")) · \(store.compared) \(String(localized: "compared"))")
-            .monospacedDigit()
-        }
-        .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-        .padding(.bottom, 9)
-      }
-      if (store.report != nil || store.picture != nil) && !store.needsRescan {
-        HStack {
-          TextField(String(localized: "Search by name or path"), text: $searchText)
-            .textFieldStyle(.roundedBorder)
-            .accessibilityLabel(String(localized: "Search by name or path"))
-            .frame(maxWidth: 360)
-          Button(String(localized: "Clear search")) { searchText = "" }
-            .disabled(searchText.isEmpty)
-          Spacer()
-          Text(
-            "\(store.picture == nil ? groups.count : pictureGroups.count) / \(store.picture?.content.groups.count ?? store.report?.groups.count ?? 0) \(String(localized: "groups"))"
-          )
-          .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-        }
-        .padding(.bottom, 10)
-      }
-      if store.picture?.content.partial == true || store.report?.partial == true, !store.needsRescan {
-        let skipped = store.picture?.content.skippedCount ?? store.report?.skippedCount ?? 0
-        Label {
-          Text(
-            skipped > 0
-              ? "\(skipped) \(String(localized: "known files skipped")) · \(String(localized: "Some files or areas could not be verified; results are partial."))"
-              : String(localized: "Some files or areas could not be verified; results are partial.")
-          )
-        } icon: {
-          Image(systemName: "exclamationmark.triangle")
-        }
-        .font(.system(size: 12)).foregroundStyle(LightenStyle.warning)
-        .padding(.bottom, 9)
-      }
-      if let refusals = store.report?.refusals, !refusals.isEmpty {
-        DisclosureGroup {
-          ForEach(Array(refusals.enumerated()), id: \.offset) { _, refusal in
-            VStack(alignment: .leading, spacing: 2) {
-              Text(refusalLabel(refusal.reason)).foregroundStyle(LightenStyle.warning)
-              Text(refusal.path).foregroundStyle(LightenStyle.muted).textSelection(.enabled)
-                .lineLimit(2).truncationMode(.middle).help(refusal.path)
-            }
-            .font(.system(size: 11))
-          }
-        } label: {
-          Text(
-            String.localizedStringWithFormat(
-              String(localized: "%lld previous files could not be included. Details"), Int64(refusals.count))
-          )
-          .font(.system(size: 12)).foregroundStyle(LightenStyle.warning)
-        }
-        .padding(.bottom, 9)
-      }
-      selectionControls
-      Divider()
-      if store.needsRescan {
-        ContentUnavailableView(
-          String(localized: "Scan is out of date after this operation"), systemImage: "arrow.clockwise",
-          description: Text(String(localized: "Scan again to refresh duplicate groups before another action."))
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else if store.picture != nil {
-        if pictureGroups.isEmpty {
-          ContentUnavailableView(
-            searchText.isEmpty ? String(localized: "No exact copies found") : String(localized: "No matching groups"),
-            systemImage: "checkmark.circle"
-          )
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(DuplicatePictureDrawProbe(didDraw: store.pictureDidDraw).allowsHitTesting(false))
-        } else {
-          ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-              ForEach(pictureGroups) { group in
-                pictureGroupCard(group)
-                  .background(DuplicatePictureDrawProbe(didDraw: store.pictureDidDraw).allowsHitTesting(false))
-              }
-            }
-            .padding(.vertical, 12)
-          }
-        }
-      } else if store.report == nil && !store.busy {
-        ContentUnavailableView(
-          String(localized: "Choose a folder to compare"), systemImage: "doc.on.doc",
-          description: Text(String(localized: "No files are selected for removal by default."))
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else if groups.isEmpty && !store.busy {
-        ContentUnavailableView(
-          searchText.isEmpty
-            ? String(localized: "No exact copies found")
-            : String(localized: "No matching groups"), systemImage: "checkmark.circle"
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else {
+        Divider()
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 12) {
-            ForEach(groups) { group in groupCard(group) }
+            scanDetails
+            if store.needsRescan {
+              emptyState(
+                title: String(localized: "Scan is out of date after this operation"),
+                detail: String(localized: "Scan again to refresh duplicate groups before another action."))
+            } else if store.excludedRoot != nil {
+              emptyState(
+                title: String(localized: "This folder is outside duplicate scanning"),
+                detail: String(localized: "Choose another folder or review duplicate scanning settings."))
+            } else if store.picture != nil {
+              Text(String(localized: "Previous result. Selecting copies verifies these files again."))
+                .font(.caption).foregroundStyle(.secondary)
+              if pictureGroups.isEmpty {
+                emptyState(
+                  title: searchText.isEmpty
+                    ? String(localized: "No exact copies found") : String(localized: "No matching groups"),
+                  detail: String(localized: "Choose a folder or scan again to check for new copies.")
+                )
+                .background(DuplicatePictureDrawProbe(didDraw: store.pictureDidDraw).allowsHitTesting(false))
+              } else {
+                ForEach(pictureGroups) { group in
+                  pictureGroupCard(group)
+                    .background(DuplicatePictureDrawProbe(didDraw: store.pictureDidDraw).allowsHitTesting(false))
+                }
+              }
+            } else if store.report == nil && !store.busy {
+              emptyState(
+                title: String(localized: "Choose a folder to compare"),
+                detail: String(localized: "No files are selected for removal by default."))
+            } else if groups.isEmpty && !store.busy {
+              emptyState(
+                title: searchText.isEmpty
+                  ? String(localized: "No exact copies found") : String(localized: "No matching groups"),
+                detail: String(localized: "Choose a folder or scan again to check for new copies."))
+            } else {
+              ForEach(groups) { group in groupCard(group) }
+            }
+            ActionFeedbackView(actions: actions)
           }
-          .padding(.vertical, 12)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.vertical, 4)
+        }
+        .frame(minHeight: 0, maxHeight: .infinity)
+        Divider()
+        Text(
+          String.localizedStringWithFormat(
+            String(localized: "%lld groups · %lld copies · %@"), Int64(store.selectedGroupCount),
+            Int64(store.selectedCopyCount), format(store.selectedLogicalBytes))
+        )
+        .font(.callout).monospacedDigit()
+        .contentTransition(reduceMotion ? .identity : .numericText())
+        Text(String(localized: "Size of selected copies"))
+          .font(.caption).foregroundStyle(.secondary)
+        if let message = store.message ?? actions.message {
+          Text(message).font(.caption).foregroundStyle(LightenStyle.warning).textSelection(.enabled)
         }
       }
-      Divider()
-      HStack(spacing: 12) {
-        VStack(alignment: .leading, spacing: 2) {
-          Text(
-            String.localizedStringWithFormat(
-              String(localized: "%lld groups · %lld copies · %@"), Int64(store.selectedGroupCount),
-              Int64(store.selectedCopyCount), format(store.selectedLogicalBytes))
-          )
-          .font(.system(size: 13, weight: .medium)).monospacedDigit()
-          Text(String(localized: "Logical bytes to move to Trash; disk space is not yet freed."))
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        }
-        Spacer()
-        Button(String(localized: "Review selection")) {
-          Task { await store.prepare(actions: actions) }
-        }
+      .padding(.vertical, 20)
+    } toolbar: {
+      Menu(String(localized: "Scan location")) {
+        Button(String(localized: "Home")) { scanLocation(store.homeDirectory) }
+        Button(String(localized: "Desktop")) { scanLocation(store.homeDirectory + "/Desktop") }
+        Button(String(localized: "Documents")) { scanLocation(store.homeDirectory + "/Documents") }
+        Button(String(localized: "Downloads")) { scanLocation(store.homeDirectory + "/Downloads") }
+        Button(String(localized: "Pictures")) { scanLocation(store.homeDirectory + "/Pictures") }
+      }
+      .disabled(actions.busy || store.busy)
+      Button(String(localized: "Choose folder")) { chooseFolder() }
         .buttonStyle(.borderedProminent)
+        .disabled(actions.busy || store.busy)
+      if store.busy {
+        Button(String(localized: "Cancel scan")) { store.cancelScan() }
+      } else if let path = store.folderPath {
+        Button(String(localized: "Scan again")) { store.startScan(folder: path, actions: actions) }
+          .disabled(actions.busy)
+      }
+      Menu(ruleLabel) {
+        Button(String(localized: "Smart")) { keeperRule = .smart }
+        Button(String(localized: "Keep newest")) { keeperRule = .newest }
+        Button(String(localized: "Keep oldest")) { keeperRule = .oldest }
+        Button(String(localized: "Prefer a folder…")) { chooseKeeperFolder() }
+      }
+      .disabled(store.busy || actions.busy)
+      Button(String(localized: "Reduce all to one")) { store.reduceToOne(rule: keeperRule, actions: actions) }
+        .disabled(!canApplySelection).accessibilityIdentifier("duplicates.reduce-all")
+      Button(String(localized: "Clear selection")) { store.clearSelection(actions: actions) }
+        .disabled(actions.busy || store.busy || store.targets.isEmpty)
+      Button(String(localized: "Review selection")) { Task { await store.prepare(actions: actions) } }
         .disabled(
           store.picture != nil || store.report == nil || !store.tool.allowsPreparation || store.targets.isEmpty
             || actions.busy || store.needsRescan)
-      }
-      .padding(.top, 12)
-      if let message = store.message ?? actions.message {
-        Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-          .padding(.top, 5)
-      }
-      ActionFeedbackView(actions: actions).padding(.top, 5)
     }
-    .padding(20)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background(LightenStyle.canvas)
-    .navigationTitle(String(localized: "Duplicates"))
+    .searchable(text: $searchText, prompt: String(localized: "Search by name or path"))
     .sheet(item: $preview) { request in DuplicatePreviewSheet(request: request) }
     .sheet(item: $actions.pending) { presentation in
       ConfirmationView(presentation: presentation, actions: actions)
@@ -244,44 +170,89 @@ struct DuplicateView: View {
     }
   }
 
-  private var selectionControls: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 10) {
-        Text(String(localized: "Minimum size"))
-        TextField(
-          String(localized: "Minimum size"),
-          value: Binding(
-            get: { store.duplicatePreferences.minimumMegabytes },
-            set: { store.duplicatePreferences.minimumMegabytes = $0 }), format: .number
-        )
-        .textFieldStyle(.roundedBorder).frame(width: 72)
-        .disabled(store.busy)
-        Text(String(localized: "MB"))
-        Spacer()
-        Menu(ruleLabel) {
-          Button(String(localized: "Smart")) { keeperRule = .smart }
-          Button(String(localized: "Keep newest")) { keeperRule = .newest }
-          Button(String(localized: "Keep oldest")) { keeperRule = .oldest }
-          Button(String(localized: "Prefer a folder…")) { chooseKeeperFolder() }
-        }
-        .disabled(store.busy || actions.busy)
-        Button(String(localized: "Reduce all to one")) { store.reduceToOne(rule: keeperRule, actions: actions) }
-          .buttonStyle(.borderedProminent).disabled(!canApplySelection)
-          .accessibilityIdentifier("duplicates.reduce-all")
-        Button(String(localized: "Select all")) { store.selectAll(rule: keeperRule, actions: actions) }
-          .disabled(!canApplySelection)
-        Button(String(localized: "Clear selection")) { store.clearSelection(actions: actions) }
-          .disabled(actions.busy || store.busy || store.targets.isEmpty)
-      }
-      .font(.system(size: 11))
-      Text(String(localized: "Hidden folders, app packages, caches, and build outputs are excluded."))
-        .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+  private func emptyState(title: String, detail: String) -> some View {
+    VStack(spacing: 12) {
+      Image(systemName: "doc.on.doc").font(.largeTitle).foregroundStyle(.secondary)
+      Text(title).font(.headline)
+      Text(detail).font(.callout).foregroundStyle(.secondary)
+        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
     }
-    .padding(.vertical, 10)
+    .frame(maxWidth: .infinity)
+    .padding(.vertical, 32)
+  }
+
+  @ViewBuilder private var scanDetails: some View {
+    HStack {
+      Text(
+        String.localizedStringWithFormat(
+          String(localized: "Minimum file size: %@ MB"), store.duplicatePreferences.minimumMegabytes.formatted()))
+      Spacer()
+      SettingsLink { Label(String(localized: "Scanning settings"), systemImage: "gearshape") }
+    }
+    .font(.caption).foregroundStyle(.secondary)
+    if let report = store.report, !report.exclusions.isEmpty {
+      DisclosureGroup {
+        ForEach(Array(report.exclusions.enumerated()), id: \.offset) { _, exclusion in
+          VStack(alignment: .leading, spacing: 2) {
+            Text(exclusionLabel(exclusion.reason))
+            Text(exclusion.path).textSelection(.enabled)
+              .lineLimit(2).truncationMode(.middle).help(exclusion.path)
+          }
+          .font(.caption).foregroundStyle(.secondary)
+        }
+      } label: {
+        Text(
+          String.localizedStringWithFormat(
+            String(localized: "%lld items outside scope · %lld folders · %lld cloud-only files"),
+            Int64(report.exclusions.count), Int64(store.excludedDirectoryCount), Int64(store.cloudOnlyCount))
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+    if !store.needsRescan {
+      if store.report?.partial == true {
+        PartialResultNotice(
+          reason: String.localizedStringWithFormat(
+            String(localized: "%lld files could not be checked. Results are partial."), Int64(store.unreadableCount)))
+      } else if store.picture?.content.partial == true {
+        PartialResultNotice(reason: String(localized: "Previous scan was incomplete. Scan again to check these files."))
+      } else if store.cancelled {
+        PartialResultNotice(reason: String(localized: "Scan cancelled. Scan again to complete the comparison."))
+      }
+    }
+    if let refusals = store.report?.refusals, !refusals.isEmpty {
+      DisclosureGroup(String(localized: "Files needing review")) {
+        ForEach(Array(refusals.enumerated()), id: \.offset) { _, refusal in
+          VStack(alignment: .leading, spacing: 2) {
+            Text(refusalLabel(refusal.reason)).foregroundStyle(LightenStyle.warning)
+            Text(refusal.path).foregroundStyle(.secondary).textSelection(.enabled)
+              .lineLimit(2).truncationMode(.middle).help(refusal.path)
+          }.font(.caption)
+        }
+      }
+    }
+    if !store.preparationRefusals.isEmpty {
+      DisclosureGroup {
+        ForEach(Array(store.preparationRefusals.enumerated()), id: \.offset) { _, refusal in
+          VStack(alignment: .leading, spacing: 2) {
+            Text(planRefusalLabel(refusal.reason)).foregroundStyle(LightenStyle.warning)
+            Text(refusal.path).foregroundStyle(.secondary).textSelection(.enabled)
+              .lineLimit(2).truncationMode(.middle).help(refusal.path)
+          }.font(.caption)
+        }
+      } label: {
+        Text(
+          String.localizedStringWithFormat(
+            String(localized: "%lld groups could not be verified. Details"), Int64(store.preparationRefusals.count))
+        )
+        .font(.caption).foregroundStyle(LightenStyle.warning)
+      }
+    }
   }
 
   private var canApplySelection: Bool {
-    !store.busy && !actions.busy && !store.needsRescan && (store.report != nil || store.picture != nil)
+    !store.busy && !actions.busy && !store.needsRescan
+      && (store.report?.groups.isEmpty == false || store.picture?.content.groups.isEmpty == false)
   }
 
   private var ruleLabel: String {
@@ -334,7 +305,7 @@ struct DuplicateView: View {
   private func pictureGroupCard(_ group: DuplicatePicture.Group) -> some View {
     VStack(alignment: .leading, spacing: 9) {
       HStack {
-        Text("\(group.members.count) \(String(localized: "data-identical files"))")
+        Text("\(group.members.count) \(String(localized: "identical copies"))")
           .font(.system(size: 15, weight: .semibold))
         Spacer()
         Text(format(group.logicalBytes)).font(.system(size: 13, weight: .medium)).monospacedDigit()
@@ -372,14 +343,18 @@ struct DuplicateView: View {
     VStack(alignment: .leading, spacing: 9) {
       HStack {
         VStack(alignment: .leading, spacing: 2) {
-          Text("\(group.members.count) \(String(localized: "data-identical files"))")
+          Text("\(group.members.count) \(String(localized: "identical copies"))")
             .font(.system(size: 15, weight: .semibold))
           Text(
-            group.members.contains { $0.eligibility == .eligible }
-              ? String(localized: "Choose one verified copy to keep, then select others.")
-              : String(localized: "Metadata differs or is unknown. Review the copies before choosing.")
+            group.reportOnlyReason.map(reportOnlyLabel)
+              ?? String(localized: "One copy stays in each group. Choose another keeper if needed.")
           )
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+          .font(.caption).foregroundStyle(.secondary)
+          let warnings = Array(Set(group.members.flatMap(\.metadataWarnings))).sorted { $0.rawValue < $1.rawValue }
+          if !warnings.isEmpty {
+            Text(warnings.map(metadataWarningLabel).joined(separator: " · "))
+              .font(.caption).foregroundStyle(.secondary)
+          }
         }
         Spacer()
         Text(format(group.logicalBytes)).font(.system(size: 13, weight: .medium))
@@ -401,6 +376,18 @@ struct DuplicateView: View {
     let canTarget = keeperID.map { group.canTarget(member.id, keeperID: $0) } ?? false
     let selected = store.targets.contains(member.id)
     return HStack(spacing: 10) {
+      Toggle(
+        String(localized: "Select copy for Trash"),
+        isOn: Binding(
+          get: { selected },
+          set: { value in
+            if value != selected { store.toggleTarget(member.id, in: group, actions: actions) }
+          })
+      )
+      .labelsHidden().toggleStyle(.checkbox)
+      .disabled(!canTarget || isKeeper || actions.busy || store.tool.phase != .ready)
+      .accessibilityLabel(
+        String(localized: "Select copy for Trash") + " " + URL(fileURLWithPath: member.entry.path).lastPathComponent)
       Menu {
         Button(String(localized: "Keep this copy")) {
           store.chooseKeeper(member.id, for: group, actions: actions)
@@ -437,15 +424,10 @@ struct DuplicateView: View {
           Text(Date(timeIntervalSince1970: Double(seconds)), format: .dateTime.year().month().day().hour().minute())
             .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
         }
-        ForEach(Array(Set(member.metadataWarnings)).sorted { $0.rawValue < $1.rawValue }, id: \.self) { warning in
-          Text(metadataWarningLabel(warning)).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
-        }
       }
       Spacer(minLength: 8)
       Text(
-        member.eligibility == .eligible && keeperID != nil && !isKeeper && !canTarget
-          ? String(localized: "Different metadata subset · choose its keeper")
-          : label(member.eligibility)
+        isKeeper ? String(localized: "Keep") : label(member.eligibility)
       )
       .font(.system(size: 10))
       .foregroundStyle(member.eligibility == .eligible ? LightenStyle.muted : .orange)
@@ -468,7 +450,50 @@ struct DuplicateView: View {
     case .notRegular: String(localized: "File is no longer a regular file")
     case .unreadable: String(localized: "File could not be read")
     case .changed: String(localized: "File changed during verification")
-    case .noLongerDuplicate: String(localized: "No matching byte-identical copy remains")
+    case .noLongerDuplicate: String(localized: "No identical copy remains")
+    case .metadataUnknown: String(localized: "File information could not be checked")
+    case .metadataDifferent: String(localized: "Important file information differs")
+    case .protectedArea: String(localized: "Protected files are shown for review only")
+    }
+  }
+
+  private func reportOnlyLabel(_ reason: DuplicateReportOnlyReason) -> String {
+    switch reason {
+    case .protectiveMetadataDifferent:
+      String(localized: "Review only: important file information differs between copies.")
+    case .metadataUnknown: String(localized: "Review only: file information could not be checked.")
+    case .protectedArea: String(localized: "Review only: these copies are in a protected area.")
+    }
+  }
+
+  private func planRefusalLabel(_ reason: DuplicatePlanRefusal.Reason) -> String {
+    switch reason {
+    case .changed: String(localized: "File changed during verification")
+    case .unavailable: String(localized: "File or volume is unavailable")
+    case .unreadable: String(localized: "File could not be read")
+    case .outOfScope: String(localized: "File is outside the current scan scope")
+    case .metadataUnknown: String(localized: "File information could not be checked")
+    case .metadataDifferent: String(localized: "Important file information differs")
+    case .dataDifferent: String(localized: "File contents no longer match")
+    case .protectedArea: String(localized: "Protected files are shown for review only")
+    }
+  }
+
+  private func exclusionLabel(_ reason: DuplicateScanExclusion.Reason) -> String {
+    switch reason {
+    case .invalidPath, .outsideScanRoot: String(localized: "Outside the selected folder")
+    case .hiddenDirectory: String(localized: "Hidden folder")
+    case .sourceControl: String(localized: "Source control folder")
+    case .buildOutput, .derivedData: String(localized: "Build output")
+    case .dependencyDirectory: String(localized: "Dependency folder")
+    case .libraryCache: String(localized: "Cache folder")
+    case .package: String(localized: "App or document package")
+    case .homeLibrary: String(localized: "App data folder")
+    case .cloudOnly: String(localized: "In iCloud only; not downloaded for scanning")
+    case .protectedArea: String(localized: "Protected area")
+    case .mountBoundary: String(localized: "On another volume")
+    case .hardLinkAlias: String(localized: "Another link to the same file")
+    case .configuration: String(localized: "Excluded by scanning settings")
     }
   }
 
@@ -486,8 +511,8 @@ struct DuplicateView: View {
   private func label(_ eligibility: DuplicateEligibility) -> String {
     switch eligibility {
     case .eligible: String(localized: "Verified copy")
-    case .metadataDifferent: String(localized: "Metadata differs · review before choosing")
-    case .metadataUnknown: String(localized: "Metadata unknown · review before choosing")
+    case .metadataDifferent: String(localized: "Important file information differs")
+    case .metadataUnknown: String(localized: "File information could not be checked")
     }
   }
 

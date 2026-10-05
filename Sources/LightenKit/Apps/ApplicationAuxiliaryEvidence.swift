@@ -114,7 +114,7 @@ struct ApplicationAuxiliaryEvidence: Sendable {
 
   var matchStrength: RelatedMatchStrength { referenceClaim?.matchStrength ?? .strong }
 
-  fileprivate static func reference(app: InstalledApplication, claim: ApplicationReferenceClaim) throws -> Self {
+  static func reference(app: InstalledApplication, claim: ApplicationReferenceClaim) throws -> Self {
     try claim.validateBinding(to: app)
     let package = app.linkTarget ?? app.path
     guard let packageVolume = try DescriptorFileSystem.volumeID(at: package),

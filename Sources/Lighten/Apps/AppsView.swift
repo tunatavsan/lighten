@@ -31,170 +31,157 @@ struct AppsView: View {
 
   var body: some View {
     let scanBusy = store.busy
-    GeometryReader { geometry in
-      let compact = geometry.size.width < 800
-      VStack(alignment: .leading, spacing: 0) {
-        HStack(alignment: .top, spacing: 14) {
-          VStack(alignment: .leading, spacing: 4) {
-            Text(String(localized: "Apps"))
-              .font(.system(size: 24, weight: .semibold))
-            Text(String(localized: "Installed applications and their related data"))
-              .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-          }
-          Spacer()
-          Button(store.busy ? String(localized: "Cancel scan") : String(localized: "Scan")) {
-            if store.busy { store.cancelScan() } else { store.startScan(actions: actions) }
-          }
-          .accessibilityIdentifier("apps.scan-control")
-        }
-        .padding(.bottom, 14)
-        HStack(spacing: 12) {
-          TextField(String(localized: "Search by name or path"), text: $searchText)
-            .textFieldStyle(.roundedBorder)
-            .frame(maxWidth: 340)
-          Text(
-            store.showsPreviousResult
-              ? "\(store.defaultPictureRows.count)" : "\(filtered.count) / \(store.defaultApplicationReports.count)"
-          )
-          .font(.system(size: 11)).monospacedDigit().foregroundStyle(LightenStyle.muted)
-          Spacer()
-          if let date = store.pictureObservedAt ?? store.scannedAt {
-            HStack(spacing: 4) {
-              Text(String(localized: "Last scan:"))
-              Text(date, style: .date)
-              Text(date, style: .time)
-            }
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          }
-        }
-        .padding(.bottom, 10)
-        if store.busy {
-          HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
+    ToolScreen(String(localized: "Apps")) {
+      GeometryReader { geometry in
+        let compact = geometry.size.width < 800
+        VStack(alignment: .leading, spacing: 0) {
+          HStack(spacing: 12) {
             Text(
-              "\(store.defaultMeasuredCount) / \(store.defaultApplicationReports.count) \(String(localized: "applications measured"))"
+              store.showsPreviousResult
+                ? "\(store.defaultPictureRows.count)" : "\(filtered.count) / \(store.defaultApplicationReports.count)"
             )
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-            if !store.reports.isEmpty {
-              Text(
-                store.measuringPaths.isEmpty
-                  ? (store.ownershipCollectionFinished
-                    ? String(localized: "Finalizing application list")
-                    : String(localized: "Checking installed application ownership"))
-                  : String(localized: "Remaining sizes are being measured")
-              )
+            .font(.system(size: 11)).monospacedDigit().foregroundStyle(LightenStyle.muted)
+            Spacer()
+            if let date = store.pictureObservedAt ?? store.scannedAt {
+              HStack(spacing: 4) {
+                Text(String(localized: "Last scan:"))
+                Text(date, style: .date)
+                Text(date, style: .time)
+              }
               .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
             }
           }
           .padding(.bottom, 10)
-        }
-        coverageNotice
-        omittedApplicationsNotice
-        if store.needsRescan {
-          Label(
-            String(localized: "This list needs a new scan before actions are available."),
-            systemImage: "arrow.clockwise.circle"
-          )
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-          .padding(.bottom, 10)
-        }
-        Divider()
-        if store.showsPreviousResult {
-          pictureList
-        } else if store.reports.isEmpty && store.orphanCandidates.isEmpty && !store.busy {
-          ContentUnavailableView(
-            store.scannedAt == nil
-              ? String(localized: "Scan installed apps") : String(localized: "No applications found"),
-            systemImage: "app.dashed",
-            description: Text(String(localized: "Inspect applications in /Applications and your Applications folder."))
-          )
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if store.busy && store.reports.isEmpty {
-          VStack(spacing: 10) {
-            ProgressView()
-            Text(String(localized: "Scanning applications"))
-              .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-          }
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if compact {
-          if showingCompactDetail, let app = store.selectedReport {
-            VStack(spacing: 0) {
-              HStack {
-                Button {
-                  withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
-                    showingCompactDetail = false
-                  }
-                } label: {
-                  Label(String(localized: "All apps"), systemImage: "chevron.left")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(LightenStyle.accent)
-                Spacer()
-              }
-              .padding(.vertical, 10)
-              detail(app)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-          } else {
-            applicationList
-          }
-        } else {
-          HStack(spacing: 0) {
-            applicationList
-              .frame(width: min(420, (geometry.size.width - 40) * 0.34))
-            Divider()
-            if let app = store.selectedReport {
-              detail(app)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else {
-              ContentUnavailableView(
-                String(localized: "Select an application"), systemImage: "app.dashed"
-              )
-              .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-          }
-        }
-        if !store.selectedAppPaths.isEmpty {
-          Divider()
-          AppsBasketView(store: store, actions: actions)
-        }
-        if let message = store.message {
-          Divider()
-          Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning).padding(.top, 9)
-        }
-        ActionFeedbackView(actions: actions).padding(.top, 7)
-        ForEach(store.packageItemResults) { item in
-          VStack(alignment: .leading, spacing: 2) {
-            Text(
-              "\(item.isLink ? String(localized: "Application link") : String(localized: "Physical application")): \(packageOutcome(item.outcome))"
+          if store.busy {
+            ToolScanProgress(
+              status: store.measuringPaths.isEmpty
+                ? String(localized: "Checking app data") : String(localized: "Measuring apps"),
+              count: store.defaultMeasuredCount
             )
-            .font(.system(size: 11, weight: .medium))
-            Text(item.sourcePath).font(.system(size: 10)).textSelection(.enabled)
-              .foregroundStyle(LightenStyle.muted)
-            if item.outcome != .applied {
-              FailureReasonView(
-                presentation: FailureText.executionPresentation(
-                  ItemActionResult(
-                    itemID: item.id, outcome: item.outcome, detail: item.detail, mutationStage: item.mutationStage))
-              )
-              .font(.system(size: 10))
+            .padding(.bottom, 10)
+          }
+          coverageNotice
+          omittedApplicationsNotice
+          if store.needsRescan {
+            Label(
+              String(localized: "This list needs a new scan before actions are available."),
+              systemImage: "arrow.clockwise.circle"
+            )
+            .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+            .padding(.bottom, 10)
+          }
+          Divider()
+          if store.showsPreviousResult {
+            pictureList
+          } else if store.reports.isEmpty && store.orphanCandidates.isEmpty && !store.busy {
+            ContentUnavailableView(
+              store.scannedAt == nil
+                ? String(localized: "Scan installed apps") : String(localized: "No applications found"),
+              systemImage: "app.dashed",
+              description: Text(
+                String(localized: "Inspect applications in /Applications and your Applications folder."))
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+          } else if store.busy && store.reports.isEmpty {
+            VStack(spacing: 10) {
+              ProgressView()
+              Text(String(localized: "Scanning applications"))
+                .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+          } else if compact {
+            if showingCompactDetail, let app = store.selectedReport {
+              VStack(spacing: 0) {
+                HStack {
+                  Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+                      showingCompactDetail = false
+                    }
+                  } label: {
+                    Label(String(localized: "All apps"), systemImage: "chevron.left")
+                  }
+                  .buttonStyle(.plain)
+                  .foregroundStyle(LightenStyle.accent)
+                  Spacer()
+                }
+                .padding(.vertical, 10)
+                detail(app)
+              }
+              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+              applicationList
+            }
+          } else {
+            HStack(spacing: 0) {
+              applicationList
+                .frame(width: min(420, (geometry.size.width - 40) * 0.34))
+              Divider()
+              if let app = store.selectedReport {
+                detail(app)
+                  .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+              } else {
+                ContentUnavailableView(
+                  String(localized: "Select an application"), systemImage: "app.dashed"
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+              }
             }
           }
-          .padding(.top, 5)
-        }
+          if !store.selectedAppPaths.isEmpty {
+            Divider()
+            AppsBasketView(store: store, actions: actions)
+          }
+          if let message = store.message {
+            Divider()
+            Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning).padding(.top, 9)
+          }
+          ActionFeedbackView(actions: actions).padding(.top, 7)
+          ForEach(store.packageItemResults) { item in
+            VStack(alignment: .leading, spacing: 2) {
+              Text(
+                "\(item.isLink ? String(localized: "Application link") : String(localized: "Application")): \(packageOutcome(item.outcome))"
+              )
+              .font(.system(size: 11, weight: .medium))
+              Text(item.sourcePath).font(.system(size: 10)).textSelection(.enabled)
+                .foregroundStyle(LightenStyle.muted)
+              if item.outcome != .applied {
+                FailureReasonView(
+                  presentation: FailureText.executionPresentation(
+                    ItemActionResult(
+                      itemID: item.id, outcome: item.outcome, detail: item.detail, mutationStage: item.mutationStage))
+                )
+                .font(.system(size: 10))
+              }
+            }
+            .padding(.top, 5)
+          }
 
+        }
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       }
-      .padding(20)
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    } toolbar: {
+      Button(store.busy ? String(localized: "Cancel scan") : String(localized: "Scan")) {
+        if store.busy { store.cancelScan() } else { store.startScan(actions: actions) }
+      }
+      .accessibilityIdentifier("apps.scan-control")
+      if !store.selectedAppPaths.isEmpty {
+        Button(String(localized: "Review removal")) { Task { await store.prepareBasket(actions: actions) } }
+          .buttonStyle(.borderedProminent).disabled(!store.canReviewBasket(actions: actions))
+          .accessibilityIdentifier("apps.review-removal")
+      }
+      if !store.selectedOrphanPaths.isEmpty {
+        Button(String(localized: "Review selected app data")) { Task { await store.prepareOrphans(actions: actions) } }
+          .disabled(store.preparing || store.needsRescan || actions.busy)
+      }
     }
+    .searchable(text: $searchText, prompt: String(localized: "Search by name or path"))
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background(LightenStyle.canvas)
     .onGeometryChange(for: Bool.self) { _ in
       scanBusy
     } action: { busy in
       if !busy { store.scanDidLayout() }
     }
-    .navigationTitle(String(localized: "Apps"))
     .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: store.displayRevision)
     .sheet(item: $actions.pending) { presentation in
       ConfirmationView(presentation: presentation, actions: actions)
@@ -217,22 +204,37 @@ struct AppsView: View {
   }
 
   @ViewBuilder private var coverageNotice: some View {
-    if store.hasCoverageIssue {
+    let incompleteInventory = !store.busy && store.backgroundFinishedAt != nil && !store.inventoryComplete
+    if store.hasCoverageIssue || store.relatedDiscoveryStopped {
       VStack(alignment: .leading, spacing: 5) {
-        Label(
-          String(localized: "Some applications or related data could not be checked completely."),
-          systemImage: "exclamationmark.triangle"
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+        if incompleteInventory || store.relatedDiscoveryStopped {
+          PartialResultNotice(
+            reason: store.relatedDiscoveryStopped
+              ? String(
+                localized: "App data checking stopped before all items were found. Scan again to complete the list.")
+              : String(localized: "Some apps could not be checked. Scan again to complete the list."))
+        } else {
+          Label(
+            String(localized: "Some open files could not be checked. Your selections are still available."),
+            systemImage: "info.circle"
+          )
+          .font(.caption).foregroundStyle(LightenStyle.muted)
+        }
         DisclosureGroup(String(localized: "Details"), isExpanded: $showingCoverageDetails) {
+          if store.relatedDiscoveryStopped {
+            Text(String(localized: "App data checking stopped before all items were found."))
+          }
           ForEach(store.coverageIssueDescriptions, id: \.self) { reason in
-            Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-              .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            Text(reason).textSelection(.enabled)
           }
         }
-        .font(.system(size: 11))
+        .font(.caption).foregroundStyle(LightenStyle.muted)
       }
       .padding(.bottom, 10)
+    }
+    if store.externalVolumesUnchecked {
+      Text(String(localized: "Apps on disks that are disconnected or unavailable are not included."))
+        .font(.caption).foregroundStyle(LightenStyle.muted).padding(.bottom, 8)
     }
   }
 
@@ -458,10 +460,6 @@ struct AppsView: View {
           }
         }
         if store.preparing || actions.busy { reviewExplanation }
-        Button(String(localized: "Review selected removed-app data")) {
-          Task { await store.prepareOrphans(actions: actions) }
-        }.disabled(
-          store.selectedOrphanPaths.isEmpty || store.preparing || store.needsRescan || actions.busy)
       }
     }.padding(.top, groups.isEmpty ? 0 : 14)
   }
@@ -504,7 +502,7 @@ struct AppsView: View {
                 .lineLimit(2)
             }
             if store.ownershipPendingPaths.contains(app.path), !store.busy {
-              Text(String(localized: "Related-data ownership could not be verified."))
+              Text(String(localized: "Some app data could not be matched."))
                 .font(.system(size: 10)).foregroundStyle(LightenStyle.warning).lineLimit(2)
             }
             if let reason = store.packageUnavailableReason(app), !store.busy {
@@ -558,23 +556,25 @@ struct AppsView: View {
           Text(
             app.partial && app.logical.knownLowerBound == 0
               ? String(localized: "Size unavailable")
-              : app.partial ? String(localized: "Known lower bound") : String(localized: "Logical size")
+              : app.partial ? String(localized: "At least") : String(localized: "File size")
           )
           .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
           Spacer()
         }
         Text(
           String(
-            localized: "Package contents are not opened during measurement. Moving to Trash does not free disk space.")
+            localized: "The app and its data are measured separately. Disk space is freed when you empty Trash.")
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         VStack(alignment: .leading, spacing: 5) {
-          metadataRow(String(localized: "Bundle ID"), app.bundleID ?? String(localized: "Unknown"))
+          metadataRow(String(localized: "App identifier"), app.bundleID ?? String(localized: "Unknown"))
           if let target = app.linkTarget {
-            metadataRow(String(localized: "Physical application"), target)
+            metadataRow(String(localized: "Application"), target)
           }
           metadataRow(String(localized: "Version"), app.version ?? String(localized: "Unknown"))
-          metadataRow(String(localized: "Signer"), store.signerDescription(for: app))
+          if let signer = app.signerTeamID, !signer.isEmpty {
+            metadataRow(String(localized: "Signer"), signer)
+          }
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
@@ -582,10 +582,10 @@ struct AppsView: View {
           Label(
             String(
               localized:
-                "This application has no identifier; related data could not be matched by identifier."
+                "Some app data could not be matched because this app has no identifier."
             ),
             systemImage: "info.circle"
-          ).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+          ).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         }
         if let id = app.bundleID, store.runningIDs.contains(id) {
           Label(
@@ -671,42 +671,47 @@ struct AppsView: View {
 
   private func relatedSection(_ app: ApplicationReport) -> some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text(String(localized: "Related data"))
+      Text(String(localized: "App data"))
         .font(.system(size: 15, weight: .semibold))
       Text(
         String(
           localized:
-            "Data is separate from the app. Each association shows its evidence; name matches are reviewed separately.")
+            "Choose which app data to remove along with the app.")
       )
       .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       .fixedSize(horizontal: false, vertical: true)
       if app.related.isEmpty {
         Text(
           store.needsRescan
-            ? String(localized: "Scan again to review related data")
+            ? String(localized: "Scan again to review app data")
             : store.relatedDiscoveryStopped
-              ? String(localized: "Related discovery stopped before all files were found.")
+              ? String(localized: "App data checking stopped before all items were found.")
               : store.selectedReviewPending && !store.selectedShallowComplete
-                ? String(localized: "Related data is being reviewed")
-                : String(localized: "No matching standard data locations found")
+                ? String(localized: "App data is being reviewed")
+                : String(localized: "No app data found in the locations checked")
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         .anchorPreference(key: RelatedRowPreferenceKey.self, value: .bounds) {
           store.selectedShallowComplete ? [RelatedListViewportSnapshot.emptyResultID: $0] : [:]
         }
       }
+      if let note = store.lateSelectedDataNote {
+        Label(note, systemImage: "info.circle")
+          .font(.caption).foregroundStyle(LightenStyle.muted)
+          .accessibilityIdentifier("apps.late-selected-data")
+      }
       if let progress = store.selectedMeasurementProgress {
         Text(
           String.localizedStringWithFormat(
-            String(localized: "Measuring related data: %lld / %lld"), Int64(progress.completed), Int64(progress.total))
+            String(localized: "Measuring app data: %lld / %lld"), Int64(progress.completed), Int64(progress.total))
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       }
       if store.selectedEvidencePending || store.ownershipPendingPaths.contains(app.path) {
         Label(
           store.selectedEvidencePending
-            ? String(localized: "Checking association evidence. You can review selected items now.")
-            : String(localized: "Some associations could not be verified. Your explicit choices remain available."),
+            ? String(localized: "Checking app data. You can review your selection now.")
+            : String(localized: "Some app data could not be matched. You can still choose items yourself."),
           systemImage: store.selectedEvidencePending ? "clock" : "info.circle"
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
@@ -728,7 +733,7 @@ struct AppsView: View {
       let unproven = app.related.filter { $0.classification == .unprovenNameOnly }
       if !unproven.isEmpty { unprovenSection(unproven, app: app) }
       Label(
-        String(localized: "Shared containers are included only when this app is their sole verified owner."),
+        String(localized: "Data shared with other apps is never selected automatically."),
         systemImage: "lock.shield"
       )
       .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
@@ -742,21 +747,19 @@ struct AppsView: View {
     return VStack(alignment: .leading, spacing: 8) {
       Text(
         String.localizedStringWithFormat(
-          String(localized: "Names resemble %@, but ownership is unproven."), name)
+          String(localized: "These names resemble %@. Choose only items you recognize."), name)
       )
       .font(.system(size: 12, weight: .semibold))
       .fixedSize(horizontal: false, vertical: true)
-      Text(
-        "These items are never selected automatically. Select only items you recognize; your choice does not prove they belong to this app. Safe removal uses Trash and Undo."
-      )
-      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-      .fixedSize(horizontal: false, vertical: true)
+      Text(String(localized: "These items are not selected automatically. Check them before choosing to remove them."))
+        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        .fixedSize(horizontal: false, vertical: true)
       ForEach(candidates) { candidate in
         relatedRow(candidate, app: app)
       }
     }
     .padding(10)
-    .background(LightenStyle.warning.opacity(0.06), in: RoundedRectangle(cornerRadius: 7))
+    .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 7))
     .accessibilityElement(children: .contain)
   }
 
@@ -784,18 +787,24 @@ struct AppsView: View {
         Text(candidate.path).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
           .lineLimit(1).truncationMode(.middle).help(candidate.path)
         if let reason = actions.failure(at: candidate.path) {
-          Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+          Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
             .fixedSize(horizontal: false, vertical: true)
         }
         if let provenance = candidate.provenance {
-          Text(AppsStore.provenanceLabel(provenance.kind))
+          Text(AppsSurfaceText.provenance(provenance.kind))
             .font(.system(size: 10, weight: .medium)).foregroundStyle(LightenStyle.muted)
           if let source = provenance.sourcePath {
             Text(source).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
               .lineLimit(2).truncationMode(.middle).help(source)
           }
         }
-        FailureReasonView(presentation: FailureText.candidate(candidate))
+        if candidate.reason == .installed && candidate.refusalEvidence.isEmpty {
+          Text(AppsSurfaceText.associatedData(candidate))
+            .font(.caption).foregroundStyle(LightenStyle.muted)
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+          FailureReasonView(presentation: FailureText.candidate(candidate))
+        }
         if selected, candidate.provenance?.kind == .mozilla || candidate.evidenceKinds.contains(.mozilla) {
           Text(
             String(localized: "Profiles may contain mail, browsing history, and personal data. Review before removal.")
@@ -804,10 +813,10 @@ struct AppsView: View {
           .fixedSize(horizontal: false, vertical: true)
         }
         if store.isAutomaticallySelected(candidate, app: app) {
-          Text(String(localized: "Selected automatically from verified app-specific evidence."))
+          Text(String(localized: "Selected automatically as app data."))
             .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
         } else if !selected, let reason = automaticSelectionNote(candidate, app: app) {
-          Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
+          Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
             .fixedSize(horizontal: false, vertical: true)
         }
         let otherPaths = store.otherInstallationPaths(candidate: candidate, app: app)
@@ -874,32 +883,33 @@ struct AppsView: View {
       return String(localized: "Not selected automatically: this folder may contain your documents.")
     }
     if store.ownershipPendingPaths.contains(app.path) || candidate.reason == .ownershipUnavailable {
-      return String(localized: "Not selected automatically: app ownership has not been verified.")
+      return String(localized: "Not selected automatically: Lighten could not confirm which app uses it.")
     }
     if candidate.classification == .shared || candidate.path.contains("/Library/Group Containers/") {
       return String(localized: "Not selected automatically: this data may be shared with other apps.")
     }
     if candidate.matchStrength != .strong || candidate.classification == .unprovenNameOnly {
-      return String(localized: "Not selected automatically: the association is not a verified exact match.")
+      return String(localized: "Not selected automatically: Lighten could not match it to this app.")
     }
     guard !candidate.defaultSelected else { return nil }
     if kinds.isEmpty {
-      return String(localized: "Not selected automatically: association evidence is unavailable.")
+      return String(localized: "Not selected automatically: Lighten could not match it to this app.")
     }
     if kinds.allSatisfy({ $0 == .liveProcess }) {
-      return String(localized: "Not selected automatically: open files do not prove app ownership.")
+      return String(localized: "Not selected automatically: an open file may be used by more than one app.")
     }
     if kinds.allSatisfy({ $0 == .vendorDirectory }) {
-      return String(localized: "Not selected automatically: a vendor folder does not prove sole app ownership.")
+      return String(
+        localized: "Not selected automatically: this folder may be used by other apps from the same developer.")
     }
     if kinds.allSatisfy({ $0 == .executableName }) {
-      return String(localized: "Not selected automatically: a matching name does not prove app ownership.")
+      return String(localized: "Not selected automatically: only the name matches this app.")
     }
     if kinds.allSatisfy({ $0 == .explicitUserChoice }) {
       return String(localized: "Not selected automatically: this item requires your explicit choice.")
     }
     return String(
-      localized: "Not selected automatically: the available evidence does not establish sole app ownership.")
+      localized: "Not selected automatically: other apps may use this data.")
   }
 
   private func canSelect(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> Bool {
@@ -996,6 +1006,43 @@ private struct RelatedListDrawProbe: NSViewRepresentable {
       let callback = didDraw
       let revision = revision
       DispatchQueue.main.async { callback?(snapshot, revision) }
+    }
+  }
+}
+
+enum AppsSurfaceText {
+  static func provenance(_ kind: RelatedDataProvenanceKind) -> String {
+    switch kind {
+    case .bundleIdentifier: String(localized: "Matches this app’s identifier")
+    case .teamIdentifier: String(localized: "Matches this app’s developer")
+    case .electron, .mozilla: String(localized: "Listed in this app’s settings")
+    case .installerReceipt: String(localized: "Listed in this app’s installation record")
+    case .launchService: String(localized: "Used by this app’s background service")
+    case .configuredDirectory: String(localized: "Chosen in this app’s settings")
+    case .vendorDirectory: String(localized: "Used by apps from this developer")
+    case .liveProcess: String(localized: "Currently used by this app")
+    case .executableName: String(localized: "Only the name matches this app")
+    case .explicitUserChoice: String(localized: "Selected by you")
+    }
+  }
+
+  static func associatedData(_ candidate: RelatedDataCandidate, turkish: Bool? = nil) -> String {
+    let kind =
+      candidate.displayRootIdentity?.kind
+      ?? candidate.snapshot?.entries.first(where: { $0.path == candidate.path })?.identity?.kind
+    switch kind {
+    case .directory:
+      return FailureText.text(
+        "This folder contains app data. Review it before removal.",
+        "Bu klasör uygulama verisi içeriyor. Kaldırmadan önce inceleyin.", turkish: turkish)
+    case .regular:
+      return FailureText.text(
+        "This file contains app data. Review it before removal.",
+        "Bu dosya uygulama verisi içeriyor. Kaldırmadan önce inceleyin.", turkish: turkish)
+    default:
+      return FailureText.text(
+        "This item contains app data. Review it before removal.",
+        "Bu öğe uygulama verisi içeriyor. Kaldırmadan önce inceleyin.", turkish: turkish)
     }
   }
 }

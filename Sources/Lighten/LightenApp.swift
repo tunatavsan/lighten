@@ -5,6 +5,9 @@ import SwiftUI
 
 @main
 struct LightenApp: App {
+  @State private var access = FullDiskAccessMonitor()
+  private let onboarding = OnboardingPreferences()
+
   init() {
     guard Bundle.main.bundleIdentifier == LightenIdentity.bundleIdentifier else {
       let message = "Lighten must run from a packaged bundle: scripts/run.sh\n"
@@ -15,41 +18,21 @@ struct LightenApp: App {
   }
 
   var body: some Scene {
-    WindowGroup { LightenRootView() }
-      .defaultSize(width: 1220, height: 800)
-    Settings { LightenSettingsView() }
-  }
-}
-
-private enum LightenSection: String, CaseIterable, Identifiable {
-  case overview, space, clean, duplicates, apps, history, settings
-  var id: Self { self }
-  var title: String {
-    switch self {
-    case .overview: String(localized: "Overview")
-    case .space: String(localized: "Space")
-    case .clean: String(localized: "Clean")
-    case .duplicates: String(localized: "Duplicates")
-    case .apps: String(localized: "Apps")
-    case .history: String(localized: "History")
-    case .settings: String(localized: "Settings")
+    WindowGroup {
+      LightenRootView(access: access, onboarding: onboarding)
+        .environment(\.fullDiskAccessMonitor, access)
     }
-  }
-  var icon: String {
-    switch self {
-    case .overview: "rectangle.grid.2x2"
-    case .space: "square.grid.3x3.fill"
-    case .clean: "sparkles"
-    case .duplicates: "doc.on.doc"
-    case .apps: "app.dashed"
-    case .history: "clock.arrow.circlepath"
-    case .settings: "gearshape"
-    }
+    .defaultSize(width: 1220, height: 800)
+    .windowResizability(.contentMinSize)
+    .windowToolbarStyle(.unified)
+    Settings { LightenSettingsView(access: access) }
   }
 }
 
 private struct LightenRootView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  let access: FullDiskAccessMonitor
+  let onboarding: OnboardingPreferences
   @State private var section: LightenSection? = .overview
   @State private var overview = OverviewStore()
   @State private var space = SpaceStore()
@@ -57,28 +40,54 @@ private struct LightenRootView: View {
   @State private var clean = CleanStore()
   @State private var duplicates = DuplicateStore()
   @State private var apps = AppsStore()
+  @State private var feedback = ActionFeedbackState()
+  @State private var showingWelcome = false
+
+  private var presentations: [LightenSection: ToolPresentation] {
+    var spacePhase: ToolPhase {
+      switch space.phase {
+      case .idle: .idle
+      case .scanning: .scanning
+      case .cancelled, .partial: .partial
+      case .complete: .ready
+      case .error: .failed
+      }
+    }
+    let spaceSummary = ToolSummary(
+      count: Int(clamping: space.rootSummary?.itemCount ?? 0),
+      logicalBytes: space.rootSummary?.logical.knownLowerBound ?? 0,
+      observedAt: space.cachedAt ?? space.tree?.startedAt,
+      partial: space.rootSummary?.partial == true || spacePhase == .partial)
+    return [
+      .space: ToolPresentation(phase: spacePhase, summary: spaceSummary),
+      .clean: ToolPresentation(phase: clean.phase, summary: clean.toolSummary),
+      .duplicates: ToolPresentation(phase: duplicates.phase, summary: duplicates.toolSummary),
+      .apps: ToolPresentation(phase: apps.phase, summary: apps.toolSummary),
+    ]
+  }
 
   var body: some View {
     NavigationSplitView {
-      List(LightenSection.allCases, selection: $section) { item in
-        HStack(spacing: 6) {
-          Label(item.title, systemImage: item.icon)
-          Spacer(minLength: 4)
-          if isWorking(item) {
-            ProgressView().controlSize(.mini)
-              .accessibilityLabel(String(localized: "Working in the background"))
+      List(selection: $section) {
+        ForEach(ToolGroup.allCases) { group in
+          Section(group.title) {
+            ForEach(ToolCatalog.entries.filter { $0.group == group }) { entry in
+              ToolSidebarRow(entry: entry, presentation: presentations[entry.id])
+                .tag(entry.id)
+            }
           }
         }
-        .tag(item)
       }
       .listStyle(.sidebar)
-      .navigationSplitViewColumnWidth(min: 170, ideal: 195, max: 250)
+      .navigationSplitViewColumnWidth(min: 170, ideal: 210, max: 260)
     } detail: {
       switch section ?? .overview {
       case .overview:
         OverviewView(
           store: overview, space: space, actions: actions,
           showSpace: { section = .space }, showHistory: { section = .history })
+      case .tools:
+        ToolsGridView(presentations: presentations) { section = $0 }
       case .space:
         SpaceView(store: space, actions: actions, showHistory: { section = .history })
       case .clean:
@@ -89,62 +98,54 @@ private struct LightenRootView: View {
         AppsView(store: apps, actions: actions)
       case .history:
         HistoryView(actions: actions)
-      case .settings:
-        LightenSettingsView(
-          space: space,
-          retrySpace: {
-            space.startScan()
-            section = .space
-          },
-          retryClean: {
-            clean.startScan()
-            section = .clean
-          },
-          retryDuplicates: {
-            if let folder = duplicates.folderPath {
-              duplicates.startScan(folder: folder, actions: actions)
-            }
-            section = .duplicates
-          },
-          retryApps: {
-            apps.startScan(actions: actions)
-            section = .apps
-          })
       }
     }
     .frame(minWidth: 820, minHeight: 560)
     .tint(LightenStyle.accent)
+    .overlay(alignment: .bottom) {
+      if let presentation = feedback.presentation {
+        ActionFeedbackToast(feedback: presentation, actions: actions, dismiss: feedback.dismiss)
+          .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+      }
+    }
+    .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: feedback.presentation?.id)
+    .task(id: feedback.presentation?.id) {
+      if let id = feedback.presentation?.id { await feedback.expire(id) }
+    }
+    .onChange(of: actions.result?.planID) { _, _ in showActionFeedback() }
     .onChange(of: reduceMotion, initial: true) { _, value in
       actions.reduceMotion = value
       space.reduceMotion = value
     }
-    .task {
-      actions.onDisplayChange = { [weak space, weak clean, weak apps, weak duplicates] change in
-        space?.applyDisplayChange(change)
-        clean?.applyDisplayChange(change)
-        apps?.applyDisplayChange(change)
-        duplicates?.applyDisplayChange(change)
-      }
-      actions.onDisplayDiscrepancy = { [weak space, weak clean, weak apps, weak duplicates, weak actions] _ in
-        guard let actions else { return }
-        if space?.tree != nil { space?.startScan() }
-        if clean?.scannedAt != nil { clean?.startScan(actions: actions) }
-        if apps?.scannedAt != nil { apps?.startScan(actions: actions) }
-        if let folder = duplicates?.folderPath { duplicates?.startScan(folder: folder, actions: actions) }
-      }
-      await actions.reloadHistory()
-    }
+    .sheet(isPresented: $showingWelcome) { FileAccessWelcome(access: access, preferences: onboarding) }
+    .task { await prepareShell() }
   }
 
-  /// Scans keep running when their screen is not shown; the sidebar says so.
-  private func isWorking(_ item: LightenSection) -> Bool {
-    switch item {
-    case .space: space.phase == .scanning
-    case .clean: clean.busy
-    case .duplicates: duplicates.busy
-    case .apps: apps.busy
-    case .overview, .history, .settings: false
-    }
+  private func showActionFeedback() {
+    guard let result = actions.result, let kind = actions.resultKind,
+      let message = actions.completedSummary
+    else { return }
+    feedback.show(
+      planID: result.planID, kind: kind,
+      appliedCount: result.items.filter { $0.outcome == .applied }.count, message: message)
   }
 
+  private func prepareShell() async {
+    actions.onDisplayChange = { [weak space, weak clean, weak apps, weak duplicates] change in
+      space?.applyDisplayChange(change)
+      clean?.applyDisplayChange(change)
+      apps?.applyDisplayChange(change)
+      duplicates?.applyDisplayChange(change)
+    }
+    actions.onDisplayDiscrepancy = { [weak space, weak clean, weak apps, weak duplicates, weak actions] _ in
+      guard let actions else { return }
+      if space?.tree != nil { space?.startScan() }
+      if clean?.scannedAt != nil { clean?.startScan(actions: actions) }
+      if apps?.scannedAt != nil { apps?.startScan(actions: actions) }
+      if let folder = duplicates?.folderPath { duplicates?.startScan(folder: folder, actions: actions) }
+    }
+    await actions.reloadHistory()
+    await access.refresh()
+    showingWelcome = onboarding.shouldPresent(for: access.state)
+  }
 }

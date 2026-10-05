@@ -2,20 +2,62 @@ import Darwin
 import Foundation
 import Synchronization
 
-/// Extensions treated as packages without a per-item LaunchServices query.
-/// Planning performs the full package check again before any action.
+/// One package classifier for discovery and duplicate action scope.
 enum PackageNames {
   static let suffixes: [String] = [
     ".app", ".bundle", ".framework", ".photoslibrary", ".pkg", ".pvm", ".vmwarevm", ".sparsebundle", ".rtfd",
     ".playground", ".xcworkspace", ".xcodeproj", ".pages", ".numbers", ".key", ".xcarchive", ".plugin", ".appex",
     ".kext", ".qlgenerator", ".mdimporter", ".prefpane", ".saver", ".dsym", ".imovielibrary", ".fcpbundle",
     ".logicx", ".band", ".musiclibrary", ".tvlibrary", ".aplibrary", ".scptd", ".utm", ".docset", ".lpdf",
+    ".photolibrary", ".migratedphotolibrary", ".backupbundle",
   ]
 
   static func isPackage(_ name: String) -> Bool {
     let folded = name.lowercased()
     return suffixes.contains { folded.hasSuffix($0) && folded.count > $0.count }
   }
+
+  static func isPackage(atPath path: String) -> Bool {
+    isPackage((path as NSString).lastPathComponent)
+      || (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isPackageKey]))?.isPackage == true
+  }
+
+  static func containsPackage(in path: String, isDirectory: Bool) -> Bool {
+    guard let components = try? DescriptorFileSystem.validatedComponents(path) else { return false }
+    let directories = isDirectory ? components : Array(components.dropLast())
+    var ancestor = ""
+    for component in directories {
+      ancestor += "/" + component
+      if isPackage(atPath: ancestor) { return true }
+    }
+    return false
+  }
+}
+
+/// Optional discovery behavior; it never relaxes inventory or action guards.
+public struct ScanDiscoveryPolicy: Sendable {
+  public let neutralExclusions: Bool
+  public let allowsLocalICloudFiles: Bool
+  public let onOmission: @Sendable (ScanDiscoveryOmission) -> Void
+
+  public init(
+    neutralExclusions: Bool = false, allowsLocalICloudFiles: Bool = false,
+    onOmission: @escaping @Sendable (ScanDiscoveryOmission) -> Void = { _ in }
+  ) {
+    self.neutralExclusions = neutralExclusions
+    self.allowsLocalICloudFiles = allowsLocalICloudFiles
+    self.onOmission = onOmission
+  }
+}
+
+public struct ScanDiscoveryOmission: Sendable {
+  public enum Reason: Sendable {
+    case filtered, package, cloudOnly, protectedArea, mountBoundary, hardLinkAlias, unreadable, changed,
+      metadataUnavailable
+  }
+  public let path: String
+  public let reason: Reason
+  public let isDirectory: Bool
 }
 
 struct WalkJob: Sendable {
@@ -145,6 +187,7 @@ final class ParallelWalker: Sendable {
   let sinkRootAllowed: Bool
   let directEntries: (@Sendable (RawEntry) -> Void)?
   let directoryFilter: (@Sendable (String) -> Bool)?
+  let discoveryPolicy: ScanDiscoveryPolicy?
   private let hardLinks = Mutex(Set<HardLinkKey>())
   private let remainingWorkers: Atomic<Int>
   private let onFinish: @Sendable () -> Void
@@ -153,6 +196,7 @@ final class ParallelWalker: Sendable {
     tree: ScanTree, counters: ScanCounters, automaton: ProtectionAutomaton, boundaryDevice: UInt64,
     homeDirectory: String, firmlinks: Set<String>?, workers: Int, fileSink: FileSink? = nil,
     directoryFilter: (@Sendable (String) -> Bool)? = nil,
+    discoveryPolicy: ScanDiscoveryPolicy? = nil,
     sinkRootAllowed: Bool = true, directEntries: (@Sendable (RawEntry) -> Void)? = nil,
     onFinish: @escaping @Sendable () -> Void
   ) {
@@ -161,6 +205,7 @@ final class ParallelWalker: Sendable {
     self.sinkRootAllowed = sinkRootAllowed
     self.directEntries = directEntries
     self.directoryFilter = directoryFilter
+    self.discoveryPolicy = discoveryPolicy
     self.tree = tree
     self.counters = counters
     self.automaton = automaton
@@ -212,7 +257,13 @@ final class ParallelWalker: Sendable {
   func process(_ job: WalkJob, reader: DirectoryReader) -> [WalkJob] {
     if directoryFilter?(visiblePath(job.path)) == false {
       counters.skippedDirectories.add(1, ordering: .relaxed)
-      tree.fail(job, reason: .entryError)
+      omit(job.path, .filtered, isDirectory: true)
+      if discoveryPolicy?.neutralExclusions == true {
+        _ = tree.applyNode(
+          job, children: [], files: [], small: (0, 0, 0), logical: 0, allocated: 0, items: 0, entryErrors: false)
+      } else {
+        tree.fail(job, reason: .entryError)
+      }
       return []
     }
     var childDirectories: [Child] = []
@@ -237,6 +288,7 @@ final class ParallelWalker: Sendable {
         if job.depth == 0 { directEntries?(entry) }
         if entry.error != 0 {
           entryErrors = true
+          omit(job.path + "/" + entry.name, .unreadable, isDirectory: entry.kind == .directory)
           return
         }
         if entry.kind == .directory {
@@ -246,7 +298,8 @@ final class ParallelWalker: Sendable {
           if job.mode == .interior {
             if directoryFilter?(visiblePath(childPath)) == false {
               counters.skippedDirectories.add(1, ordering: .relaxed)
-              entryErrors = true
+              omit(childPath, .filtered, isDirectory: true)
+              entryErrors = entryErrors || discoveryPolicy?.neutralExclusions != true
             } else if entry.device != job.device || entry.flags & UInt32(SF_DATALESS) != 0 {
               // Another volume or cloud-only contents: the owner's total is a lower bound.
               entryErrors = true
@@ -265,7 +318,10 @@ final class ParallelWalker: Sendable {
         // Regular files, symlinks (never followed) and special files are leaves.
         if entry.linkCount > 1 && entry.kind == .regular {
           let first = hardLinks.withLock { $0.insert(HardLinkKey(device: entry.device, inode: entry.inode)).inserted }
-          if !first { return }
+          if !first {
+            omit(job.path + "/" + entry.name, .hardLinkAlias, isDirectory: false)
+            return
+          }
         }
         items += 1
         logical &+= entry.logical
@@ -309,6 +365,9 @@ final class ParallelWalker: Sendable {
         case .open, .read: .unreadable
         }
       tree.fail(job, reason: reason)
+      if reason != .cancelled {
+        omit(job.path, reason == .changedDuringScan ? .changed : .unreadable, isDirectory: true)
+      }
       return []
     }
 
@@ -341,6 +400,10 @@ final class ParallelWalker: Sendable {
   }
 
   func emit(_ entry: RawEntry, in job: WalkJob) {
+    if fileSink != nil, job.mode == .node, entry.kind == .regular, entry.error == 0 {
+      let path = job.path == "/" ? "/" + entry.name : job.path + "/" + entry.name
+      if entry.flags & UInt32(SF_DATALESS) != 0 { omit(path, .cloudOnly, isDirectory: false) }
+    }
     guard let fileSink, sinkRootAllowed, job.mode == .node, entry.kind == .regular, entry.error == 0,
       entry.device == boundaryDevice, entry.flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0,
       !PackageNames.isPackage(entry.name),
@@ -348,13 +411,17 @@ final class ParallelWalker: Sendable {
     else { return }
     let path = job.path == "/" ? "/" + entry.name : job.path + "/" + entry.name
     if let state = job.protection,
-      !automaton.matches(automaton.step(state, entry.name), path: path, homeDirectory: homeDirectory).isEmpty
+      automaton.matches(automaton.step(state, entry.name), path: path, homeDirectory: homeDirectory).contains(where: {
+        !permitsLocalCloudDiscovery(ruleID: $0.id, path: path)
+      })
     {
+      omit(path, .protectedArea, isDirectory: false)
       return
     }
     guard let logical = entry.identityLogicalBytes else {
       counters.sinkMetadataUnavailable.add(1, ordering: .relaxed)
       counters.sinkOmittedFiles.add(1, ordering: .relaxed)
+      omit(path, .metadataUnavailable, isDirectory: false)
       return
     }
     guard logical >= fileSink.minLogicalBytes else { return }
@@ -369,12 +436,14 @@ final class ParallelWalker: Sendable {
     guard let identity = entry.identity else {
       counters.sinkMetadataUnavailable.add(1, ordering: .relaxed)
       counters.sinkOmittedFiles.add(1, ordering: .relaxed)
+      omit(path, .metadataUnavailable, isDirectory: false)
       return
     }
     // Added time is optional. Birth and modification time are required by
     // duplicate identity checks; retain their absence and expose uncertainty.
     if entry.birthTime == nil || entry.modificationTime == nil {
       counters.sinkMetadataUnavailable.add(1, ordering: .relaxed)
+      omit(path, .metadataUnavailable, isDirectory: false)
     }
     // At the disk root and below it, expose the same visible paths as the tree.
     let visiblePath: String
@@ -406,25 +475,33 @@ final class ParallelWalker: Sendable {
   }
 
   func classify(_ entry: RawEntry, parent: WalkJob) -> Child {
+    let childPath = parent.path == "/" ? "/" + entry.name : parent.path + "/" + entry.name
     var child = Child(
       name: entry.name, device: entry.device, inode: entry.inode,
-      kind: PackageNames.isPackage(entry.name) ? .package : .directory,
+      kind: PackageNames.isPackage(atPath: childPath) ? .package : .directory,
       reason: nil, protectedRule: nil, traverse: true, protection: nil)
-    let childPath = parent.path == "/" ? "/" + entry.name : parent.path + "/" + entry.name
     if directoryFilter?(visiblePath(childPath)) == false {
-      child.reason = .entryError
+      child.reason = discoveryPolicy?.neutralExclusions == true ? nil : .entryError
       child.traverse = false
       counters.skippedDirectories.add(1, ordering: .relaxed)
+      omit(childPath, .filtered, isDirectory: true)
       return child
     }
     if entry.device != boundaryDevice {
-      child.reason = .mountBoundary
+      child.reason = discoveryPolicy?.neutralExclusions == true ? nil : .mountBoundary
       child.traverse = false
+      omit(childPath, .mountBoundary, isDirectory: true)
       return child
     }
     if entry.flags & UInt32(SF_DATALESS) != 0 {
-      child.reason = .cloudNotMeasured
+      child.reason = discoveryPolicy?.neutralExclusions == true ? nil : .cloudNotMeasured
       child.traverse = false
+      omit(childPath, .cloudOnly, isDirectory: true)
+      return child
+    }
+    if child.kind == .package, discoveryPolicy != nil {
+      child.traverse = false
+      omit(childPath, .package, isDirectory: true)
       return child
     }
     if let state = parent.protection {
@@ -438,21 +515,38 @@ final class ParallelWalker: Sendable {
         ? (firmlinks?.contains(entry.name) == true ? "/" + entry.name : "/System/Volumes/Data/" + entry.name)
         : parent.path + "/" + entry.name
       if let rule = automaton.scanMatch(next, path: visiblePath, homeDirectory: homeDirectory) {
+        if permitsLocalCloudDiscovery(ruleID: rule.id, path: visiblePath) {
+          child.protection = next
+          return child
+        }
         switch rule.id {
         case "ssh", "keychains":
-          child.reason = .protectedNotTraversed
+          child.reason = discoveryPolicy?.neutralExclusions == true ? nil : .protectedNotTraversed
           child.traverse = false
         case "mobile-documents", "cloud-storage":
-          child.reason = .cloudNotMeasured
+          child.reason = discoveryPolicy?.neutralExclusions == true ? nil : .cloudNotMeasured
           child.traverse = false
         default:
           child.protectedRule = rule.id
+          if discoveryPolicy != nil { child.traverse = false }
         }
+        omit(childPath, .protectedArea, isDirectory: true)
         return child
       }
       child.protection = automaton.isInert(next) ? nil : next
     }
     return child
+  }
+
+  private func permitsLocalCloudDiscovery(ruleID: String, path: String) -> Bool {
+    discoveryPolicy?.allowsLocalICloudFiles == true && ruleID == "mobile-documents"
+      && (path == homeDirectory + "/Library/Mobile Documents"
+        || path.hasPrefix(homeDirectory + "/Library/Mobile Documents/"))
+  }
+
+  private func omit(_ path: String, _ reason: ScanDiscoveryOmission.Reason, isDirectory: Bool) {
+    discoveryPolicy?.onOmission(
+      ScanDiscoveryOmission(path: visiblePath(path), reason: reason, isDirectory: isDirectory))
   }
 
   private func visiblePath(_ path: String) -> String {

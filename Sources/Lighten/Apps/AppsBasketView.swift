@@ -12,7 +12,7 @@ struct AppsBasketView: View {
         Image(systemName: "basket").foregroundStyle(LightenStyle.accent)
         Text("\(String(localized: "Basket")): \(store.selectedAppPaths.count)")
           .font(.system(size: 13, weight: .semibold))
-        Text("\(String(localized: "Related data")): \(store.basketDataCount)")
+        Text("\(String(localized: "App data")): \(store.basketDataCount)")
           .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
         Spacer()
         Text(sizeLabel).font(.system(size: 12)).monospacedDigit()
@@ -21,6 +21,7 @@ struct AppsBasketView: View {
         HStack(spacing: 5) {
           ForEach(store.basketApplications.sorted { $0.path < $1.path }) { app in
             HStack(spacing: 5) {
+              ApplicationIconView(path: app.path).scaleEffect(0.6).frame(width: 20, height: 20)
               Text(store.displayName(app)).lineLimit(1)
               Button {
                 store.removeAppFromBasket(app.path, actions: actions)
@@ -44,9 +45,6 @@ struct AppsBasketView: View {
         Spacer()
         Button(String(localized: "Clear basket")) { store.clearBasket(actions: actions) }
           .disabled(actions.busy)
-        Button(String(localized: "Review removal")) { Task { await store.prepareBasket(actions: actions) } }
-          .buttonStyle(.borderedProminent).disabled(!store.canReviewBasket(actions: actions))
-          .accessibilityIdentifier("apps.review-removal")
       }
     }
     .padding(.top, 10)
@@ -67,7 +65,7 @@ struct AppsBasketView: View {
               let kinds =
                 candidate.evidenceKinds.isEmpty ? candidate.provenance.map { [$0.kind] } ?? [] : candidate.evidenceKinds
               ForEach(Array(Set(kinds)).sorted { $0.rawValue < $1.rawValue }, id: \.self) { kind in
-                Text(AppsStore.provenanceLabel(kind)).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+                Text(AppsSurfaceText.provenance(kind)).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
               }
             }
             .padding(.vertical, 3)
@@ -75,7 +73,8 @@ struct AppsBasketView: View {
         }
       } label: {
         Text(
-          String.localizedStringWithFormat(String(localized: "%lld related items selected automatically"), Int64(count))
+          String.localizedStringWithFormat(
+            String(localized: "%lld app data items selected automatically"), Int64(count))
         )
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
       }

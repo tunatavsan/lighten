@@ -26,9 +26,20 @@ final class DuplicateDigestCache: Sendable {
   func value(for identity: FileIdentity, stage: Stage) -> Data? {
     guard let key = key(identity, stage: stage) else { return nil }
     return entries.withLock { entries in
-      guard let value = entries[key], value.identity == identity else { return nil }
+      guard let value = entries[key], sameContentObservation(value.identity, identity) else { return nil }
       return value.digest
     }
+  }
+
+  /// Metadata-only ctime changes may reuse a discovery hint. Fresh identity
+  /// checks and byte comparison still run, and action digest APIs never use it.
+  private func sameContentObservation(_ first: FileIdentity, _ second: FileIdentity) -> Bool {
+    first.device == second.device && first.inode == second.inode
+      && first.logicalBytes == second.logicalBytes && first.allocatedBytes == second.allocatedBytes
+      && first.linkCount == second.linkCount && first.flags == second.flags && first.kind == second.kind
+      && first.birthSeconds == second.birthSeconds && first.birthNanoseconds == second.birthNanoseconds
+      && first.modificationSeconds == second.modificationSeconds
+      && first.modificationNanoseconds == second.modificationNanoseconds
   }
 
   func insert(_ digest: Data, for identity: FileIdentity, stage: Stage) {

@@ -12,10 +12,10 @@ final class DuplicateStore: ToolSummaryProviding {
   @ObservationIgnored private let events: Events?
   @ObservationIgnored private let observePicture: (@Sendable (DuplicatePicture) async throws -> DuplicateReport)?
   @ObservationIgnored private let planBuilder:
-    @Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> ActionPlan
+    @Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> DuplicatePlanResult
   @ObservationIgnored private var scanTask: Task<Void, Never>?
   @ObservationIgnored private var scanGeneration = UUID()
-  @ObservationIgnored private var preparationTask: Task<ActionPlan, Error>?
+  @ObservationIgnored private var preparationTask: Task<DuplicatePlanResult, Error>?
   @ObservationIgnored private let loadPicture: @Sendable () -> ResultPicture<DuplicatePicture>?
   @ObservationIgnored private let savePicture: @Sendable (ResultPicture<DuplicatePicture>) throws -> Void
   @ObservationIgnored private let pictureQueue = DispatchQueue(
@@ -39,6 +39,9 @@ final class DuplicateStore: ToolSummaryProviding {
 
   init(
     planBuilder: (@Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> ActionPlan)? = nil,
+    availablePlanBuilder: (
+      @Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> DuplicatePlanResult
+    )? = nil,
     userPlanner: PlanService = PlanService(), preferences: RemovalPreferences = .shared,
     duplicatePreferences: DuplicatePreferences = .shared,
     pictures: ResultPictureStore = ResultPictureStore(),
@@ -47,7 +50,13 @@ final class DuplicateStore: ToolSummaryProviding {
     events: Events? = nil,
     observePicture: (@Sendable (DuplicatePicture) async throws -> DuplicateReport)? = nil
   ) {
-    self.planBuilder = planBuilder ?? { try await DuplicateService().makePlan(report: $0, selections: $1) }
+    if let availablePlanBuilder {
+      self.planBuilder = availablePlanBuilder
+    } else if let planBuilder {
+      self.planBuilder = { DuplicatePlanResult(plan: try await planBuilder($0, $1)) }
+    } else {
+      self.planBuilder = { try await DuplicateService().makeAvailablePlan(report: $0, selections: $1) }
+    }
     self.userPlanner = userPlanner
     self.duplicatePreferences = duplicatePreferences
     self.observePicture = observePicture
@@ -60,6 +69,7 @@ final class DuplicateStore: ToolSummaryProviding {
   var folderPath: String?
   var report: DuplicateReport?
   var scanned = 0
+  private(set) var scannedLogicalBytes: Int64?
   var compared = 0
   var busy: Bool { tool.phase == .scanning }
   var preparing: Bool { tool.preparation.preparing }
@@ -70,12 +80,21 @@ final class DuplicateStore: ToolSummaryProviding {
   var targets: Set<UUID> = []
   var presentedPlanID: UUID?
   var needsRescan = false
+  private(set) var preparationRefusals: [DuplicatePlanRefusal] = []
+  var excludedDirectoryCount: Int { report?.excludedDirectoryCount ?? 0 }
+  var cloudOnlyCount: Int { report?.cloudOnlyCount ?? 0 }
+  var unreadableCount: Int { report?.unreadableCount ?? 0 }
+  var excludedRoot: DuplicateScanExclusion? { report?.excludedRoot }
+  /// File allocation cannot establish APFS shared extents, so this is never a free-space estimate.
+  var estimatedFreedBytes: Int64? { nil }
+  var selectedSizeLabel: String { String(localized: "Size of selected copies") }
 
   var homeDirectory: String { userPlanner.homeDirectory }
 
   var groupSelections: [DuplicateGroupSelection] {
     guard picture == nil, let report else { return [] }
     return report.groups.flatMap { group -> [DuplicateGroupSelection] in
+      guard group.reportOnlyReason == nil else { return [] }
       let subsetIDs = Set(group.members.compactMap(\.compatibilityID))
       return subsetIDs.sorted { $0.uuidString < $1.uuidString }.compactMap { subset in
         guard let keeperID = keepers[subset],
@@ -296,6 +315,7 @@ final class DuplicateStore: ToolSummaryProviding {
     needsRescan = false
     checkingPreviousResult = false
     scanned = 0
+    scannedLogicalBytes = nil
     compared = 0
     message = nil
     cancelled = false
@@ -311,6 +331,8 @@ final class DuplicateStore: ToolSummaryProviding {
           case .progress(let scannedCount, let comparedCount):
             scanned = scannedCount
             compared = comparedCount
+          case .measuredBytes(let bytes):
+            scannedLogicalBytes = bytes
           case .completed(let value):
             guard !Task.isCancelled else { return }
             report = value
@@ -385,11 +407,13 @@ final class DuplicateStore: ToolSummaryProviding {
       group -> DuplicateGroup? in
       let members = group.members.filter { !hidden.contains($0.id) }
       guard members.count > 1 else { return nil }
-      return DuplicateGroup(id: group.id, logicalBytes: group.logicalBytes, members: members)
+      return DuplicateGroup(
+        id: group.id, logicalBytes: group.logicalBytes, members: members, reportOnlyReason: group.reportOnlyReason)
     }
     self.report = DuplicateReport(
       snapshot: report.snapshot, groups: groups, skippedCount: report.skippedCount,
-      partial: report.partial, comparisonCount: report.comparisonCount, refusals: report.refusals)
+      partial: report.partial, comparisonCount: report.comparisonCount, refusals: report.refusals,
+      exclusions: report.exclusions, excludedRoot: report.excludedRoot)
     targets.subtract(hidden)
     displayRevision += 1
     if change.kind == .applied, !hidden.isEmpty { needsRescan = false }
@@ -442,6 +466,7 @@ final class DuplicateStore: ToolSummaryProviding {
     preparationTask?.cancel()
     preparationTask = nil
     message = nil
+    preparationRefusals = []
     let pendingMatches = actions?.pending?.id == presentedPlanID && presentedPlanID != nil
     if pendingMatches {
       actions?.pending = nil
@@ -454,7 +479,7 @@ final class DuplicateStore: ToolSummaryProviding {
       let current = report?.groups.first(where: { $0.id == group.id }),
       let keeper = current.members.first(where: { $0.id == id && $0.eligibility == .eligible }),
       let subset = keeper.compatibilityID,
-      current.members.contains(where: { $0.id != id && $0.eligibility == .eligible && $0.compatibilityID == subset })
+      current.members.contains(where: { current.canTarget($0.id, keeperID: id) })
     else { return }
     lastActions = actions
     clearPreparation(actions: actions)
@@ -493,11 +518,17 @@ final class DuplicateStore: ToolSummaryProviding {
         try await planBuilder(report, selections)
       }
       preparationTask = task
-      let plan = try await task.value
+      let result = try await task.value
       guard tool.preparation.accepts(generation),
         self.report?.snapshot.runID == report.snapshot.runID, targets == selected,
         !task.isCancelled
       else { return }
+      preparationRefusals = result.refusals
+      guard let plan = result.plan else {
+        actions.publishKeptItems(result.refusals.map(\.planRejection))
+        message = String(localized: "No selected groups could be verified. Review the named files.")
+        return
+      }
       let entries = Dictionary(uniqueKeysWithValues: report.snapshot.entries.map { ($0.id, $0) })
       let summaries = plan.items.map { item in
         ActionItemSummary(
@@ -506,7 +537,7 @@ final class DuplicateStore: ToolSummaryProviding {
           logicalBytes: entries[item.id]?.identity?.logicalBytes,
           allocatedBytes: entries[item.id]?.identity?.allocatedBytes)
       }
-      actions.present(plan: plan, items: summaries)
+      actions.present(plan: plan, items: summaries, rejectedItems: result.refusals.map(\.planRejection))
       presentedPlanID = plan.id
       message = nil
     } catch {

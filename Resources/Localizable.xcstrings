@@ -137,6 +137,38 @@
         }
       }
     },
+    "%lld app data items selected automatically": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld app data items selected automatically"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld uygulama verisi öğesi otomatik seçildi"
+          }
+        }
+      }
+    },
+    "%lld applications": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld applications"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld uygulama"
+          }
+        }
+      }
+    },
     "%lld applications omitted from this list": {
       "extractionState": "manual",
       "localizations": {
@@ -150,6 +182,70 @@
           "stringUnit": {
             "state": "translated",
             "value": "%lld uygulama bu listede gösterilmiyor"
+          }
+        }
+      }
+    },
+    "%lld files compared": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld files compared"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld dosya karşılaştırıldı"
+          }
+        }
+      }
+    },
+    "%lld files could not be checked. Results are partial.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld files could not be checked. Results are partial."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld dosya kontrol edilemedi. Sonuçlar kısmi."
+          }
+        }
+      }
+    },
+    "%lld groups": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld groups"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld grup"
+          }
+        }
+      }
+    },
+    "%lld groups could not be verified. Details": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld groups could not be verified. Details"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld grup doğrulanamadı. Ayrıntılar"
           }
         }
       }
@@ -186,35 +282,50 @@
         }
       }
     },
-    "%lld previous files could not be included. Details": {
+    "%lld items": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lld previous files could not be included. Details"
+            "value": "%lld items"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Önceki %lld dosya dahil edilemedi. Ayrıntılar"
+            "value": "%lld öğe"
           }
         }
       }
     },
-    "%lld related items selected automatically": {
-      "extractionState": "manual",
+    "%lld items checked": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lld related items selected automatically"
+            "value": "%lld items checked"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "%lld ilişkili öğe otomatik seçildi"
+            "value": "%lld öğe kontrol edildi"
+          }
+        }
+      }
+    },
+    "%lld items outside scope · %lld folders · %lld cloud-only files": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld items outside scope · %lld folders · %lld cloud-only files"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld öğe kapsam dışında · %lld klasör · %lld yalnızca buluttaki dosya"
           }
         }
       }
@@ -379,6 +490,22 @@
         }
       }
     },
+    "Activity": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activity"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Etkinlik"
+          }
+        }
+      }
+    },
     "Add to basket": {
       "localizations": {
         "en": {
@@ -407,22 +534,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tüm uygulamalar"
-          }
-        }
-      }
-    },
-    "Allocated": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Allocated"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Diskte ayrılan"
           }
         }
       }
@@ -571,6 +682,22 @@
         }
       }
     },
+    "Another link to the same file": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another link to the same file"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aynı dosyaya başka bir bağlantı"
+          }
+        }
+      }
+    },
     "Another observed app declares this data’s exact identifier. Review that app in Apps.": {
       "localizations": {
         "en": {
@@ -635,6 +762,102 @@
         }
       }
     },
+    "App data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisi"
+          }
+        }
+      }
+    },
+    "App data checking stopped before all items were found.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App data checking stopped before all items were found."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisi kontrolü tüm öğeler bulunmadan durdu."
+          }
+        }
+      }
+    },
+    "App data checking stopped before all items were found. Scan again to complete the list.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App data checking stopped before all items were found. Scan again to complete the list."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisi kontrolü tüm öğeler bulunmadan durdu. Listeyi tamamlamak için yeniden tarayın."
+          }
+        }
+      }
+    },
+    "App data folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App data folder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisi klasörü"
+          }
+        }
+      }
+    },
+    "App data is being reviewed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App data is being reviewed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisi inceleniyor"
+          }
+        }
+      }
+    },
+    "App identifier": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App identifier"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama kimliği"
+          }
+        }
+      }
+    },
     "App is running. You can close it and remove your selected items in the confirmation.": {
       "localizations": {
         "en": {
@@ -647,6 +870,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulama çalışıyor. Onay penceresinde uygulamayı kapatıp seçtiğiniz öğeleri kaldırabilirsiniz."
+          }
+        }
+      }
+    },
+    "App or document package": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App or document package"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama veya belge paketi"
           }
         }
       }
@@ -679,6 +918,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Apple tarafından yönetilen önbellekler hariç tutulur. Bu önbelleği Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Application": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama"
           }
         }
       }
@@ -784,6 +1039,22 @@
         }
       }
     },
+    "Applications": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applications"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulamalar"
+          }
+        }
+      }
+    },
     "Applications in Trash": {
       "extractionState": "manual",
       "localizations": {
@@ -813,6 +1084,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulamalar"
+          }
+        }
+      }
+    },
+    "Apps on disks that are disconnected or unavailable are not included.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apps on disks that are disconnected or unavailable are not included."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bağlı olmayan veya erişilemeyen disklerdeki uygulamalar dahil edilmedi."
           }
         }
       }
@@ -913,6 +1200,22 @@
         }
       }
     },
+    "Automatically selected.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically selected."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçildi."
+          }
+        }
+      }
+    },
     "Back": {
       "localizations": {
         "en": {
@@ -962,18 +1265,18 @@
         }
       }
     },
-    "Bundle ID": {
+    "Build output": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bundle ID"
+            "value": "Build output"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Paket kimliği"
+            "value": "Derleme çıktısı"
           }
         }
       }
@@ -990,6 +1293,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "CPU / çekirdek"
+          }
+        }
+      }
+    },
+    "Cache folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cache folder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önbellek klasörü"
           }
         }
       }
@@ -1074,6 +1393,38 @@
         }
       }
     },
+    "Checking app data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking app data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisi kontrol ediliyor"
+          }
+        }
+      }
+    },
+    "Checking app data. You can review your selection now.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking app data. You can review your selection now."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisi kontrol ediliyor. Seçiminizi şimdi inceleyebilirsiniz."
+          }
+        }
+      }
+    },
     "Checking app signature…": {
       "localizations": {
         "en": {
@@ -1090,36 +1441,18 @@
         }
       }
     },
-    "Checking association evidence. You can review selected items now.": {
-      "extractionState": "manual",
+    "Checking cache and temporary file locations": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Checking association evidence. You can review selected items now."
+            "value": "Checking cache and temporary file locations"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "İlişki kanıtları denetleniyor. Seçtiğiniz öğeleri şimdi gözden geçirebilirsiniz."
-          }
-        }
-      }
-    },
-    "Checking installed application ownership": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Checking installed application ownership"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Yüklü uygulamaların sahipliği denetleniyor"
+            "value": "Önbellek ve geçici dosya konumları kontrol ediliyor"
           }
         }
       }
@@ -1256,6 +1589,22 @@
         }
       }
     },
+    "Choose a folder or scan again to check for new copies.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a folder or scan again to check for new copies."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeni kopyaları kontrol etmek için bir klasör seçin veya yeniden tarayın."
+          }
+        }
+      }
+    },
     "Choose a folder to compare": {
       "localizations": {
         "en": {
@@ -1272,6 +1621,22 @@
         }
       }
     },
+    "Choose a tool for your Mac": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a tool for your Mac"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac’iniz için bir araç seçin"
+          }
+        }
+      }
+    },
     "Choose an area to check access again. Previous results are not proof of newly granted access.": {
       "localizations": {
         "en": {
@@ -1284,6 +1649,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Erişimi yeniden denetlemek için bir alan seçin. Önceki sonuçlar yeni izni kanıtlamaz."
+          }
+        }
+      }
+    },
+    "Choose another folder or review duplicate scanning settings.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose another folder or review duplicate scanning settings."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka bir klasör seçin veya kopya taraması ayarlarını gözden geçirin."
           }
         }
       }
@@ -1320,18 +1701,34 @@
         }
       }
     },
-    "Choose one verified copy to keep, then select others.": {
+    "Choose which app data to remove along with the app.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Choose one verified copy to keep, then select others."
+            "value": "Choose which app data to remove along with the app."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Korunacak doğrulanmış bir kopya seçin, sonra diğerlerini işaretleyin."
+            "value": "Uygulamayla birlikte kaldırılacak uygulama verisini seçin."
+          }
+        }
+      }
+    },
+    "Chosen in this app’s settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chosen in this app’s settings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamanın ayarlarında seçilmiş"
           }
         }
       }
@@ -1416,22 +1813,6 @@
         }
       }
     },
-    "Clear search": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clear search"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aramayı temizle"
-          }
-        }
-      }
-    },
     "Clear selection": {
       "localizations": {
         "en": {
@@ -1496,22 +1877,6 @@
         }
       }
     },
-    "Comparison complete": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Comparison complete"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Karşılaştırma tamamlandı"
-          }
-        }
-      }
-    },
     "Compression differs": {
       "localizations": {
         "en": {
@@ -1524,6 +1889,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sıkıştırma farklı"
+          }
+        }
+      }
+    },
+    "Continue": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Devam et"
           }
         }
       }
@@ -1544,18 +1925,34 @@
         }
       }
     },
-    "Could not open Settings. Go to System Settings → Privacy & Security → Full Disk Access.": {
+    "Could not finish": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Could not open Settings. Go to System Settings → Privacy & Security → Full Disk Access."
+            "value": "Could not finish"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ayarlar açılamadı. Sistem Ayarları → Gizlilik ve Güvenlik → Tam Disk Erişimi yolunu açın."
+            "value": "Tamamlanamadı"
+          }
+        }
+      }
+    },
+    "Counts update when each location finishes.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Counts update when each location finishes."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sayılar her konum tamamlandığında güncellenir."
           }
         }
       }
@@ -1576,6 +1973,22 @@
         }
       }
     },
+    "Currently used by this app": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Currently used by this app"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Şu anda bu uygulama tarafından kullanılıyor"
+          }
+        }
+      }
+    },
     "Data from removed apps": {
       "localizations": {
         "en": {
@@ -1592,18 +2005,18 @@
         }
       }
     },
-    "Data is separate from the app. Each association shows its evidence; name matches are reviewed separately.": {
+    "Data shared with other apps is never selected automatically.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Data is separate from the app. Each association shows its evidence; name matches are reviewed separately."
+            "value": "Data shared with other apps is never selected automatically."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Veri uygulamadan ayrıdır. Her ilişki kanıtını gösterir; ad eşleşmeleri ayrı incelenir."
+            "value": "Diğer uygulamalarla paylaşılan veri asla otomatik seçilmez."
           }
         }
       }
@@ -1620,6 +2033,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Silme varsayılanı"
+          }
+        }
+      }
+    },
+    "Dependency folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dependency folder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bağımlılık klasörü"
           }
         }
       }
@@ -1672,22 +2101,6 @@
         }
       }
     },
-    "Different metadata subset · choose its keeper": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Different metadata subset · choose its keeper"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Farklı metadata kümesi · onun korunacak kopyasını seçin"
-          }
-        }
-      }
-    },
     "Disk": {
       "localizations": {
         "en": {
@@ -1736,18 +2149,34 @@
         }
       }
     },
-    "Documented caches and related app data": {
+    "Disk, memory, and activity at a glance": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Documented caches and related app data"
+            "value": "Disk, memory, and activity at a glance"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Belgeli önbellekler ve ilişkili uygulama verileri"
+            "value": "Disk, bellek ve etkinliğe genel bakış"
+          }
+        }
+      }
+    },
+    "Dismiss": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dismiss"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kapat"
           }
         }
       }
@@ -2089,6 +2518,22 @@
         }
       }
     },
+    "Excluded by scanning settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Excluded by scanning settings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tarama ayarları gereği kapsam dışında"
+          }
+        }
+      }
+    },
     "Explore space": {
       "localizations": {
         "en": {
@@ -2153,6 +2598,22 @@
         }
       }
     },
+    "File contents no longer match": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File contents no longer match"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya içerikleri artık eşleşmiyor"
+          }
+        }
+      }
+    },
     "File could not be read": {
       "localizations": {
         "en": {
@@ -2165,6 +2626,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Dosya okunamadı"
+          }
+        }
+      }
+    },
+    "File information could not be checked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File information could not be checked"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya bilgileri kontrol edilemedi"
           }
         }
       }
@@ -2233,6 +2710,22 @@
         }
       }
     },
+    "File size": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya boyutu"
+          }
+        }
+      }
+    },
     "Files": {
       "localizations": {
         "en": {
@@ -2265,19 +2758,34 @@
         }
       }
     },
-    "Finalizing application list": {
-      "extractionState": "manual",
+    "Files needing review": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Finalizing application list"
+            "value": "Files needing review"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Uygulama listesi tamamlanıyor"
+            "value": "İncelenmesi gereken dosyalar"
+          }
+        }
+      }
+    },
+    "Find extra copies of your files": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find extra copies of your files"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosyalarınızın fazladan kopyalarını bulun"
           }
         }
       }
@@ -2294,6 +2802,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Finder etiketleri farklı"
+          }
+        }
+      }
+    },
+    "Folder size": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folder size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Klasör boyutu"
           }
         }
       }
@@ -2326,6 +2850,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Birimin boş alanı"
+          }
+        }
+      }
+    },
+    "Full Disk Access lets Lighten check protected folders. Without it, you can still use Lighten, but some scan results may be incomplete.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Full Disk Access lets Lighten check protected folders. Without it, you can still use Lighten, but some scan results may be incomplete."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tam Disk Erişimi, Lighten’ın korunan klasörleri kontrol etmesini sağlar. Bu izin olmadan Lighten’ı kullanmaya devam edebilirsiniz, ancak bazı tarama sonuçları eksik olabilir."
           }
         }
       }
@@ -2378,18 +2918,18 @@
         }
       }
     },
-    "Hatched: known minimum": {
+    "General": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hatched: known minimum"
+            "value": "General"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Taralı: bilinen en az boyut"
+            "value": "Genel"
           }
         }
       }
@@ -2411,18 +2951,18 @@
         }
       }
     },
-    "Hidden folders, app packages, caches, and build outputs are excluded.": {
+    "Hidden folder": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hidden folders, app packages, caches, and build outputs are excluded."
+            "value": "Hidden folder"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gizli klasörler, uygulama paketleri, önbellekler ve derleme çıktıları kapsam dışında."
+            "value": "Gizli klasör"
           }
         }
       }
@@ -2523,18 +3063,50 @@
         }
       }
     },
-    "If you just turned it on, macOS may ask you to quit and reopen Lighten before the permission applies.": {
+    "If Lighten’s signing identity changes after an update, macOS may ask you to grant access again.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "If you just turned it on, macOS may ask you to quit and reopen Lighten before the permission applies."
+            "value": "If Lighten’s signing identity changes after an update, macOS may ask you to grant access again."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Yeni açtıysanız, izin geçerli olmadan önce macOS Lighten'ı kapatıp yeniden açmanızı isteyebilir."
+            "value": "Bir güncellemeden sonra Lighten’ın imza kimliği değişirse macOS erişim iznini yeniden vermenizi isteyebilir."
+          }
+        }
+      }
+    },
+    "If you enabled access, reopen Lighten so macOS can apply it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If you enabled access, reopen Lighten so macOS can apply it."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erişimi açtıysanız macOS’un izni uygulayabilmesi için Lighten’ı yeniden açın."
+          }
+        }
+      }
+    },
+    "Important file information differs": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Important file information differs"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önemli dosya bilgileri farklı"
           }
         }
       }
@@ -2567,6 +3139,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sepette"
+          }
+        }
+      }
+    },
+    "In iCloud only; not downloaded for scanning": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In iCloud only; not downloaded for scanning"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnızca iCloud’da; tarama için indirilmedi"
+          }
+        }
+      }
+    },
+    "Incomplete sizes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incomplete sizes"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eksik boyutlar"
           }
         }
       }
@@ -2631,22 +3235,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu öğeleri Finder’da inceleyin."
-          }
-        }
-      }
-    },
-    "Installed applications and their related data": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Installed applications and their related data"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Yüklü uygulamalar ve ilişkili verileri"
           }
         }
       }
@@ -2792,38 +3380,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Koru: Akıllı"
-          }
-        }
-      }
-    },
-    "Known lower bound": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Known lower bound"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bilinen alt sınır"
-          }
-        }
-      }
-    },
-    "Known minimum": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Known minimum"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bilinen en az"
           }
         }
       }
@@ -3116,6 +3672,22 @@
         }
       }
     },
+    "Lighten could not read this item. Check its access permissions in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten could not read this item. Check its access permissions in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten bu öğeyi okuyamadı. Finder’da erişim izinlerini kontrol edin."
+          }
+        }
+      }
+    },
     "Lighten does not remove itself.": {
       "localizations": {
         "en": {
@@ -3196,6 +3768,38 @@
         }
       }
     },
+    "Listed in this app’s installation record": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listed in this app’s installation record"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamanın kurulum kaydında yer alıyor"
+          }
+        }
+      }
+    },
+    "Listed in this app’s settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listed in this app’s settings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamanın ayarlarında yer alıyor"
+          }
+        }
+      }
+    },
     "Loading history details…": {
       "localizations": {
         "en": {
@@ -3212,70 +3816,6 @@
         }
       }
     },
-    "Logical": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Logical"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mantıksal"
-          }
-        }
-      }
-    },
-    "Logical bytes to move to Trash; disk space is not yet freed.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Logical bytes to move to Trash; disk space is not yet freed."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Çöp Sepeti’ne taşınacak mantıksal bayt; disk alanı henüz açılmaz."
-          }
-        }
-      }
-    },
-    "Logical size": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Logical size"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mantıksal boyut"
-          }
-        }
-      }
-    },
-    "MB": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "MB"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "MB"
-          }
-        }
-      }
-    },
     "Map": {
       "localizations": {
         "en": {
@@ -3288,6 +3828,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Harita"
+          }
+        }
+      }
+    },
+    "Matches this app’s developer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Matches this app’s developer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamanın geliştiricisiyle eşleşiyor"
+          }
+        }
+      }
+    },
+    "Matches this app’s identifier": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Matches this app’s identifier"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamanın kimliğiyle eşleşiyor"
           }
         }
       }
@@ -3324,35 +3896,66 @@
         }
       }
     },
-    "Measuring related data: %lld / %lld": {
-      "extractionState": "manual",
+    "Measuring app data: %lld / %lld": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Measuring related data: %lld / %lld"
+            "value": "Measuring app data: %lld / %lld"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "İlişkili veri ölçülüyor: %lld / %lld"
+            "value": "Uygulama verisi ölçülüyor: %lld / %lld"
           }
         }
       }
     },
-    "Measuring. The size shown is a known minimum.": {
+    "Measuring apps": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Measuring. The size shown is a known minimum."
+            "value": "Measuring apps"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ölçülüyor. Gösterilen boyut bilinen en az değerdir."
+            "value": "Uygulamalar ölçülüyor"
+          }
+        }
+      }
+    },
+    "Measuring this folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Measuring this folder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu klasör ölçülüyor"
+          }
+        }
+      }
+    },
+    "Measuring. The size shown is at least the space found so far.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Measuring. The size shown is at least the space found so far."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ölçülüyor. Gösterilen boyut, şimdiye kadar bulunan alanın en az ne kadar olduğunu gösterir."
           }
         }
       }
@@ -3405,50 +4008,18 @@
         }
       }
     },
-    "Metadata differs or is unknown. Review the copies before choosing.": {
+    "Memory used": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Metadata differs or is unknown. Review the copies before choosing."
+            "value": "Memory used"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Üst veriler farklı veya bilinmiyor. Seçmeden önce kopyaları inceleyin."
-          }
-        }
-      }
-    },
-    "Metadata differs · review before choosing": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Metadata differs · review before choosing"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Üst veriler farklı · seçmeden önce inceleyin"
-          }
-        }
-      }
-    },
-    "Metadata unknown · review before choosing": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Metadata unknown · review before choosing"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Üst veriler bilinmiyor · seçmeden önce inceleyin"
+            "value": "Kullanılan bellek"
           }
         }
       }
@@ -3469,18 +4040,18 @@
         }
       }
     },
-    "Minimum size": {
+    "Minimum file size: %@ MB": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Minimum size"
+            "value": "Minimum file size: %@ MB"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "En küçük boyut"
+            "value": "En küçük dosya boyutu: %@ MB"
           }
         }
       }
@@ -3549,22 +4120,6 @@
         }
       }
     },
-    "Move to Trash instead": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Move to Trash instead"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bunun yerine Çöp’e taşı"
-          }
-        }
-      }
-    },
     "Moved to Trash": {
       "localizations": {
         "en": {
@@ -3613,22 +4168,6 @@
         }
       }
     },
-    "Names resemble %@, but ownership is unproven.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Names resemble %@, but ownership is unproven."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Adlar %@ uygulamasını andırıyor, ancak sahiplik kanıtlanamadı."
-          }
-        }
-      }
-    },
     "Needs review": {
       "localizations": {
         "en": {
@@ -3657,6 +4196,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sonraki dosya"
+          }
+        }
+      }
+    },
+    "No app data found in the locations checked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No app data found in the locations checked"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontrol edilen konumlarda uygulama verisi bulunamadı"
           }
         }
       }
@@ -3725,6 +4280,22 @@
         }
       }
     },
+    "No identical copy remains": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No identical copy remains"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aynı içerikli kopya kalmadı"
+          }
+        }
+      }
+    },
     "No installed app with this identifier was found. Review before moving to Trash.": {
       "localizations": {
         "en": {
@@ -3753,6 +4324,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Öğe yok"
+          }
+        }
+      }
+    },
+    "No items to clean": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No items to clean"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Temizlenecek öğe yok"
           }
         }
       }
@@ -3790,22 +4377,6 @@
         }
       }
     },
-    "No matching byte-identical copy remains": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No matching byte-identical copy remains"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Baytları aynı olan eşleşen bir kopya kalmadı"
-          }
-        }
-      }
-    },
     "No matching groups": {
       "localizations": {
         "en": {
@@ -3822,18 +4393,18 @@
         }
       }
     },
-    "No matching standard data locations found": {
+    "No matching items": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No matching standard data locations found"
+            "value": "No matching items"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Eşleşen standart veri konumu bulunamadı"
+            "value": "Eşleşen öğe yok"
           }
         }
       }
@@ -3850,6 +4421,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu ölçümde okunabilir işlem yok"
+          }
+        }
+      }
+    },
+    "No selected groups could be verified. Review the named files.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No selected groups could be verified. Review the named files."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili gruplar doğrulanamadı. Adı belirtilen dosyaları inceleyin."
           }
         }
       }
@@ -3950,87 +4537,82 @@
         }
       }
     },
-    "Not selected automatically: a matching name does not prove app ownership.": {
-      "extractionState": "manual",
+    "Not selected automatically: Lighten could not confirm which app uses it.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Not selected automatically: a matching name does not prove app ownership."
+            "value": "Not selected automatically: Lighten could not confirm which app uses it."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Otomatik seçilmedi: eşleşen ad, uygulamaya ait olduğunu kanıtlamaz."
+            "value": "Otomatik seçilmedi: Lighten hangi uygulamanın kullandığını doğrulayamadı."
           }
         }
       }
     },
-    "Not selected automatically: a vendor folder does not prove sole app ownership.": {
-      "extractionState": "manual",
+    "Not selected automatically: Lighten could not match it to this app.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Not selected automatically: a vendor folder does not prove sole app ownership."
+            "value": "Not selected automatically: Lighten could not match it to this app."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Otomatik seçilmedi: üretici klasörü, yalnız bu uygulamaya ait olduğunu kanıtlamaz."
+            "value": "Otomatik seçilmedi: Lighten bu uygulamayla eşleştiremedi."
           }
         }
       }
     },
-    "Not selected automatically: app ownership has not been verified.": {
-      "extractionState": "manual",
+    "Not selected automatically: an open file may be used by more than one app.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Not selected automatically: app ownership has not been verified."
+            "value": "Not selected automatically: an open file may be used by more than one app."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Otomatik seçilmedi: uygulamaya ait olduğu doğrulanmadı."
+            "value": "Otomatik seçilmedi: açık bir dosyayı birden fazla uygulama kullanabilir."
           }
         }
       }
     },
-    "Not selected automatically: association evidence is unavailable.": {
-      "extractionState": "manual",
+    "Not selected automatically: only the name matches this app.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Not selected automatically: association evidence is unavailable."
+            "value": "Not selected automatically: only the name matches this app."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Otomatik seçilmedi: ilişkiyi doğrulayacak kanıt yok."
+            "value": "Otomatik seçilmedi: yalnızca adı bu uygulamayla eşleşiyor."
           }
         }
       }
     },
-    "Not selected automatically: open files do not prove app ownership.": {
-      "extractionState": "manual",
+    "Not selected automatically: other apps may use this data.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Not selected automatically: open files do not prove app ownership."
+            "value": "Not selected automatically: other apps may use this data."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Otomatik seçilmedi: açık dosyalar, uygulamaya ait olduğunu kanıtlamaz."
+            "value": "Otomatik seçilmedi: diğer uygulamalar bu veriyi kullanıyor olabilir."
           }
         }
       }
@@ -4052,40 +4634,6 @@
         }
       }
     },
-    "Not selected automatically: the association is not a verified exact match.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not selected automatically: the association is not a verified exact match."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Otomatik seçilmedi: ilişki doğrulanmış bir tam eşleşme değil."
-          }
-        }
-      }
-    },
-    "Not selected automatically: the available evidence does not establish sole app ownership.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not selected automatically: the available evidence does not establish sole app ownership."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Otomatik seçilmedi: mevcut kanıt, yalnız bu uygulamaya ait olduğunu doğrulamıyor."
-          }
-        }
-      }
-    },
     "Not selected automatically: this data may be shared with other apps.": {
       "extractionState": "manual",
       "localizations": {
@@ -4099,6 +4647,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Otomatik seçilmedi: bu veri başka uygulamalarla ortak olabilir."
+          }
+        }
+      }
+    },
+    "Not selected automatically: this folder may be used by other apps from the same developer.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected automatically: this folder may be used by other apps from the same developer."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçilmedi: aynı geliştiricinin diğer uygulamaları bu klasörü kullanıyor olabilir."
           }
         }
       }
@@ -4153,6 +4717,54 @@
         }
       }
     },
+    "On another volume": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On another volume"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka bir diskte"
+          }
+        }
+      }
+    },
+    "On disk": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On disk"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diskte"
+          }
+        }
+      }
+    },
+    "One copy stays in each group. Choose another keeper if needed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "One copy stays in each group. Choose another keeper if needed."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her grupta bir kopya kalır. Gerekirse kalacak kopyayı değiştirin."
+          }
+        }
+      }
+    },
     "Only data supported by independent evidence is selected automatically. You can select other rows yourself.": {
       "localizations": {
         "en": {
@@ -4165,6 +4777,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Yalnızca bağımsız kanıtla desteklenen veriler otomatik seçilir. Diğer satırları kendiniz seçebilirsiniz."
+          }
+        }
+      }
+    },
+    "Only the name matches this app": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only the name matches this app"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnızca adı bu uygulamayla eşleşiyor"
           }
         }
       }
@@ -4213,6 +4841,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tam Disk Erişimi ayarlarını aç"
+          }
+        }
+      }
+    },
+    "Open System Settings → Privacy & Security → Full Disk Access, or quit and reopen Lighten manually.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open System Settings → Privacy & Security → Full Disk Access, or quit and reopen Lighten manually."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem Ayarları → Gizlilik ve Güvenlik → Tam Disk Erişimi yolunu açın veya Lighten’dan çıkıp uygulamayı yeniden açın."
           }
         }
       }
@@ -4329,6 +4973,38 @@
         }
       }
     },
+    "Other selected items": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other selected items"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen diğer öğeler"
+          }
+        }
+      }
+    },
+    "Outside the selected folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Outside the selected folder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen klasörün dışında"
+          }
+        }
+      }
+    },
     "Outside the standard Applications folders": {
       "extractionState": "manual",
       "localizations": {
@@ -4362,22 +5038,6 @@
         }
       }
     },
-    "Package contents are not opened during measurement. Moving to Trash does not free disk space.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Package contents are not opened during measurement. Moving to Trash does not free disk space."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ölçüm sırasında paket içerikleri açılmaz. Çöp’e taşımak disk alanını boşaltmaz."
-          }
-        }
-      }
-    },
     "Partial process list": {
       "localizations": {
         "en": {
@@ -4390,22 +5050,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kısmi işlem listesi"
-          }
-        }
-      }
-    },
-    "Partial scan": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Partial scan"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Eksik tarama"
           }
         }
       }
@@ -4586,22 +5230,6 @@
         }
       }
     },
-    "Physical application": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Physical application"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fiziksel uygulama"
-          }
-        }
-      }
-    },
     "Pictures": {
       "localizations": {
         "en": {
@@ -4778,6 +5406,22 @@
         }
       }
     },
+    "Previous scan was incomplete. Scan again to check these files.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous scan was incomplete. Scan again to check these files."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki tarama tamamlanmamıştı. Bu dosyaları kontrol etmek için yeniden tarayın."
+          }
+        }
+      }
+    },
     "Previously verified copy": {
       "localizations": {
         "en": {
@@ -4891,6 +5535,38 @@
         }
       }
     },
+    "Protected area": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protected area"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Korunan alan"
+          }
+        }
+      }
+    },
+    "Protected files are shown for review only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protected files are shown for review only"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Korunan dosyalar yalnızca inceleme için gösterilir"
+          }
+        }
+      }
+    },
     "Quick Look": {
       "localizations": {
         "en": {
@@ -4903,22 +5579,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Hızlı Bakış"
-          }
-        }
-      }
-    },
-    "RSS": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RSS"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Yerleşik bellek"
           }
         }
       }
@@ -5019,55 +5679,6 @@
         }
       }
     },
-    "Related data": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Related data"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İlişkili veriler"
-          }
-        }
-      }
-    },
-    "Related data is being reviewed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Related data is being reviewed"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İlgili veriler inceleniyor"
-          }
-        }
-      }
-    },
-    "Related discovery stopped before all files were found.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Related discovery stopped before all files were found."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tüm dosyalar bulunmadan ilişkili dosyaların aranması durduruldu."
-          }
-        }
-      }
-    },
     "Related discovery stopped. Review the app and files already listed, or scan again to find more.": {
       "extractionState": "manual",
       "localizations": {
@@ -5101,23 +5712,6 @@
         }
       }
     },
-    "Related-data ownership could not be verified.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Related-data ownership could not be verified."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İlişkili verinin uygulamaya ait olduğu doğrulanamadı."
-          }
-        }
-      }
-    },
     "Remaining app data may contain settings or documents. Review each reason; nothing is selected automatically.": {
       "localizations": {
         "en": {
@@ -5130,22 +5724,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kalan uygulama verileri ayarlar veya belgeler içerebilir. Her nedeni inceleyin; hiçbir öğe otomatik seçilmez."
-          }
-        }
-      }
-    },
-    "Remaining sizes are being measured": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Remaining sizes are being measured"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kalan boyutlar ölçülüyor"
           }
         }
       }
@@ -5182,6 +5760,22 @@
         }
       }
     },
+    "Removal review cancelled because automatic selection evidence changed. Review these files again:": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removal review cancelled because automatic selection evidence changed. Review these files again:"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomatik seçim kanıtı değiştiği için kaldırma onayı iptal edildi. Bu dosyaları yeniden inceleyin:"
+          }
+        }
+      }
+    },
     "Remove from basket": {
       "localizations": {
         "en": {
@@ -5210,6 +5804,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kaldırılmış uygulama verileri"
+          }
+        }
+      }
+    },
+    "Reopen Lighten": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reopen Lighten"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten’ı yeniden aç"
           }
         }
       }
@@ -5326,6 +5936,118 @@
         }
       }
     },
+    "Review actions and restore items from Trash": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review actions and restore items from Trash"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İşlemleri gözden geçirin ve Çöp’teki öğeleri geri yükleyin"
+          }
+        }
+      }
+    },
+    "Review applications and their related data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review applications and their related data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulamaları ve ilgili verilerini gözden geçirin"
+          }
+        }
+      }
+    },
+    "Review caches and other removable data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review caches and other removable data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önbellekleri ve kaldırılabilecek diğer verileri gözden geçirin"
+          }
+        }
+      }
+    },
+    "Review caches and temporary files apps can recreate, plus data left by removed apps.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review caches and temporary files apps can recreate, plus data left by removed apps."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulamaların yeniden oluşturabildiği önbellek ve geçici dosyaları, ayrıca kaldırılmış uygulamalardan kalan verileri inceleyin."
+          }
+        }
+      }
+    },
+    "Review only: file information could not be checked.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review only: file information could not be checked."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnızca inceleme: dosya bilgileri kontrol edilemedi."
+          }
+        }
+      }
+    },
+    "Review only: important file information differs between copies.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review only: important file information differs between copies."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnızca inceleme: kopyalar arasında önemli dosya bilgileri farklı."
+          }
+        }
+      }
+    },
+    "Review only: these copies are in a protected area.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review only: these copies are in a protected area."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yalnızca inceleme: bu kopyalar korunan bir alanda."
+          }
+        }
+      }
+    },
     "Review removal": {
       "localizations": {
         "en": {
@@ -5342,18 +6064,18 @@
         }
       }
     },
-    "Review selected removed-app data": {
+    "Review selected app data": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Review selected removed-app data"
+            "value": "Review selected app data"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Seçili kaldırılmış uygulama verilerini incele"
+            "value": "Seçilen uygulama verisini incele"
           }
         }
       }
@@ -5470,6 +6192,22 @@
         }
       }
     },
+    "Scan again to check for new items.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan again to check for new items."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeni öğeleri kontrol etmek için yeniden tarayın."
+          }
+        }
+      }
+    },
     "Scan again to refresh duplicate groups before another action.": {
       "localizations": {
         "en": {
@@ -5482,6 +6220,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Başka bir işlemden önce kopya gruplarını güncellemek için yeniden tarayın."
+          }
+        }
+      }
+    },
+    "Scan again to review app data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan again to review app data"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisini incelemek için yeniden tarayın"
           }
         }
       }
@@ -5502,22 +6256,6 @@
         }
       }
     },
-    "Scan again to review related data": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scan again to review related data"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "İlgili verileri incelemek için yeniden tarayın"
-          }
-        }
-      }
-    },
     "Scan cache": {
       "localizations": {
         "en": {
@@ -5534,18 +6272,18 @@
         }
       }
     },
-    "Scan cancelled": {
+    "Scan cancelled. Scan again to complete the comparison.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Scan cancelled"
+            "value": "Scan cancelled. Scan again to complete the comparison."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Tarama iptal edildi"
+            "value": "Tarama iptal edildi. Karşılaştırmayı tamamlamak için yeniden tarayın."
           }
         }
       }
@@ -5726,6 +6464,22 @@
         }
       }
     },
+    "Scanning settings": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanning settings"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tarama ayarları"
+          }
+        }
+      }
+    },
     "Search by name or path": {
       "localizations": {
         "en": {
@@ -5738,6 +6492,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ada veya yola göre ara"
+          }
+        }
+      }
+    },
+    "Search items in this folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search items in this folder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu klasördeki öğeleri ara"
+          }
+        }
+      }
+    },
+    "See more of your Mac": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "See more of your Mac"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac’inizin daha fazlasını görün"
+          }
+        }
+      }
+    },
+    "See what takes up disk space": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "See what takes up disk space"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disk alanını nelerin kullandığını görün"
           }
         }
       }
@@ -5886,19 +6688,50 @@
         }
       }
     },
-    "Selected automatically from verified app-specific evidence.": {
-      "extractionState": "manual",
+    "Selected automatically as app data.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Selected automatically from verified app-specific evidence."
+            "value": "Selected automatically as app data."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Uygulamaya özel doğrulanmış kanıtla otomatik seçildi."
+            "value": "Uygulama verisi olarak otomatik seçildi."
+          }
+        }
+      }
+    },
+    "Selected by you": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected by you"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sizin tarafınızdan seçildi"
+          }
+        }
+      }
+    },
+    "Selected by you.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected by you."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Siz seçtiniz."
           }
         }
       }
@@ -5996,22 +6829,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Paylaşılan Group Containers birden çok uygulamanın verisini içerebilir. Klasörü Finder’da inceleyin."
-          }
-        }
-      }
-    },
-    "Shared containers are included only when this app is their sole verified owner.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shared containers are included only when this app is their sole verified owner."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Paylaşılan kapsayıcılar yalnızca doğrulanmış tek sahipleri bu uygulama olduğunda dahil edilir."
           }
         }
       }
@@ -6145,6 +6962,22 @@
         }
       }
     },
+    "Size of selected copies": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Size of selected copies"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili kopyaların boyutu"
+          }
+        }
+      }
+    },
     "Size unavailable": {
       "localizations": {
         "en": {
@@ -6177,18 +7010,18 @@
         }
       }
     },
-    "Sizes grow as folders are measured": {
+    "Skip for now": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sizes grow as folders are measured"
+            "value": "Skip for now"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Klasörler ölçüldükçe boyutlar büyür"
+            "value": "Şimdilik atla"
           }
         }
       }
@@ -6273,6 +7106,70 @@
         }
       }
     },
+    "Some app data could not be matched because this app has no identifier.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some app data could not be matched because this app has no identifier."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamanın kimliği olmadığı için bazı uygulama verileri eşleştirilemedi."
+          }
+        }
+      }
+    },
+    "Some app data could not be matched.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some app data could not be matched."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı uygulama verileri eşleştirilemedi."
+          }
+        }
+      }
+    },
+    "Some app data could not be matched. You can still choose items yourself.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some app data could not be matched. You can still choose items yourself."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı uygulama verileri eşleştirilemedi. Öğeleri yine de kendiniz seçebilirsiniz."
+          }
+        }
+      }
+    },
+    "Some app ownership checks could not finish. Review the remaining files individually.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some app data could not be verified. Review the remaining files individually."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı uygulama verileri doğrulanamadı. Kalan dosyaları tek tek inceleyin."
+          }
+        }
+      }
+    },
     "Some application associations could not be verified.": {
       "extractionState": "manual",
       "localizations": {
@@ -6290,19 +7187,18 @@
         }
       }
     },
-    "Some applications or related data could not be checked completely.": {
-      "extractionState": "manual",
+    "Some apps could not be checked. Scan again to complete the list.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Some applications or related data could not be checked completely."
+            "value": "Some apps could not be checked. Scan again to complete the list."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bazı uygulamalar veya ilişkili veriler tam olarak denetlenemedi."
+            "value": "Bazı uygulamalar kontrol edilemedi. Listeyi tamamlamak için yeniden tarayın."
           }
         }
       }
@@ -6323,35 +7219,18 @@
         }
       }
     },
-    "Some associations could not be verified. Your explicit choices remain available.": {
-      "extractionState": "manual",
+    "Some cleaning locations could not be read. Details are listed below.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Some associations could not be verified. Your explicit choices remain available."
+            "value": "Some cleaning locations could not be read. Details are listed below."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bazı ilişkiler doğrulanamadı. Açık seçimlerinizi kullanmaya devam edebilirsiniz."
-          }
-        }
-      }
-    },
-    "Some files or areas could not be verified; results are partial.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Some files or areas could not be verified; results are partial."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bazı dosyalar veya alanlar doğrulanamadı; sonuçlar kısmi."
+            "value": "Bazı temizlik konumları okunamadı. Ayrıntılar aşağıda listeleniyor."
           }
         }
       }
@@ -6368,6 +7247,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bazı geçmiş kayıtları okunamadı. Güvenle devam etmek için arşivleyin."
+          }
+        }
+      }
+    },
+    "Some items could not be measured. Folder sizes show at least the space found.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some items could not be measured. Folder sizes show at least the space found."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı öğeler ölçülemedi. Klasör boyutları bulunan alanın en az ne kadar olduğunu gösterir."
           }
         }
       }
@@ -6405,6 +7300,22 @@
         }
       }
     },
+    "Some open files could not be checked. Your selections are still available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some open files could not be checked. Your selections are still available."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı açık dosyalar kontrol edilemedi. Seçimleriniz hâlâ kullanılabilir."
+          }
+        }
+      }
+    },
     "Some selected items are unavailable. Scan again before cleaning.": {
       "localizations": {
         "en": {
@@ -6417,6 +7328,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Seçilen bazı öğelere erişilemiyor. Temizlemeden önce yeniden tarayın."
+          }
+        }
+      }
+    },
+    "Source control folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source control folder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sürüm kontrolü klasörü"
           }
         }
       }
@@ -6465,6 +7392,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Durum"
+          }
+        }
+      }
+    },
+    "Storage": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Storage"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Depolama"
+          }
+        }
+      }
+    },
+    "Striped: size is incomplete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Striped: size is incomplete"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çizgili: boyut eksik"
           }
         }
       }
@@ -6546,6 +7505,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu öğenin yaşı doğrulanamadı. Tarihlerini Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "The app and its data are measured separately. Disk space is freed when you empty Trash.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app and its data are measured separately. Disk space is freed when you empty Trash."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama ve verisi ayrı ölçülür. Çöp boşaltıldığında disk alanı açılır."
           }
         }
       }
@@ -7114,6 +8089,22 @@
         }
       }
     },
+    "The scan was cancelled. Sizes shown may be incomplete.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The scan was cancelled. Sizes shown may be incomplete."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tarama iptal edildi. Gösterilen boyutlar eksik olabilir."
+          }
+        }
+      }
+    },
     "The scanned folder itself cannot be removed. Choose items inside it.": {
       "localizations": {
         "en": {
@@ -7194,18 +8185,18 @@
         }
       }
     },
-    "These items are never selected automatically. Select only items you recognize; your choice does not prove they belong to this app. Safe removal uses Trash and Undo.": {
+    "These items are not selected automatically. Check them before choosing to remove them.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "These items are never selected automatically. Select only items you recognize; your choice does not prove they belong to this app. Safe removal uses Trash and Undo."
+            "value": "These items are not selected automatically. Check them before choosing to remove them."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bu öğeler hiçbir zaman otomatik seçilmez. Yalnızca tanıdığınız öğeleri seçin; seçiminiz bu uygulamaya ait olduklarını kanıtlamaz. Güvenli kaldırma Çöp ve Geri Al ile yapılır."
+            "value": "Bu öğeler otomatik seçilmez. Kaldırmayı seçmeden önce kontrol edin."
           }
         }
       }
@@ -7238,6 +8229,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu öğeler macOS Çöp Sepeti’ne taşınır. Çöp Sepeti Lighten dışında boşaltılmadan alan açılmaz."
+          }
+        }
+      }
+    },
+    "These names resemble %@. Choose only items you recognize.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These names resemble %@. Choose only items you recognize."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu adlar %@ uygulamasını andırıyor. Yalnızca tanıdığınız öğeleri seçin."
+          }
+        }
+      }
+    },
+    "This action cannot be undone.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This action cannot be undone."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu işlem geri alınamaz."
           }
         }
       }
@@ -7306,24 +8329,7 @@
         }
       }
     },
-    "This application has no identifier; related data could not be matched by identifier.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This application has no identifier; related data could not be matched by identifier."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bu uygulamanın kimliği yok; ilişkili verisi kimlikle eşleştirilemedi."
-          }
-        }
-      }
-    },
     "This app’s running state could not be verified. Quit it and try again.": {
-      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
@@ -7483,18 +8489,18 @@
         }
       }
     },
-    "This folder is associated with the app. Review it separately before moving it to Trash.": {
+    "This folder is outside duplicate scanning": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This folder is associated with the app. Review it separately before moving it to Trash."
+            "value": "This folder is outside duplicate scanning"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bu klasör uygulamayla ilişkilidir. Çöp’e taşımadan önce ayrıca inceleyin."
+            "value": "Bu klasör kopya taramasının dışında"
           }
         }
       }
@@ -7607,6 +8613,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu öğe yakın zamanda değiştirilmiş dosyalar içeriyor. Kategorinin asgari yaşına ulaşılana kadar saklayın."
+          }
+        }
+      }
+    },
+    "This item is app data. Review it before removal.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is app data. Review it before removal."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğe uygulama verisidir. Kaldırmadan önce inceleyin."
+          }
+        }
+      }
+    },
+    "This item is in a location excluded from duplicate removal. Review its location in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is in a location excluded from duplicate removal. Review its location in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğenin konumu kopya kaldırma işleminin kapsamı dışında. Konumunu Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "This item is in a protected location and cannot be removed here. Inspect it in Finder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item is in a protected location and cannot be removed here. Inspect it in Finder."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğe korunan bir konumda ve buradan kaldırılamaz. Finder’da inceleyin."
           }
         }
       }
@@ -7835,6 +8889,22 @@
         }
       }
     },
+    "Tools": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tools"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Araçlar"
+          }
+        }
+      }
+    },
     "Top 10 processes for your account by resident memory. CPU is a share of one core.": {
       "localizations": {
         "en": {
@@ -7963,6 +9033,38 @@
         }
       }
     },
+    "Used by apps from this developer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used by apps from this developer"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu geliştiricinin uygulamaları tarafından kullanılıyor"
+          }
+        }
+      }
+    },
+    "Used by this app’s background service": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Used by this app’s background service"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu uygulamanın arka plan servisi tarafından kullanılıyor"
+          }
+        }
+      }
+    },
     "Used on volume": {
       "localizations": {
         "en": {
@@ -8027,22 +9129,6 @@
         }
       }
     },
-    "Volume": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Volume"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disk"
-          }
-        }
-      }
-    },
     "Volume free": {
       "localizations": {
         "en": {
@@ -8075,22 +9161,6 @@
         }
       }
     },
-    "Volume use includes snapshots and shared storage; scan covers only the selected folder.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Volume use includes snapshots and shared storage; scan covers only the selected folder."
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disk kullanımı anlık görüntüleri ve paylaşılan depolamayı içerir; tarama yalnız seçili klasörü kapsar."
-          }
-        }
-      }
-    },
     "Volume used": {
       "localizations": {
         "en": {
@@ -8103,6 +9173,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Disk kullanımı"
+          }
+        }
+      }
+    },
+    "Volume used includes snapshots and shared storage. Folder size includes only the items measured here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Volume used includes snapshots and shared storage. Folder size includes only the items measured here."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disk kullanımı anlık görüntüleri ve paylaşılan depolamayı içerir. Klasör boyutu yalnızca burada ölçülen öğeleri içerir."
           }
         }
       }
@@ -8140,6 +9226,22 @@
         }
       }
     },
+    "Welcome to Lighten": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Welcome to Lighten"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lighten’a hoş geldiniz"
+          }
+        }
+      }
+    },
     "Whole application package": {
       "localizations": {
         "en": {
@@ -8168,6 +9270,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Arka planda çalışıyor"
+          }
+        }
+      }
+    },
+    "You control this permission in System Settings. Lighten never grants it automatically.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You control this permission in System Settings. Lighten never grants it automatically."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu izni Sistem Ayarları’ndan siz yönetirsiniz. Lighten izni hiçbir zaman otomatik olarak vermez."
           }
         }
       }
@@ -8236,22 +9354,6 @@
         }
       }
     },
-    "applications measured": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "applications measured"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "uygulama ölçüldü"
-          }
-        }
-      }
-    },
     "candidates": {
       "localizations": {
         "en": {
@@ -8264,38 +9366,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "aday"
-          }
-        }
-      }
-    },
-    "compared": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "compared"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "karşılaştırıldı"
-          }
-        }
-      }
-    },
-    "data-identical files": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "data-identical files"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "verisi birebir aynı dosya"
           }
         }
       }
@@ -8316,22 +9386,6 @@
         }
       }
     },
-    "groups": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "groups"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "grup"
-          }
-        }
-      }
-    },
     "iOS application placeholders": {
       "extractionState": "manual",
       "localizations": {
@@ -8345,6 +9399,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "iOS uygulama yer tutucuları"
+          }
+        }
+      }
+    },
+    "identical copies": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "identical copies"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "aynı içerikli kopya"
           }
         }
       }
@@ -8393,38 +9463,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "öğe taşındı"
-          }
-        }
-      }
-    },
-    "items scanned": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "items scanned"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "öğe tarandı"
-          }
-        }
-      }
-    },
-    "known files skipped": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "known files skipped"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "bilinen dosya atlandı"
           }
         }
       }
@@ -8521,38 +9559,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "macOS sistem birimi"
-          }
-        }
-      }
-    },
-    "refreshing": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "refreshing"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "yenileniyor"
-          }
-        }
-      }
-    },
-    "scanned": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "scanned"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "tarandı"
           }
         }
       }

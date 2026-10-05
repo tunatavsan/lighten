@@ -672,6 +672,7 @@ final class AppsStore: ToolSummaryProviding {
       }
     }
     var choice = AppRemovalSelection(rootIdentity: identity, bundleID: report.bundleID)
+    choice.hasReceivedRelatedRows = !report.related.isEmpty
     choice.packageSelected = defaultPackage && packageUnavailableReason(report) == nil
     refreshAutomaticSelection(&choice, report: report)
     return choice
@@ -688,9 +689,19 @@ final class AppsStore: ToolSummaryProviding {
           && !choice.deselectedDataPaths.contains($0.path)
       }.map(\.path))
     choice.automaticDataPaths =
-      addingNew && choice.packageSelected
+      addingNew && choice.packageSelected && !choice.hasPresentedRemovalReview
       ? eligible.subtracting(manual) : choice.automaticDataPaths.intersection(eligible)
     choice.dataPaths = manual.union(choice.automaticDataPaths)
+    choice.lateAutomaticDataPaths.formIntersection(choice.automaticDataPaths)
+  }
+
+  var lateSelectedDataCount: Int {
+    currentSelection.lateAutomaticDataPaths.intersection(currentSelection.automaticDataPaths).count
+  }
+
+  var lateSelectedDataNote: String? {
+    guard lateSelectedDataCount > 0 else { return nil }
+    return String(localized: "\(lateSelectedDataCount) more files were found and selected.")
   }
 
   func isAutomaticallySelected(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> Bool {
@@ -1112,7 +1123,7 @@ final class AppsStore: ToolSummaryProviding {
     case .shallow: rank = 0
     case .measuring(let completed, _): rank = completed + 1
     case .initialComplete: rank = Int.max - 1
-    case .enriched: rank = Int.max
+    case .enriched: rank = review.globalEvidencePending ? Int.max - 1 : Int.max
     }
     if let rank {
       guard rank >= selectedReviewPhaseRank else { return }
@@ -1133,8 +1144,12 @@ final class AppsStore: ToolSummaryProviding {
       selectedShallowComplete = true
       selectedMeasurementProgress = nil
     case .enriched:
-      selectedEvidencePending = false
-      selectedEvidenceFinished = true
+      selectedEvidencePending = review.globalEvidencePending
+      selectedEvidenceFinished = !review.globalEvidencePending
+      if review.globalEvidenceUnavailable {
+        message = String(
+          localized: "Some app ownership checks could not finish. Review the remaining files individually.")
+      }
     }
     publishRelated(
       path: path, candidates: review.candidates, ownershipPending: review.ownershipPending)
@@ -1213,10 +1228,16 @@ final class AppsStore: ToolSummaryProviding {
           }
         }
       }
+      let previouslyAutomatic = choice.automaticDataPaths
       let hasPresentedReview = presentedPlanID != nil && preparedActions?.pending?.id == presentedPlanID
-      if selectedAppPaths.contains(path), !preparing, !hasPresentedReview {
-        refreshAutomaticSelection(&choice, report: reports[index])
+      refreshAutomaticSelection(
+        &choice, report: reports[index],
+        addingNew: selectedAppPaths.contains(path) && !preparing && !hasPresentedReview)
+      let lostAutomatic = previouslyAutomatic.subtracting(choice.automaticDataPaths)
+      if choice.hasReceivedRelatedRows {
+        choice.lateAutomaticDataPaths.formUnion(choice.automaticDataPaths.subtracting(previouslyAutomatic))
       }
+      choice.hasReceivedRelatedRows = choice.hasReceivedRelatedRows || !reports[index].related.isEmpty
       appSelections[path] = choice
       let affectsCurrentReview: Bool
       switch reviewKind {
@@ -1224,7 +1245,14 @@ final class AppsStore: ToolSummaryProviding {
       case .focused: affectsCurrentReview = selectedPath == path
       case .orphans: affectsCurrentReview = false
       }
-      if !invalidated.isEmpty, affectsCurrentReview {
+      if !lostAutomatic.isEmpty, affectsCurrentReview, preparing || hasPresentedReview {
+        cancelPreparation(actions: preparedActions)
+        message =
+          String(
+            localized:
+              "Removal review cancelled because automatic selection evidence changed. Review these files again:")
+          + " " + lostAutomatic.union(invalidated).sorted().joined(separator: ", ")
+      } else if !invalidated.isEmpty, affectsCurrentReview {
         cancelPreparation(actions: preparedActions)
         message =
           String(localized: "An item you selected by name changed. Review it and select it again.")
@@ -1466,7 +1494,29 @@ final class AppsStore: ToolSummaryProviding {
     }
   }
 
+  private func invalidateSessionObservations() {
+    guard let session else { return }
+    let generation = self.generation
+    Task { @concurrent in
+      await session.invalidateCachedObservations()
+      await MainActor.run {
+        guard self.session?.id == session.id, self.generation == generation else { return }
+        guard let path = self.selectedPath, self.selectedReport != nil else {
+          self.selectedReviewPending = false
+          self.selectedEvidencePending = false
+          return
+        }
+        self.selectedShallowComplete = false
+        self.selectedEvidenceFinished = false
+        self.selectedReviewPhaseRank = -1
+        self.selectedMeasurementProgress = nil
+        self.requestSelectedReview(path)
+      }
+    }
+  }
+
   func applyDisplayChange(_ change: ActionDisplayChange) {
+    if !change.items.isEmpty { invalidateSessionObservations() }
     let moved = Set(change.items.map(\.path))
     for item in change.items {
       switch change.kind {
@@ -1566,6 +1616,7 @@ final class AppsStore: ToolSummaryProviding {
     cancelPreparation(actions: actions, keepPresentedPlanID: true)
     let moved = Set(
       result.items.filter { $0.outcome == .applied }.compactMap { presentedPaths[$0.itemID] })
+    if !moved.isEmpty { invalidateSessionObservations() }
     let results = Dictionary(uniqueKeysWithValues: result.items.map { ($0.itemID, $0) })
     packageItemResults = presentedPackageItems.compactMap { item in
       guard let outcome = results[item.id] else { return nil }
@@ -1981,15 +2032,20 @@ final class AppsStore: ToolSummaryProviding {
     actions.clearKeptItems()
     guard let id = tool.preparation.begin() else { return }
     let manualPaths = selectedByNamePaths ?? Set(explicitlySelectedUnproven.keys)
+    let applicationGroups = removalApplicationGroups()
     var automaticProof: [String: String] = [:]
-    for report in reports {
+    var explicitDataPaths: Set<String> = []
+    let requestedApps = removalApplicationPaths()
+    for report in reports where requestedApps.contains(report.path) {
       guard let choice = appSelections[report.path] else { continue }
+      explicitDataPaths.formUnion(choice.dataPaths.subtracting(choice.automaticDataPaths))
       for candidate in report.related where choice.automaticDataPaths.contains(candidate.path) {
         let kinds =
           candidate.evidenceKinds.isEmpty ? candidate.provenance.map { [$0.kind] } ?? [] : candidate.evidenceKinds
         automaticProof[candidate.path] = kinds.map(Self.provenanceLabel).joined(separator: " · ")
       }
     }
+    for path in explicitDataPaths { automaticProof.removeValue(forKey: path) }
     reviewIntentRequested = true
     preparationStage = .selectedItems
     message = nil
@@ -2076,7 +2132,10 @@ final class AppsStore: ToolSummaryProviding {
         let selectedByName = manualPaths.contains(item.sourcePath)
         let dataReason = String(
           localized: "Selected app data. Preferences and support files may contain personal settings or documents.")
-        let automaticReason = automaticProof[item.sourcePath].map { $0 + " · " + dataReason }
+        let automaticReason = automaticProof[item.sourcePath].map {
+          String(localized: "Automatically selected.") + " " + $0 + " · " + dataReason
+        }
+        let manualReason = String(localized: "Selected by you.") + " " + dataReason
         return ActionItemSummary(
           id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
           path: item.sourcePath,
@@ -2090,8 +2149,9 @@ final class AppsStore: ToolSummaryProviding {
                   localized:
                     "You selected this item by name. Its ownership is unproven; it may contain personal data. Move it to Trash only if you recognize it. Undo is available in History."
                 )
-                : automaticReason ?? dataReason,
-          logicalBytes: size.logical, allocatedBytes: size.allocated)
+                : automaticReason ?? manualReason,
+          logicalBytes: size.logical, allocatedBytes: size.allocated,
+          applicationGroup: applicationGroups[item.sourcePath])
       }
       guard tool.preparation.accepts(id), stillSelected(), !Task.isCancelled, !actions.busy else { return }
       actions.present(
@@ -2113,6 +2173,13 @@ final class AppsStore: ToolSummaryProviding {
       }
       packageItemResults = []
       presentedPlanID = plan.id
+      switch reviewKind {
+      case .focused:
+        if let selectedPath { appSelections[selectedPath]?.hasPresentedRemovalReview = true }
+      case .basket:
+        for path in selectedAppPaths { appSelections[path]?.hasPresentedRemovalReview = true }
+      case .orphans: break
+      }
       observedResultID = nil
       message = nil
       let ms = Self.milliseconds(requestedAt.duration(to: .now))
@@ -2139,6 +2206,38 @@ final class AppsStore: ToolSummaryProviding {
       if tool.preparation.accepts(id), stillSelected(), !Task.isCancelled, !actions.busy {
         message = FailureText.describe(error)
       }
+    }
+  }
+
+  private func removalApplicationPaths() -> Set<String> {
+    switch reviewKind {
+    case .focused: selectedPath.map { [$0] } ?? []
+    case .basket: selectedAppPaths
+    case .orphans: []
+    }
+  }
+
+  /// Group only paths explicitly requested for a single app in this review.
+  private func removalApplicationGroups() -> [String: ActionApplicationGroup] {
+    let paths = removalApplicationPaths()
+    var requestedOwners: [String: Set<String>] = [:]
+    var groups: [String: ActionApplicationGroup] = [:]
+    for report in reports where paths.contains(report.path) {
+      guard let choice = appSelections[report.path] else { continue }
+      groups[report.path] = ActionApplicationGroup(
+        path: report.path,
+        name: listedNames[report.path] ?? URL(fileURLWithPath: report.path).deletingPathExtension().lastPathComponent)
+      if choice.packageSelected {
+        requestedOwners[report.path, default: []].insert(report.path)
+        if let physical = report.linkTarget { requestedOwners[physical, default: []].insert(report.path) }
+      }
+      for candidate in report.related where choice.dataPaths.contains(candidate.path) {
+        requestedOwners[candidate.path, default: []].insert(report.path)
+      }
+    }
+    return requestedOwners.reduce(into: [:]) { result, entry in
+      guard entry.value.count == 1, let owner = entry.value.first, let group = groups[owner] else { return }
+      result[entry.key] = group
     }
   }
 

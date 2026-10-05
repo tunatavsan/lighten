@@ -84,8 +84,8 @@ func duplicateFolderKeeperUsesDirectoryBoundary() throws {
     ).keeperID == outside.id)
 }
 
-@Test("One bulk selection keeps every compatibility subset and ignores unverified members")
-func duplicateBulkSelectionPreservesCompatibilitySubsets() {
+@Test("Protective metadata partitions keep the entire content group report-only")
+func duplicateBulkSelectionRefusesCompatibilitySubsets() {
   let firstSubset = UUID()
   let secondSubset = UUID()
   let first = [
@@ -98,15 +98,7 @@ func duplicateBulkSelectionPreservesCompatibilitySubsets() {
   let unknown = ruleMember("/fixture/f", compatibilityID: firstSubset, eligibility: .metadataUnknown)
   let group = DuplicateGroup(logicalBytes: 2_000_000, members: first + second + [reportOnly, unknown])
   let selections = DuplicateSelectionRule.smart.selections(groups: [group], homeDirectory: "/fixture")
-  #expect(selections.count == 2 && selections.allSatisfy { $0.groupID == group.id })
-  let keepers = Set(selections.map(\.keeperID))
-  let targets = selections.reduce(into: Set<UUID>()) { $0.formUnion($1.targetIDs) }
-  #expect(keepers.count == 2 && targets.count == 2 && keepers.isDisjoint(with: targets))
-  #expect(!targets.contains(reportOnly.id) && !targets.contains(unknown.id))
-  #expect(
-    selections.allSatisfy { selection in
-      selection.targetIDs.allSatisfy { group.canTarget($0, keeperID: selection.keeperID) }
-    })
+  #expect(selections.isEmpty)
 }
 
 @Test("One rule invocation selects one hundred groups without choosing every member of any group")

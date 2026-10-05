@@ -10,17 +10,19 @@ public struct ScanConfiguration: Sendable {
   public var fileSink: FileSink?
   /// Optional discovery pruning. False retains a partial lower bound for that directory.
   public var directoryFilter: (@Sendable (String) -> Bool)?
+  public var discoveryPolicy: ScanDiscoveryPolicy?
 
   public init(
     workers: Int = ScanConfiguration.defaultWorkers, homeDirectory: String = NSHomeDirectory(),
     publishInterval: Duration = .milliseconds(125), fileSink: FileSink? = nil,
-    directoryFilter: (@Sendable (String) -> Bool)? = nil
+    directoryFilter: (@Sendable (String) -> Bool)? = nil, discoveryPolicy: ScanDiscoveryPolicy? = nil
   ) {
     self.workers = workers
     self.homeDirectory = homeDirectory
     self.publishInterval = publishInterval
     self.fileSink = fileSink
     self.directoryFilter = directoryFilter
+    self.discoveryPolicy = discoveryPolicy
   }
 
   /// Knee of the measured worker sweep on this class of hardware.
@@ -152,8 +154,11 @@ public struct ScanEngine: Sendable {
       homeDirectory: configuration.homeDirectory, firmlinks: firmlinks, workers: configuration.workers,
       fileSink: configuration.fileSink,
       directoryFilter: configuration.directoryFilter,
+      discoveryPolicy: configuration.discoveryPolicy,
       sinkRootAllowed: details.st_flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0
-        && ProtectionPolicy.rule(for: root, homeDirectory: configuration.homeDirectory) == nil
+        && (ProtectionPolicy.rule(for: root, homeDirectory: configuration.homeDirectory) == nil
+          || (configuration.discoveryPolicy?.allowsLocalICloudFiles == true
+            && ProtectionPolicy.rule(for: root, homeDirectory: configuration.homeDirectory)?.id == "mobile-documents"))
         && !root.split(separator: "/").contains(where: { PackageNames.isPackage(String($0)) }),
       directEntries: directEntries, onFinish: { finish.signal() })
     let run = ScanRun(

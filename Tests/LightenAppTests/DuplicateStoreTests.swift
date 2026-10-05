@@ -549,9 +549,10 @@ private actor DuplicateObservationGate {
             modificationSeconds: Int64(member), modificationNanoseconds: 0),
           issues: [], readable: true),
         eligibility: mixedSubsets && member == 4 ? .metadataUnknown : .eligible,
-        compatibilityID: mixedSubsets && member == 4 ? nil : member < 2 ? firstSubset : secondSubset)
+        compatibilityID: mixedSubsets && member == 4 ? nil : !mixedSubsets || member < 2 ? firstSubset : secondSubset)
     }
-    return DuplicateGroup(logicalBytes: 2_000_000, members: members)
+    return DuplicateGroup(
+      logicalBytes: 2_000_000, members: members, reportOnlyReason: mixedSubsets ? .metadataUnknown : nil)
   }
   return DuplicateReport(
     snapshot: ScanSnapshot(
@@ -567,7 +568,7 @@ private actor DuplicateObservationGate {
   let store = DuplicateStore(
     preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences,
     pictures: fixture.pictures, events: { scans.next($0) })
-  let report = selectionReport(fixture: fixture, groupCount: 100, mixedSubsets: true)
+  let report = selectionReport(fixture: fixture, groupCount: 100)
   store.startScan(folder: fixture.root)
   await scans.waitForRequest(1)
   scans.complete(0, report: report)
@@ -577,7 +578,7 @@ private actor DuplicateObservationGate {
   store.reduceToOne(actions: actions)
   #expect(store.selectedGroupCount == 100 && store.selectedCopyCount == 200)
   #expect(store.selectedLogicalBytes == 400_000_000)
-  #expect(store.keepers.count == 200 && Set(store.keepers.values).isDisjoint(with: store.targets))
+  #expect(store.keepers.count == 100 && Set(store.keepers.values).isDisjoint(with: store.targets))
   store.clearSelection(actions: actions)
   #expect(store.targets.isEmpty && store.groupSelections.isEmpty)
   store.selectAll(actions: actions)
@@ -585,8 +586,8 @@ private actor DuplicateObservationGate {
   await store.waitForPictureSaves()
 }
 
-@Test("Changing a keeper preserves the independent keeper and targets of another compatible subset")
-@MainActor func duplicateStoreKeeperIsSubsetSpecific() throws {
+@Test("A protective metadata group cannot gain a keeper or removal targets")
+@MainActor func duplicateStoreProtectiveGroupRemainsReportOnly() throws {
   let fixture = try DuplicatePictureFixture()
   defer { fixture.remove() }
   let report = selectionReport(fixture: fixture, mixedSubsets: true)
@@ -597,16 +598,8 @@ private actor DuplicateObservationGate {
   store.tool.phase = .ready
   let actions = fixture.actions()
   store.reduceToOne(actions: actions)
-  let secondSubset = try #require(group.members[2].compatibilityID)
-  let secondKeeper = try #require(store.keepers[secondSubset])
-  let secondTargets = store.targets.intersection(Set(group.members[2...3].map(\.id)))
   store.chooseKeeper(group.members[0].id, for: group, actions: actions)
-  #expect(store.keepers[secondSubset] == secondKeeper)
-  #expect(store.targets.intersection(Set(group.members[2...3].map(\.id))) == secondTargets)
-  #expect(store.targets.contains(group.members[1].id) && !store.targets.contains(group.members[0].id))
-  #expect(store.groupSelections.count == 2 && store.selectedGroupCount == 1)
-  store.chooseKeeper(group.members[4].id, for: group, actions: actions)
-  #expect(store.keepers.count == 2 && !store.targets.contains(group.members[4].id))
+  #expect(store.keepers.isEmpty && store.targets.isEmpty && store.groupSelections.isEmpty)
 }
 
 @Test("Clearing a selection invalidates a held preparation even when its plan completes later")
@@ -614,7 +607,7 @@ private actor DuplicateObservationGate {
   let fixture = try DuplicatePictureFixture()
   defer { fixture.remove() }
   let gate = PlanGate()
-  let report = selectionReport(fixture: fixture, mixedSubsets: true)
+  let report = selectionReport(fixture: fixture)
   let store = DuplicateStore(
     planBuilder: { _, _ in try await gate.next() }, preferences: fixture.preferences,
     duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
@@ -635,7 +628,7 @@ private actor DuplicateObservationGate {
 @MainActor func duplicateColdVerificationIsGenerationGuarded(newScan: Bool) async throws {
   let fixture = try DuplicatePictureFixture()
   defer { fixture.remove() }
-  let original = selectionReport(fixture: fixture, mixedSubsets: true)
+  let original = selectionReport(fixture: fixture)
   let picture = ResultPicture(observedAt: Date(timeIntervalSince1970: 100), content: DuplicatePicture(original))
   try fixture.pictures.save(picture, named: "duplicates")
   let observation = DuplicateObservationGate()
@@ -673,7 +666,7 @@ private actor DuplicateObservationGate {
 @MainActor func duplicateRemainingGroupsStaySelectable() async throws {
   let fixture = try DuplicatePictureFixture()
   defer { fixture.remove() }
-  let report = selectionReport(fixture: fixture, groupCount: 2, mixedSubsets: true)
+  let report = selectionReport(fixture: fixture, groupCount: 2)
   let store = DuplicateStore(
     preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
   store.report = report
@@ -762,4 +755,55 @@ private actor DuplicateObservationGate {
   await reopened.prepare(actions: actions)
   #expect(actions.pending == nil)
   await reopened.waitForPictureSaves()
+}
+
+@Test("A partial duplicate preparation presents the verified plan and named rejected group together")
+@MainActor func duplicateStoreShowsAvailablePlanWithNamedRefusal() async throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  let report = selectionReport(fixture: fixture, groupCount: 2)
+  let failedGroup = report.groups[1]
+  let failedPath = failedGroup.members[1].entry.path
+  let refusal = DuplicatePlanRefusal(groupID: failedGroup.id, path: failedPath, reason: .changed)
+  let group = report.groups[0]
+  let keeper = group.members[2]
+  let plan = ActionPlan(
+    snapshotRunID: report.snapshot.runID, kind: .trash,
+    items: group.members.prefix(2).map {
+      PlanItem(id: $0.id, sourcePath: $0.entry.path, volumeID: UUID(), inventory: [$0.entry], ancestors: [])
+    })
+  let store = DuplicateStore(
+    availablePlanBuilder: { _, _ in DuplicatePlanResult(plan: plan, refusals: [refusal]) },
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
+  store.report = report
+  store.tool.phase = .ready
+  let actions = fixture.actions()
+  store.reduceToOne(actions: actions)
+  #expect(store.keepers.values.contains(keeper.id))
+  await store.prepare(actions: actions)
+  #expect(actions.pending?.plan.id == plan.id && actions.pending?.items.count == 2)
+  #expect(store.preparationRefusals == [refusal])
+  #expect(actions.pending?.rejectedItems == [PlanRejection(.changedSinceScan, path: failedPath)])
+  #expect(store.estimatedFreedBytes == nil && store.selectedLogicalBytes == 8_000_000)
+  store.clearSelection(actions: actions)
+  #expect(store.preparationRefusals.isEmpty && actions.pending == nil)
+}
+
+@Test("Duplicate scope counters stay separate from unreadable paths in the store")
+@MainActor func duplicateStoreSeparatesScopeAndUnreadableCounts() throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  let original = fixture.report(names: [])
+  let excluded = DuplicateScanExclusion(
+    path: fixture.root + "/node_modules", reason: .dependencyDirectory, isDirectory: true)
+  let cloud = DuplicateScanExclusion(path: fixture.root + "/cloud.bin", reason: .cloudOnly, isDirectory: false)
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
+  store.report = DuplicateReport(
+    snapshot: original.snapshot, groups: [], skippedCount: 1, partial: true,
+    comparisonCount: 0,
+    refusals: [DuplicateObservationRefusal(path: fixture.root + "/unreadable", reason: .unreadable)],
+    exclusions: [excluded, cloud])
+  #expect(store.excludedDirectoryCount == 1 && store.cloudOnlyCount == 1 && store.unreadableCount == 1)
+  #expect(store.excludedRoot == nil && store.estimatedFreedBytes == nil)
 }

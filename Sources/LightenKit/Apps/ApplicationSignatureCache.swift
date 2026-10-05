@@ -13,7 +13,8 @@ final class ApplicationSignatureCache: Sendable {
   }
 
   private let entries = Mutex<[String: Observation]>([:])
-  private let reads = Mutex(())
+  private final class ReadLock: Sendable { let value = Mutex(()) }
+  private let reads = Mutex<[String: ReadLock]>([:])
   private let reader: @Sendable (String) -> ApplicationSigningMetadata?
 
   init(reader: @escaping @Sendable (String) -> ApplicationSigningMetadata?) {
@@ -23,7 +24,13 @@ final class ApplicationSignatureCache: Sendable {
   func observation(at path: String) -> Observation? {
     guard let identity = try? ApplicationSignatureIdentity.capture(path) else { return nil }
     if let cached = entries.withLock({ $0[path] }), cached.identity == identity { return cached }
-    return reads.withLock { _ in
+    let readLock = reads.withLock { entries in
+      if let lock = entries[path] { return lock }
+      let lock = ReadLock()
+      entries[path] = lock
+      return lock
+    }
+    return readLock.value.withLock { _ in
       if let cached = entries.withLock({ $0[path] }), cached.identity == identity { return cached }
       let metadata = reader(path)
       guard (try? ApplicationSignatureIdentity.capture(path)) == identity else {

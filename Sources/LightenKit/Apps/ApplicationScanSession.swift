@@ -18,11 +18,14 @@ public struct ApplicationRelatedReview: Sendable {
   /// Informational coverage only; it supplies no ownership or action authority.
   public let openFilesComplete: Bool?
   public let phase: Phase
+  public let globalEvidencePending: Bool
+  public let globalEvidenceUnavailable: Bool
 
   public init(
     application: InstalledApplication, candidates: [RelatedDataCandidate], signerTeamID: String? = nil,
     ownershipPending: Bool = true, registrationReport: ApplicationRegistrationReport? = nil,
-    phase: Phase = .legacy, openFilesComplete: Bool? = nil
+    phase: Phase = .legacy, openFilesComplete: Bool? = nil,
+    globalEvidencePending: Bool = false, globalEvidenceUnavailable: Bool = false
   ) {
     self.application = application
     self.candidates = candidates
@@ -31,6 +34,8 @@ public struct ApplicationRelatedReview: Sendable {
     self.registrationReport = registrationReport
     self.phase = phase
     self.openFilesComplete = openFilesComplete
+    self.globalEvidencePending = globalEvidencePending
+    self.globalEvidenceUnavailable = globalEvidenceUnavailable
   }
 }
 
@@ -246,7 +251,9 @@ final class AuthenticApplicationContext: Sendable {
   }
 
   func signature(at path: String, cache: ApplicationSignatureCache) -> ApplicationSignatureCache.Observation? {
-    if let observation = signers.withLock({ $0[path] }) { return observation }
+    if let observation = signers.withLock({ $0[path] }) {
+      return (try? observation.identity.validate()) != nil ? observation : nil
+    }
     guard let observation = cache.observation(at: path) else { return nil }
     return signers.withLock { entries in
       if let existing = entries[path] { return existing }
@@ -411,7 +418,12 @@ public actor ApplicationScanSession {
   private let uptime: @Sendable () -> TimeInterval
   private let lightweightListing: ApplicationListing.Collector
   private let measurement: @Sendable (String, String) async -> ApplicationDiscovery.Measurement
-  private let metadata = ApplicationContextMetadata()
+  private var metadata = ApplicationContextMetadata()
+  private var contextRevision = UUID()
+  private var completedContext: AuthenticApplicationContext?
+  private var dataEvidence: Task<Void, Never>?
+  private var dataEvidenceUnavailable = false
+  private let evidenceTimeout: @Sendable () async -> Void
   private var ownership: Task<AuthenticApplicationContext, any Error>?
   private var listing: Task<BundleInventory, Never>?
   private var displayListingTask: Task<[ApplicationListEntry], Never>?
@@ -433,7 +445,8 @@ public actor ApplicationScanSession {
     related: RelatedDataService, uptime: @escaping @Sendable () -> TimeInterval,
     lightweightListing: ApplicationListing.Collector? = nil,
     measurement: @escaping @Sendable (String, String) async -> ApplicationDiscovery.Measurement = ApplicationDiscovery
-      .measure
+      .measure,
+    evidenceTimeout: @escaping @Sendable () async -> Void = { try? await Task.sleep(for: .seconds(30)) }
   ) {
     self.related = related
     self.uptime = uptime
@@ -442,6 +455,7 @@ public actor ApplicationScanSession {
         ApplicationListing.observe(roots: related.lightweightListingRoots, progress: progress)
       }
     self.measurement = measurement
+    self.evidenceTimeout = evidenceTimeout
   }
 
   public func events(includeAllRelated: Bool = false) -> AsyncStream<ApplicationDiscovery.Event> {
@@ -507,21 +521,41 @@ public actor ApplicationScanSession {
   }
 
   func installedListing() async -> BundleInventory {
-    if let listing { return await listing.value }
+    let revision = contextRevision
+    if let listing {
+      let result = await listing.value
+      guard revision == contextRevision else { return await installedListing() }
+      return result
+    }
     let service = related
     let task = Task.detached(priority: .utility) { service.installedListing() }
     listing = task
     if cancelled { task.cancel() }
-    return await task.value
+    let result = await task.value
+    guard revision == contextRevision else { return await installedListing() }
+    return result
   }
 
   func context(base: BundleInventory? = nil) async throws -> AuthenticApplicationContext {
     try Task.checkCancellation()
     guard !cancelled else { throw CancellationError() }
-    if let ownership { return try await ownership.value }
+    let revision = contextRevision
+    if let ownership {
+      let context = try await ownership.value
+      guard revision == contextRevision else { return try await self.context() }
+      completedContext = context
+      prepareDataEvidence(context: context)
+      return context
+    }
     let listing: BundleInventory
     if let base { listing = base } else { listing = await installedListing() }
-    if let ownership { return try await ownership.value }
+    if let ownership {
+      let context = try await ownership.value
+      guard revision == contextRevision else { return try await self.context() }
+      completedContext = context
+      prepareDataEvidence(context: context)
+      return context
+    }
     let service = related
     let metadata = self.metadata
     let task = Task.detached(priority: .utility) {
@@ -529,7 +563,78 @@ public actor ApplicationScanSession {
     }
     ownership = task
     if cancelled { task.cancel() }
-    return try await task.value
+    let context = try await task.value
+    guard revision == contextRevision else { return try await self.context() }
+    completedContext = context
+    prepareDataEvidence(context: context)
+    return context
+  }
+
+  private func prepareDataEvidence(context: AuthenticApplicationContext) {
+    guard dataEvidence == nil, !cancelled else { return }
+    let service = related
+    dataEvidence = Task.detached(priority: .utility) { await service.prepareDataEvidence(context: context) }
+  }
+
+  private func waitForDataEvidence() async -> Bool {
+    guard !dataEvidenceUnavailable else { return false }
+    guard let evidence = dataEvidence else { return false }
+    let revision = contextRevision
+    let context = completedContext
+    let timeout = evidenceTimeout
+    let completion = AsyncStream<Bool>.makeStream()
+    let observed = Task {
+      await evidence.value
+      guard !Task.isCancelled else { return }
+      completion.continuation.yield(true)
+      completion.continuation.finish()
+    }
+    let deadline = Task {
+      await timeout()
+      guard !Task.isCancelled else { return }
+      completion.continuation.yield(false)
+      completion.continuation.finish()
+    }
+    defer {
+      observed.cancel()
+      deadline.cancel()
+    }
+    var iterator = completion.stream.makeAsyncIterator()
+    let completed = await iterator.next() == true
+    guard !Task.isCancelled, revision == contextRevision else { return false }
+    let finished = completed && context?.observedDataClaims() != nil
+    if !finished {
+      dataEvidenceUnavailable = true
+      evidence.cancel()
+    }
+    return finished
+  }
+
+  private func scopedContext(app: InstalledApplication) async -> AuthenticApplicationContext {
+    let listing = await installedListing()
+    let metadata = self.metadata
+    let source = completedContext
+    let service = related
+    return await Task.detached(priority: .userInitiated) {
+      service.makeStandardContext(app: app, listing: listing, metadata: metadata, dataEvidenceSource: source)
+    }.value
+  }
+
+  /// New requests get a fresh observation lifetime after removal or restoration.
+  /// In-flight size observations can still publish retained rows for their original request.
+  public func invalidateCachedObservations() {
+    contextRevision = UUID()
+    ownership?.cancel()
+    listing?.cancel()
+    relatedCandidates?.cancel()
+    dataEvidence?.cancel()
+    ownership = nil
+    listing = nil
+    relatedCandidates = nil
+    dataEvidence = nil
+    dataEvidenceUnavailable = false
+    completedContext = nil
+    metadata = ApplicationContextMetadata()
   }
 
   /// Includes uncertain, protected and unmatched rows for an honest review
@@ -583,9 +688,28 @@ public actor ApplicationScanSession {
       guard let self else { return }
       var ready = shallowReady.stream.makeAsyncIterator()
       guard await ready.next() != nil, !Task.isCancelled else { return }
-      guard let context = try? await self.context() else { return }
+      let revision = await self.contextRevision
+      let scopedContext = await self.scopedContext(app: app)
       guard !Task.isCancelled, await self.isActive else { return }
-      let enriched = await service.review(for: app, context: context)
+      let scoped = await service.review(
+        for: app, context: scopedContext, scopedOnly: true, globalEvidencePending: true)
+      _ = await initial.value
+      guard !Task.isCancelled, await self.isActive else { return }
+      progress?(scoped)
+      guard let context = try? await self.context() else {
+        guard !Task.isCancelled, await self.isActive else { return }
+        progress?(
+          ApplicationRelatedReview(
+            application: app, candidates: scoped.candidates, signerTeamID: scoped.signerTeamID,
+            ownershipPending: true, phase: .enriched, openFilesComplete: scoped.openFilesComplete,
+            globalEvidenceUnavailable: true))
+        return
+      }
+      let finished = await self.waitForDataEvidence()
+      guard !Task.isCancelled, await self.isActive else { return }
+      guard await self.contextRevision == revision else { return }
+      let enriched = await service.review(
+        for: app, context: context, scopedOnly: true, globalEvidenceUnavailable: !finished)
       // Computing evidence is independent of sizing. Publish it last so an
       // older measurement wave cannot replace newer ownership evidence.
       _ = await initial.value
@@ -738,6 +862,7 @@ public actor ApplicationScanSession {
     activity.active.withLock { $0 = false }
     worker?.cancel()
     ownership?.cancel()
+    dataEvidence?.cancel()
     listing?.cancel()
     displayListingTask?.cancel()
     relatedCandidates?.cancel()

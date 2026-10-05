@@ -5,18 +5,17 @@ public enum DuplicateSelectionRule: Sendable, Equatable {
   case smart, newest, oldest
   case folder(String)
 
-  /// Each compatible subset keeps one file; unverified members remain unselected.
+  /// A wholly compatible content group keeps exactly one file.
   public func selections(groups: [DuplicateGroup], homeDirectory: String) -> [DuplicateGroupSelection] {
-    groups.flatMap { group in
+    groups.compactMap { group -> DuplicateGroupSelection? in
+      guard group.reportOnlyReason == nil else { return nil }
       let eligible = group.members.filter { $0.eligibility == .eligible && $0.compatibilityID != nil }
-      let subsets = Dictionary(grouping: eligible) { $0.compatibilityID! }
-      return subsets.keys.sorted { $0.uuidString < $1.uuidString }.compactMap { key -> DuplicateGroupSelection? in
-        guard let members = subsets[key], members.count > 1,
-          let keeper = members.sorted(by: { prefers($0, over: $1, homeDirectory: homeDirectory) }).first
-        else { return nil }
-        let targets = Set(members.filter { $0.id != keeper.id }.map(\.id))
-        return DuplicateGroupSelection(groupID: group.id, keeperID: keeper.id, targetIDs: targets)
-      }
+      guard eligible.count == group.members.count, eligible.count > 1,
+        Set(eligible.compactMap(\.compatibilityID)).count == 1,
+        let keeper = eligible.sorted(by: { prefers($0, over: $1, homeDirectory: homeDirectory) }).first
+      else { return nil }
+      let targets = Set(eligible.filter { $0.id != keeper.id }.map(\.id))
+      return DuplicateGroupSelection(groupID: group.id, keeperID: keeper.id, targetIDs: targets)
     }
   }
 

@@ -32,6 +32,28 @@ struct CleanCandidate: Identifiable, Sendable {
   }
 }
 
+/// Counts only observations published by completed discovery snapshots.
+struct CleanScanDisplayProgress {
+  private var paths: Set<String> = []
+  private var measuredPaths: Set<String> = []
+  private(set) var count = 0
+  private(set) var bytes: Int64?
+  private(set) var unreadablePaths: Set<String> = []
+
+  mutating func include(_ snapshot: ScanSnapshot) {
+    for entry in snapshot.entries {
+      paths.insert(entry.path)
+      if !entry.readable || entry.issues.contains(.unreadable) { unreadablePaths.insert(entry.path) }
+      if let identity = entry.identity, identity.kind == .regular,
+        measuredPaths.insert(entry.path).inserted
+      {
+        bytes = (bytes ?? 0) + max(0, identity.logicalBytes)
+      }
+    }
+    count = paths.count
+  }
+}
+
 enum CleanRowStatus: Sendable {
   case toolRunning, processUnknown, empty, clear, unavailable
 }
@@ -78,6 +100,7 @@ final class CleanStore: ToolSummaryProviding {
   var candidates: [CleanCandidate] = []
   var relatedCandidates: [RelatedDataCandidate] = []
   private(set) var discoveringRelated = false
+  private(set) var scanProgress = CleanScanDisplayProgress()
   var rowStatuses: [String: CleanRowStatus] = [:]
   var selected: Set<UUID> = []
   var mode: ActionKind = .trash
@@ -246,6 +269,7 @@ final class CleanStore: ToolSummaryProviding {
     tool.phase = .scanning
     candidates = []
     relatedCandidates = []
+    scanProgress = CleanScanDisplayProgress()
     selected = []
     scannedAt = nil
     rowStatuses = [:]
@@ -304,6 +328,7 @@ final class CleanStore: ToolSummaryProviding {
         }
         if Task.isCancelled || scanGeneration != generation { return }
         let snapshot = discovered.snapshot
+        scanProgress.include(snapshot)
         for observed in discovered.candidates {
           let entry = observed.entry
           let node = observed.node

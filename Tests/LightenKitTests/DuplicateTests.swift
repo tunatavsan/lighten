@@ -141,7 +141,7 @@ private func addACL(_ path: String, rule: String = "everyone allow read") throws
   #expect(plan.items.count == 1 && plan.items[0].duplicateProof != nil)
 }
 
-@Test func distinctCompatibilitySubsetsInOneContentGroupProduceOnePlan() async throws {
+@Test func protectiveMetadataSubsetsInOneContentGroupAreNamedReportOnly() async throws {
   let root = try duplicateFixture()
   defer { try? FileManager.default.removeItem(atPath: root) }
   for name in ["a", "b", "c", "d"] { try writeDuplicate(root + "/" + name) }
@@ -149,14 +149,12 @@ private func addACL(_ path: String, rule: String = "everyone allow read") throws
   for name in ["c", "d"] { #expect(setxattr(root + "/" + name, "com.lighten.strict", value, value.count, 0, 0) == 0) }
   let report = try await duplicateReport(root)
   let group = try #require(report.groups.first)
-  let partitions = Dictionary(grouping: group.members, by: \.compatibilityID)
-  #expect(partitions.count == 2)
-  let selections = partitions.values.map {
-    DuplicateGroupSelection(groupID: group.id, keeperID: $0[0].id, targetIDs: [$0[1].id])
-  }
-  let plan = try await DuplicateService().makePlan(report: report, selections: selections)
-  #expect(plan.items.count == 2)
-  #expect(Set(plan.items.map(\.sourcePath)).count == 2)
+  #expect(group.reportOnlyReason == .protectiveMetadataDifferent)
+  #expect(group.members.allSatisfy { $0.compatibilityID == nil && $0.eligibility == .metadataDifferent })
+  #expect(!report.partial && report.refusals.count == 4)
+  #expect(Set(report.refusals.map(\.path)) == Set(group.members.map { $0.entry.path }))
+  #expect(report.refusals.allSatisfy { $0.reason == .metadataDifferent })
+  #expect(DuplicateSelectionRule.smart.selections(groups: report.groups, homeDirectory: root).isEmpty)
 }
 
 @Test func repeatedCompatibilitySubsetAndCrossGroupKeeperTargetCyclesAreRejected() async throws {
@@ -339,10 +337,11 @@ private func addACL(_ path: String, rule: String = "everyone allow read") throws
   let b = try #require(members["b"])
   let c = try #require(members["c"])
   let d = try #require(members["d"])
-  #expect(group.canTarget(b.id, keeperID: a.id))
-  #expect(group.canTarget(d.id, keeperID: c.id))
+  #expect(!group.canTarget(b.id, keeperID: a.id))
+  #expect(!group.canTarget(d.id, keeperID: c.id))
   #expect(!group.canTarget(c.id, keeperID: a.id))
-  #expect(a.compatibilityID != c.compatibilityID)
+  #expect(a.compatibilityID == nil && c.compatibilityID == nil)
+  #expect(group.reportOnlyReason == .protectiveMetadataDifferent)
   #expect(report.comparisonCount <= 12)
 
   let equalRoot = try duplicateFixture()
@@ -854,4 +853,177 @@ func duplicateFreshPlanRefusesChangedKeeperOrTarget(_ changed: String) async thr
   #expect(report.snapshot.nodes.first?.partial == true)
   #expect(report.snapshot.nodes.first?.logical.completeTotal == nil)
   #expect((report.snapshot.nodes.first?.logical.knownLowerBound ?? 0) >= 24)
+}
+
+@Test("One changed group leaves ninety-nine fresh groups in one plan and names the changed file")
+func duplicateAvailablePlanKeepsNinetyNineGroups() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  for index in 0..<100 {
+    let bytes = [UInt8](repeating: UInt8(index), count: 65_536)
+    for name in ["a", "b"] { try writeDuplicate(root + "/group-\(index)-\(name)", bytes: bytes) }
+  }
+  let report = try await duplicateReport(root)
+  #expect(report.groups.count == 100)
+  let selections = DuplicateSelectionRule.oldest.selections(groups: report.groups, homeDirectory: root)
+  let failedSelection = try #require(selections.first)
+  let failedGroup = try #require(report.groups.first { $0.id == failedSelection.groupID })
+  let changed = try #require(failedGroup.members.first { failedSelection.targetIDs.contains($0.id) })
+  try writeDuplicate(changed.entry.path, bytes: [UInt8](repeating: 255, count: 65_536))
+  let result = try await DuplicateService().makeAvailablePlan(report: report, selections: selections)
+  let plan = try #require(result.plan)
+  #expect(plan.items.count == 99 && Set(plan.items.compactMap { $0.duplicateProof?.groupID }).count == 99)
+  #expect(
+    result.refusals == [DuplicatePlanRefusal(groupID: failedGroup.id, path: changed.entry.path, reason: .changed)])
+  #expect(!plan.items.contains { $0.duplicateProof?.groupID == failedGroup.id })
+  await #expect(throws: DuplicateFailure.self) {
+    try await DuplicateService().makePlan(report: report, selections: selections)
+  }
+}
+
+@Test("An informational content group keeps exactly one copy across three metadata variants")
+func duplicateInformationalGroupKeepsOneCopy() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  for name in ["a", "b", "c"] { try writeDuplicate(root + "/" + name) }
+  let value = Array("download fixture".utf8)
+  #expect(setxattr(root + "/b", "com.apple.quarantine", value, value.count, 0, 0) == 0)
+  #expect(chmod(root + "/c", 0o600) == 0)
+  let report = try await duplicateReport(root)
+  let group = try #require(report.groups.first)
+  let selections = DuplicateSelectionRule.smart.selections(groups: report.groups, homeDirectory: root)
+  #expect(group.reportOnlyReason == nil && Set(group.members.compactMap(\.compatibilityID)).count == 1)
+  #expect(selections.count == 1 && selections.first?.targetIDs.count == 2)
+  #expect(
+    group.members.allSatisfy { $0.metadataWarnings.contains(.quarantine) && $0.metadataWarnings.contains(.permissions) }
+  )
+  let result = try await DuplicateService().makeAvailablePlan(report: report, selections: selections)
+  #expect(result.plan?.items.count == 2 && result.refusals.isEmpty)
+}
+
+@Test("Native package boundaries and deliberate exclusions remain neutral and named")
+func duplicateScopeOmissionsAreNotReadFailures() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  for name in ["a", "b"] { try writeDuplicate(root + "/" + name) }
+  for folder in [".git", "node_modules", "Collection.photolibrary", "Old.migratedphotolibrary", "Machine.backupbundle"]
+  {
+    let directory = root + "/" + folder
+    try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    try writeDuplicate(directory + "/a")
+    try writeDuplicate(directory + "/b")
+  }
+  let report = try await duplicateReport(root)
+  #expect(!report.partial && report.unreadableCount == 0 && report.refusals.isEmpty)
+  #expect(report.groups.count == 1 && report.excludedDirectoryCount == 5)
+  #expect(report.exclusions.filter { $0.reason == .package }.count == 3)
+  #expect(report.snapshot.nodes.first?.partial == false)
+  for folder in [".git", "Collection.photolibrary"] {
+    let excluded = try await duplicateReport(root + "/" + folder)
+    #expect(excluded.excludedRoot?.path == root + "/" + folder)
+    #expect(excluded.groups.isEmpty && !excluded.partial)
+  }
+}
+
+@Test("Home includes local iCloud Drive while other Library contents stay outside scope")
+func duplicateHomeIncludesOnlyLocalCloudDiscovery() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let cloud = root + "/Library/Mobile Documents"
+  let preferences = root + "/Library/Preferences"
+  for folder in [cloud, preferences] {
+    try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+    for name in ["a", "b"] { try writeDuplicate(folder + "/" + name) }
+  }
+  let report = try await duplicateReport(root)
+  let group = try #require(report.groups.first)
+  #expect(report.groups.count == 1 && !report.partial)
+  #expect(Set(group.members.map { $0.entry.path }) == Set([cloud + "/a", cloud + "/b"]))
+  #expect(group.reportOnlyReason == .protectedArea)
+  #expect(report.exclusions.contains { $0.path == preferences && $0.reason == .homeLibrary })
+  #expect(report.refusals.allSatisfy { $0.reason == .protectedArea })
+  #expect(DuplicateSelectionRule.smart.selections(groups: report.groups, homeDirectory: root).isEmpty)
+}
+
+@Test("Cloud-only entries are counted without delivering a file fact or traversing a directory")
+func duplicateDatalessDiscoveryNeverHydrates() throws {
+  let root = "/fixture/home"
+  let omissions = Mutex<[ScanDiscoveryOmission]>([])
+  let received = Mutex<[FileFact]>([])
+  let tree = ScanTree(runID: UUID(), rootPath: root, root: ScanTree.rootNode(name: root, device: 1, inode: 1))
+  let automaton = ProtectionAutomaton(homeDirectory: root)
+  let walker = ParallelWalker(
+    tree: tree, counters: ScanCounters(), automaton: automaton, boundaryDevice: 1,
+    homeDirectory: root, firmlinks: nil, workers: 1,
+    fileSink: FileSink(minLogicalBytes: 1) { fact in received.withLock { $0.append(fact) } },
+    discoveryPolicy: ScanDiscoveryPolicy(neutralExclusions: true, allowsLocalICloudFiles: true) { omission in
+      omissions.withLock { $0.append(omission) }
+    }, onFinish: {})
+  let parent = WalkJob(
+    owner: 0, path: root + "/Library/Mobile Documents", device: 1, inode: 1,
+    mode: .node, depth: 1, protection: automaton.state(forPath: root + "/Library/Mobile Documents"))
+  let file = RawEntry(
+    name: "cloud.bin", kind: .regular, device: 1, inode: 2, flags: UInt32(SF_DATALESS),
+    linkCount: 1, logical: 128_000, allocated: 0, error: 0)
+  walker.emit(file, in: parent)
+  let directory = RawEntry(
+    name: "cloud-folder", kind: .directory, device: 1, inode: 3, flags: UInt32(SF_DATALESS),
+    linkCount: 1, logical: 0, allocated: 0, error: 0)
+  let child = walker.classify(directory, parent: parent)
+  #expect(!child.traverse && child.reason == nil && received.withLock { $0.isEmpty })
+  #expect(omissions.withLock { $0.count } == 2)
+  #expect(
+    omissions.withLock {
+      $0.allSatisfy {
+        if case .cloudOnly = $0.reason { return true }
+        return false
+      }
+    })
+}
+
+@Test("Small exact copies still require full bytes after sampling", arguments: [65_536, 131_072])
+func duplicateSmallFilesReceiveFullComparison(size: Int) async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let bytes = [UInt8](repeating: 7, count: size)
+  for name in ["a", "b"] { try writeDuplicate(root + "/" + name, bytes: bytes) }
+  let report = try await duplicateReport(root)
+  #expect(report.groups.count == 1)
+  var different = bytes
+  different[size / 2] = 9
+  try writeDuplicate(root + "/b", bytes: different)
+  #expect(try await duplicateReport(root).groups.isEmpty)
+}
+
+@Test("Discovery reuses a ctime-only hint while action hashing still reads the complete file")
+func duplicateCtimeOnlyCacheHitDoesNotAuthorizeAction() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  for name in ["a", "b"] { try writeDuplicate(root + "/" + name, bytes: [UInt8](repeating: 7, count: 65_536)) }
+  var (entry, _, volumeID) = try await pair(root)
+  let original = try #require(entry.identity)
+  let hasher = CountingDuplicateHash()
+  let comparator = DuplicateFileComparator(hasher: hasher, discoveryCache: DuplicateDigestCache())
+  let expected = try comparator.discoveryDigest(entry, volumeID: volumeID)
+  #expect(chmod(entry.path, 0o600) == 0)
+  (entry, _, volumeID) = try await pair(root)
+  #expect(entry.identity != original)
+  #expect(entry.identity?.modificationSeconds == original.modificationSeconds)
+  #expect(try comparator.discoveryDigest(entry, volumeID: volumeID) == expected)
+  #expect(hasher.calls.withLock { $0 } == 1)
+  #expect(try comparator.digest(entry, volumeID: volumeID) == expected)
+  #expect(hasher.calls.withLock { $0 } == 2)
+}
+
+@Test("An extra hard link outside the scan root is accounted for without a free-space claim")
+func duplicateHiddenHardLinkIsAccountedFor() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let included = root + "/included"
+  try FileManager.default.createDirectory(atPath: included, withIntermediateDirectories: true)
+  for name in ["a", "b"] { try writeDuplicate(included + "/" + name) }
+  #expect(link(included + "/a", root + "/outside-link") == 0)
+  let report = try await duplicateReport(included)
+  #expect(report.groups.count == 1 && report.additionalHardLinkCount == 1)
+  #expect(report.groups.first?.members.contains { $0.entry.identity?.linkCount == 2 } == true)
 }

@@ -9,29 +9,27 @@ struct OverviewView: View {
   let showHistory: () -> Void
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 22) {
-        HStack(alignment: .firstTextBaseline) {
-          Text(String(localized: "Overview"))
-            .font(.system(size: 24, weight: .semibold))
-          Spacer()
-          if let date = store.system?.observedAt {
-            Text("\(String(localized: "System checked")) \(date.formatted(date: .omitted, time: .shortened))")
-              .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+    ToolScreen(String(localized: "Overview")) {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 22) {
+          HStack(alignment: .firstTextBaseline) {
+            if let date = store.system?.observedAt {
+              Text("\(String(localized: "System checked")) \(date.formatted(date: .omitted, time: .shortened))")
+                .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+            }
           }
+          diskSection
+          Divider()
+          memorySection
+          Divider()
+          processSection
         }
-        diskSection
-        Divider()
-        memorySection
-        Divider()
-        processSection
+        .padding(.vertical, 24)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
       }
-      .padding(20)
-      .frame(maxWidth: .infinity, alignment: .topLeading)
+    } toolbar: {
+      Button(String(localized: "Explore space"), action: showSpace)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background(LightenStyle.canvas)
-    .navigationTitle(String(localized: "Overview"))
     .task { await store.run(rootPath: space.selectedRoot.path) }
     .onAppear { space.showCachedSummary() }
     .onDisappear { store.stop() }
@@ -42,7 +40,6 @@ struct OverviewView: View {
       HStack {
         sectionHeading(String(localized: "Disk"), symbol: "externaldrive")
         Spacer()
-        Button(String(localized: "Explore space"), action: showSpace)
       }
       Text(space.selectedRoot.path)
         .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
@@ -145,7 +142,7 @@ struct OverviewView: View {
           HStack {
             Text(String(localized: "Process"))
             Spacer()
-            Text(String(localized: "RSS")).frame(width: 100, alignment: .trailing)
+            Text(String(localized: "Memory used")).frame(width: 100, alignment: .trailing)
             Text(String(localized: "CPU / core")).frame(width: 95, alignment: .trailing)
           }
           .font(.system(size: 11, weight: .medium)).foregroundStyle(LightenStyle.muted)

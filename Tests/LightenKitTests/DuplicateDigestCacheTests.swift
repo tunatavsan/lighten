@@ -22,10 +22,11 @@ private func cacheIdentity(
   #expect(cache.value(for: original, stage: .sample) == nil)
   for changed in [
     cacheIdentity(device: 9), cacheIdentity(inode: 9), cacheIdentity(bytes: 9),
-    cacheIdentity(modified: 9), cacheIdentity(changed: 9), cacheIdentity(flags: 1),
+    cacheIdentity(modified: 9), cacheIdentity(flags: 1),
   ] {
     #expect(cache.value(for: changed, stage: .full) == nil)
   }
+  #expect(cache.value(for: cacheIdentity(changed: 9), stage: .full) == digest)
 }
 
 @Test func duplicateDigestCacheIsBoundedAndCannotUseLegacyMissingMtime() {

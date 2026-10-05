@@ -24,84 +24,99 @@ struct CleanView: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(alignment: .top) {
-        VStack(alignment: .leading, spacing: 5) {
-          Text(String(localized: "Clean")).font(.system(size: 24, weight: .semibold))
-          Text(String(localized: "Documented caches and related app data")).foregroundStyle(LightenStyle.muted)
+    ToolScreen(String(localized: "Clean")) {
+      VStack(alignment: .leading, spacing: 12) {
+        Text(String(localized: "Review caches and temporary files apps can recreate, plus data left by removed apps."))
+          .foregroundStyle(LightenStyle.muted)
+          .fixedSize(horizontal: false, vertical: true)
+        if store.phase == .scanning {
+          ToolScanProgress(
+            status: String(localized: "Checking cache and temporary file locations"),
+            count: store.scanProgress.count, bytes: store.scanProgress.bytes)
+          Text(String(localized: "Counts update when each location finishes."))
+            .font(.caption).foregroundStyle(.secondary)
         }
-        Spacer()
-        Button(store.phase == .scanning ? String(localized: "Cancel scan") : String(localized: "Scan")) {
-          if store.phase == .scanning { store.cancelScan(actions: actions) } else { store.startScan(actions: actions) }
-        }
-        .disabled(actions.busy || store.tool.preparation.preparing)
-      }
-      HStack {
-        TextField(String(localized: "Search by name or path"), text: $searchText)
-          .textFieldStyle(.roundedBorder).frame(maxWidth: 360)
-          .accessibilityLabel(String(localized: "Search by name or path"))
-        Button(String(localized: "Clear search")) { searchText = "" }.disabled(searchText.isEmpty)
-        Spacer()
         Text(
           "\(store.toolSummary.count) \(String(localized: "candidates")) · \(format(store.toolSummary.logicalBytes))"
         )
-        .font(.system(size: 12)).monospacedDigit()
+        .font(.callout).monospacedDigit()
         .contentTransition(reduceMotion ? .identity : .numericText())
-      }
-      HStack {
-        Text(scanStatus).font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-        Spacer()
-        Button(String(localized: "Select all")) { store.selectAll(actions: actions) }
-          .disabled(store.picture != nil || store.phase != .ready || actions.busy)
-      }
-      Divider()
-      ScrollView {
-        LazyVStack(alignment: .leading, spacing: 12) {
-          if let picture = store.picture {
-            previousResults(picture)
-          } else {
-            ForEach(Array(actionableRows.prefix(7))) { row in categoryCard(row) }
-            if actionableRows.count > 7 {
-              DisclosureGroup(String(localized: "More categories")) {
-                ForEach(Array(actionableRows.dropFirst(7))) { row in categoryCard(row) }
-              }
-            }
-            if store.discoveringRelated {
-              HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(String(localized: "Checking removed app data"))
-                  .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-              }
-            }
-            if !related.isEmpty { removedData }
-            reportOnly
-          }
+        HStack {
+          Text(scanStatus).font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+          Spacer()
         }
-        .padding(.vertical, 4)
+        Divider()
+        ScrollView {
+          LazyVStack(alignment: .leading, spacing: 12) {
+            if let picture = store.picture {
+              previousResults(picture)
+            } else {
+              ForEach(Array(actionableRows.prefix(7))) { row in categoryCard(row) }
+              if actionableRows.count > 7 {
+                DisclosureGroup(String(localized: "More categories")) {
+                  ForEach(Array(actionableRows.dropFirst(7))) { row in categoryCard(row) }
+                }
+              }
+              if store.discoveringRelated {
+                HStack(spacing: 8) {
+                  ProgressView().controlSize(.small)
+                  Text(String(localized: "Checking removed app data"))
+                    .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+                }
+              }
+              if !related.isEmpty { removedData }
+              if store.partial {
+                PartialResultNotice(reason: String(localized: "Partial scan. Scan again before cleaning."))
+              }
+              let unreadableRows = store.rows.filter { store.rowStatuses[$0.id] == .unavailable }
+              if !unreadableRows.isEmpty || !store.scanProgress.unreadablePaths.isEmpty {
+                PartialResultNotice(
+                  reason: String(localized: "Some cleaning locations could not be read. Details are listed below."))
+                ForEach(store.scanProgress.unreadablePaths.sorted(), id: \.self) { path in
+                  Text(path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+              }
+              if filtered.isEmpty && related.isEmpty && store.phase != .scanning {
+                ContentUnavailableView(
+                  searchTerm.isEmpty ? String(localized: "No items to clean") : String(localized: "No matching items"),
+                  systemImage: "checkmark.circle",
+                  description: Text(String(localized: "Scan again to check for new items.")))
+              }
+              reportOnly
+            }
+            ActionFeedbackView(actions: actions)
+          }
+          .padding(.vertical, 4)
+        }
+        .frame(minHeight: 0, maxHeight: .infinity)
+        Divider()
+        HStack {
+          Text("\(store.selected.count) \(String(localized: "selected")) · \(format(store.selectedLogicalBytes))")
+            .font(.system(size: 12)).monospacedDigit()
+            .contentTransition(reduceMotion ? .identity : .numericText())
+          Spacer()
+        }
+        if let message = store.message {
+          Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+            .textSelection(.enabled)
+        } else if let message = actions.message {
+          Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+        }
       }
-      Divider()
-      HStack {
-        Text("\(store.selected.count) \(String(localized: "selected")) · \(format(store.selectedLogicalBytes))")
-          .font(.system(size: 12)).monospacedDigit()
-          .contentTransition(reduceMotion ? .identity : .numericText())
-        Spacer()
-        Button(String(localized: "Clean")) { Task { await store.prepare(actions: actions) } }
-          .buttonStyle(.borderedProminent)
-          .disabled(
-            store.picture != nil || store.selected.isEmpty || store.phase != .ready || store.busy || actions.busy)
+      .padding(.vertical, 20)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    } toolbar: {
+      Button(store.phase == .scanning ? String(localized: "Cancel scan") : String(localized: "Scan")) {
+        if store.phase == .scanning { store.cancelScan(actions: actions) } else { store.startScan(actions: actions) }
       }
-      if let message = store.message {
-        Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-          .textSelection(.enabled)
-      } else if let message = actions.message {
-        Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-      }
-      ActionFeedbackView(actions: actions)
+      .buttonStyle(.borderedProminent)
+      .disabled(actions.busy || store.tool.preparation.preparing)
+      Button(String(localized: "Select all")) { store.selectAll(actions: actions) }
+        .disabled(store.picture != nil || store.phase != .ready || actions.busy)
+      Button(String(localized: "Review selection")) { Task { await store.prepare(actions: actions) } }
+        .disabled(store.picture != nil || store.selected.isEmpty || store.phase != .ready || store.busy || actions.busy)
     }
-    .padding(20)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    .background(LightenStyle.canvas)
-    .navigationTitle(String(localized: "Clean"))
+    .searchable(text: $searchText, prompt: String(localized: "Search by name or path"))
     .sheet(item: $actions.pending) { ConfirmationView(presentation: $0, actions: actions) }
     .task { store.open() }
     .onChange(of: actions.result?.planID) { store.observeResult(actions: actions) }
@@ -134,8 +149,7 @@ struct CleanView: View {
       Text(String(localized: "Previous result. Scan again before cleaning."))
         .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
       if picture.content.partial {
-        Text(String(localized: "Partial scan. Scan again before cleaning."))
-          .font(.system(size: 12)).foregroundStyle(LightenStyle.warning)
+        PartialResultNotice(reason: String(localized: "Partial scan. Scan again before cleaning."))
       }
       if rows.isEmpty && related.isEmpty {
         Text(String(localized: "No items"))

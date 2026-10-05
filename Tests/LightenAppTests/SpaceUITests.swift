@@ -330,3 +330,51 @@ extension SpaceUITests {
     #expect(ObservedPlanSize.total([one, .unknown]).logical?.completeTotal == nil)
   }
 }
+
+extension SpaceUITests {
+  @MainActor @Test("Review groups only explicit app membership and preserves item order")
+  func removalReviewUsesExplicitAppGroups() throws {
+    let app = ActionApplicationGroup(path: "/fixture/One.app", name: "One")
+    let other = ActionApplicationGroup(path: "/fixture/Two.app", name: "Two")
+    func summary(_ path: String, group: ActionApplicationGroup?, size: ObservedPlanSize = .unknown) -> ActionItemSummary
+    {
+      ActionItemSummary(
+        id: UUID(), label: URL(fileURLWithPath: path).lastPathComponent, path: path,
+        reason: "Selected", logicalBytes: nil, allocatedBytes: nil, observedSize: size, applicationGroup: group)
+    }
+    let package = summary(app.path, group: app)
+    let ungrouped = summary(app.path + "/unrelated-name.bin", group: nil)
+    let data = summary("/fixture/Library/One.plist", group: app)
+    let secondPackage = summary(other.path, group: other)
+    let secondUngrouped = summary("/fixture/One copy.plist", group: nil)
+    let items = [package, ungrouped, data, secondPackage, secondUngrouped]
+    let groups = ConfirmationItemGroup.make(items)
+    #expect(groups.count == 3)
+    #expect(groups[0].application == app)
+    #expect(groups[0].items.map(\.id) == [package.id, data.id])
+    #expect(groups[1].application == nil)
+    #expect(groups[1].items.map(\.id) == [ungrouped.id, secondUngrouped.id])
+    #expect(groups[2].application == other)
+    #expect(Set(groups.flatMap { $0.items.map(\.id) }) == Set(items.map(\.id)))
+    #expect(ConfirmationItemGroup.make([]).isEmpty)
+  }
+
+  @MainActor @Test("App review group totals keep unknown and lower-bound data honest")
+  func removalGroupIncompleteSize() throws {
+    let app = ActionApplicationGroup(path: "/fixture/One.app", name: "One")
+    let exact = ObservedPlanSize(logical: ByteAggregate(knownLowerBound: 100, completeTotal: 100), allocated: nil)
+    let partial = ObservedPlanSize(logical: ByteAggregate(knownLowerBound: 25, completeTotal: nil), allocated: nil)
+    func summary(_ size: ObservedPlanSize) -> ActionItemSummary {
+      ActionItemSummary(
+        id: UUID(), label: "Data", path: "/fixture/data", reason: "Selected",
+        logicalBytes: nil, allocatedBytes: nil, observedSize: size, applicationGroup: app)
+    }
+    let partialGroup = try #require(ConfirmationItemGroup.make([summary(exact), summary(partial)]).first)
+    #expect(partialGroup.size.logical?.knownLowerBound == 125)
+    #expect(partialGroup.size.logical?.completeTotal == nil)
+    #expect(PlanItemSize.text(partialGroup.size.logical).hasPrefix(String(localized: "At least")))
+    let unknownGroup = try #require(ConfirmationItemGroup.make([summary(exact), summary(.unknown)]).first)
+    #expect(unknownGroup.size.logical?.knownLowerBound == 100)
+    #expect(unknownGroup.size.logical?.completeTotal == nil)
+  }
+}
