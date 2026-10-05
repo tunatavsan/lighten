@@ -68,7 +68,7 @@ private actor ScopedTrashSpy: TrashMoving {
 struct ScopedApplicationOwnershipTests {
   @Test(
     "Readable unsupported IDs block their literal domain without granting action authority",
-    arguments: ["deemd", "com.apple.Image_Capture", "1000", "pinterest"])
+    arguments: ["deemd", "1000", "pinterest"])
   func literalIdentifiersAreOnlyOwnerObservations(_ literal: String) async throws {
     let fixture = try ScopedOwnerFixture()
     defer { fixture.cleanup() }

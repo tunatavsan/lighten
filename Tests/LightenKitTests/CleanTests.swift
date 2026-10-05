@@ -1146,3 +1146,26 @@ func catalogAvailablePermanentStillRejectsPackageCandidates() async throws {
   #expect(Set(trash.items.map(\.sourcePath)) == [fixture.candidate, app])
   #expect(FileManager.default.fileExists(atPath: app + "/Contents/Info.plist"))
 }
+
+@Test(
+  "Catalog discovery reports a dedicated cache parent without granting its generic row eligibility",
+  arguments: [false, true])
+func catalogDiscoveryPreservesReportOnlyOverlap(native: Bool) async throws {
+  let fixture = try cleanFixture()
+  defer { try? FileManager.default.removeItem(atPath: fixture.home) }
+  let catalog = try CleanCatalog(homeDirectory: fixture.home)
+  let generic = try #require(catalog.row(id: "user-app-caches"))
+  let discovery: CatalogDiscovery
+  if native {
+    discovery = try await catalog.discover(rowID: generic.id)
+  } else {
+    let snapshot = try await ScanService(homeDirectory: fixture.home).scan(rootPath: catalog.root(for: generic))
+    discovery = try catalog.discovery(snapshot: snapshot, rowID: generic.id)
+  }
+  let parent = fixture.home + "/Library/Caches/pip"
+  #expect(Set(discovery.candidates.map { $0.entry.path }) == [parent])
+  #expect(!discovery.candidates.contains { $0.entry.path == discovery.snapshot.rootPath })
+  let overlap = try #require(discovery.candidates.first)
+  #expect(overlap.rejection?.reason == .unavailable)
+  #expect(overlap.rejection?.ruleID == "catalog-overlap")
+}

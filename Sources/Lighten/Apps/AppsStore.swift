@@ -5,7 +5,7 @@ import Observation
 import os
 
 @MainActor @Observable
-final class AppsStore {
+final class AppsStore: ToolSummaryProviding {
   typealias AvailableUninstallPlanBuilder =
     @Sendable (ApplicationReport, [RelatedDataCandidate], Bool) async throws ->
     RelatedDataService.AvailableUninstallPlan
@@ -28,7 +28,7 @@ final class AppsStore {
 
   @ObservationIgnored private(set) var openingTiming: OpeningTiming?
   private(set) var openingRevision = 0
-  @ObservationIgnored private var displayListingFinished = false
+  private(set) var displayListingFinished = false
   @ObservationIgnored private let openingLogger = Logger(subsystem: "com.tavsn.lighten", category: "apps-opening")
   @ObservationIgnored private let relatedLogger = Logger(subsystem: "com.tavsn.lighten", category: "apps-related")
   @ObservationIgnored private(set) var pictureOpeningTiming: PictureOpeningTiming?
@@ -63,7 +63,20 @@ final class AppsStore {
   private(set) var relatedDiscoveryStopped = false
   @ObservationIgnored private var selectedEvidenceFinished = false
   @ObservationIgnored private var selectedReviewPhaseRank = -1
-  @ObservationIgnored private var explicitlyDeselectedDataPaths: Set<String> = []
+  private var appSelections: [String: AppRemovalSelection] = [:]
+  private var unfocusedSelection = AppRemovalSelection()
+  private(set) var selectedAppPaths: Set<String> = []
+  @ObservationIgnored private var selectionAnchor: String?
+  private var currentSelection: AppRemovalSelection {
+    get { selectedPath.flatMap { appSelections[$0] } ?? unfocusedSelection }
+    set {
+      if let selectedPath { appSelections[selectedPath] = newValue } else { unfocusedSelection = newValue }
+    }
+  }
+  private var explicitlyDeselectedDataPaths: Set<String> {
+    get { currentSelection.deselectedDataPaths }
+    set { currentSelection.deselectedDataPaths = newValue }
+  }
   private(set) var backgroundStartedAt: ContinuousClock.Instant?
   private(set) var inventoryPublishedAt: ContinuousClock.Instant?
   private(set) var backgroundFinishedAt: ContinuousClock.Instant?
@@ -103,7 +116,10 @@ final class AppsStore {
   private var preparationStage: PreparationStage?
   @ObservationIgnored private var reviewIntentRequested = false
   @ObservationIgnored private var preparationTask: Task<PreparedRemoval, Error>?
-  @ObservationIgnored private var preparationGeneration = UUID()
+  let tool = ToolStore()
+  @ObservationIgnored private var choiceRevision = UUID()
+  private enum ReviewKind { case focused, basket, orphans }
+  @ObservationIgnored private var reviewKind = ReviewKind.focused
   @ObservationIgnored private let preferences: RemovalPreferences
   @ObservationIgnored private let userPlanner: PlanService
   @ObservationIgnored private let running: any RunningApplicationSource
@@ -123,18 +139,59 @@ final class AppsStore {
   var inventoryComplete = false
   private(set) var externalVolumesUnchecked = false
   var scannedAt: Date?
-  var busy = false
-  var preparing = false
+  var busy = false {
+    didSet {
+      tool.phase = busy ? .scanning : (relatedDiscoveryStopped ? .partial : reports.isEmpty ? .idle : .ready)
+    }
+  }
+  var phase: ToolPhase { preparing ? .preparing : tool.phase }
+  var showsPreviousResult: Bool { pictureObservedAt != nil && needsRescan }
+  var toolSummary: ToolSummary {
+    let count = showsPreviousResult ? defaultPictureRows.count : defaultApplicationReports.count
+    let sizes = showsPreviousResult ? defaultPictureRows.map(\.logical) : defaultApplicationReports.map(\.logical)
+    return ToolSummary(
+      count: count, logicalBytes: Self.total(sizes).knownLowerBound,
+      observedAt: scannedAt ?? pictureObservedAt,
+      partial: busy || relatedDiscoveryStopped || needsRescan || !displayListingFinished)
+  }
+  func refresh() { startScan() }
+  var preparing: Bool {
+    get { tool.preparation.preparing }
+    set {
+      if newValue { _ = tool.preparation.begin() } else { tool.preparation.invalidatePreparation() }
+    }
+  }
   var needsRescan = false
   var selectedPath: String?
-  var packageSelected = false
-  var selectedDataPaths: Set<String> = [] {
-    didSet {
-      explicitlySelectedUnproven = explicitlySelectedUnproven.filter { selectedDataPaths.contains($0.key) }
+  var packageSelected: Bool {
+    get { currentSelection.packageSelected }
+    set {
+      currentSelection.packageSelected = newValue
+      updateBasketMembership()
+    }
+  }
+  var selectedDataPaths: Set<String> {
+    get { currentSelection.dataPaths }
+    set {
+      currentSelection.dataPaths = newValue
+      currentSelection.manualData = currentSelection.manualData.filter { newValue.contains($0.key) }
+      updateBasketMembership()
     }
   }
   @ObservationIgnored private weak var preparedActions: ActionStore?
-  @ObservationIgnored private var explicitlySelectedUnproven: [String: RelatedDataCandidate] = [:]
+  private var explicitlySelectedUnproven: [String: RelatedDataCandidate] {
+    get { currentSelection.manualData }
+    set { currentSelection.manualData = newValue }
+  }
+
+  private func updateBasketMembership() {
+    guard let selectedPath else { return }
+    if currentSelection.hasChoice {
+      selectedAppPaths.insert(selectedPath)
+    } else {
+      selectedAppPaths.remove(selectedPath)
+    }
+  }
   var selectedDataPath: String? {
     get { selectedDataPaths.sorted().first }
     set { selectedDataPaths = newValue.map { [$0] } ?? [] }
@@ -166,7 +223,10 @@ final class AppsStore {
     let mutationStage: ActionMutationStage?
   }
   private(set) var packageItemResults: [PackageItemResult] = []
-  private(set) var ownershipRefusalEvidence: [RelatedOwnershipRefusalEvidence] = []
+  private(set) var ownershipRefusalEvidence: [RelatedOwnershipRefusalEvidence] {
+    get { currentSelection.refusalEvidence }
+    set { currentSelection.refusalEvidence = newValue }
+  }
   @ObservationIgnored private var presentedPackages: [String: (physical: UUID, link: UUID?)] = [:]
   @ObservationIgnored private var presentedPackageItems: [PlanItem] = []
   @ObservationIgnored private var incompletePackagePaths: Set<String> = []
@@ -178,6 +238,7 @@ final class AppsStore {
   typealias RemainingDataPlanBuilder =
     @Sendable ([RelatedDataCandidate]) async -> RelatedDataService.AvailableUninstallPlan
   @ObservationIgnored private let remainingDataPlanBuilder: RemainingDataPlanBuilder
+  @ObservationIgnored private let basketPlanBuilder: BasketPlanBuilder?
   @ObservationIgnored private let droppedReport: @Sendable (String) async -> ApplicationReport?
 
   init(
@@ -189,6 +250,7 @@ final class AppsStore {
     explicitUninstallPlanBuilder: ExplicitUninstallPlanBuilder? = nil,
     relatedService: RelatedDataService = .system,
     selectedReview: SelectedReview? = nil,
+    basketPlanBuilder: BasketPlanBuilder? = nil,
     preparationTimeout: @escaping @Sendable () async throws -> Void = {
       try await Task.sleep(for: .seconds(5))
     },
@@ -219,6 +281,7 @@ final class AppsStore {
       }.value
     }
   ) {
+    self.basketPlanBuilder = basketPlanBuilder
     self.preparationTimeout = preparationTimeout
     self.selectedReview = selectedReview
     self.relatedService = relatedService
@@ -358,14 +421,17 @@ final class AppsStore {
     }
   }
 
-  func startScan(actions: ActionStore) {
+  func startScan(actions: ActionStore? = nil) {
     guard !busy else { return }
-    invalidatePreparation(actions: actions)
+    cancelPreparation(actions: actions)
     reviewedDropPath = nil
     cancelSelectedReview()
     let previousSession = session
     session = nil
     if let previousSession { Task { await previousSession.cancel() } }
+    appSelections = [:]
+    selectedAppPaths = []
+    selectionAnchor = nil
     relatedReviewedPaths = []
     removedPaths = []
     incompletePackagePaths = []
@@ -426,7 +492,7 @@ final class AppsStore {
               entries.compactMap { entry in
                 entry.displayRootIdentity.map { (entry.path, $0) }
               }, uniquingKeysWith: { first, _ in first })
-            self.reports = entries.map { entry in
+            self.reports = entries.filter { self.listLocation($0.path) != .excluded }.map { entry in
               let previous = cached[entry.path]
               return ApplicationReport(
                 path: entry.path, bundleID: entry.bundleID, version: entry.version,
@@ -441,16 +507,17 @@ final class AppsStore {
             if isFinalBatch {
               self.openingRevision += 1
             }
-            self.measuringPaths = Set(entries.map(\.path))
+            self.measuringPaths = Set(self.reports.map(\.path))
             self.pictureRows = []
             self.needsRescan = false
           case .inventory(let inventory, let metadata):
             self.externalVolumesUnchecked = inventory.registrationReport?.externalVolumesUnchecked ?? false
-            self.reports = metadata.filter { !self.displayRemoved($0) }.map { report in
+            self.reports = metadata.filter { self.listLocation($0.path) != .excluded && !self.displayRemoved($0) }.map {
+              report in
               guard let current = self.reports.first(where: { $0.path == report.path }) else { return report }
               return self.mergingMeasurement(report, with: current)
             }
-            self.measuringPaths = Set(metadata.map(\.path))
+            self.measuringPaths = Set(self.reports.map(\.path))
             self.inventoryPublishedAt = .now
             self.pictureRows = []
             self.pictureObservedAt = nil
@@ -475,7 +542,8 @@ final class AppsStore {
             for report in reports where self.removedReport(path: report.path) != nil {
               self.retainLateRelatedData(path: report.path, candidates: report.related)
             }
-            self.reports = reports.filter { !self.displayRemoved($0) }.map { report in
+            self.reports = reports.filter { self.listLocation($0.path) != .excluded && !self.displayRemoved($0) }.map {
+              report in
               self.reports.first(where: { $0.path == report.path }).map {
                 self.mergingMeasurement(report, with: $0)
               } ?? report
@@ -543,9 +611,12 @@ final class AppsStore {
 
   private func finishStoppedDiscovery() {
     relatedDiscoveryStopped = true
+    tool.phase = .partial
     needsRescan = !pictureRows.isEmpty || (reports.isEmpty && orphanCandidates.isEmpty)
-    invalidatePreparation()
+    cancelPreparation()
     if needsRescan {
+      selectedAppPaths = []
+      appSelections = [:]
       packageSelected = false
       selectedDataPaths = []
       explicitlySelectedUnproven = [:]
@@ -562,8 +633,34 @@ final class AppsStore {
     cancellationRequestedAt = nil
   }
 
-  func select(_ path: String, selectPackage: Bool = false) {
-    guard !needsRescan, pictureRows.isEmpty, !dropping else { return }
+  private func selection(for report: ApplicationReport, defaultPackage: Bool) -> AppRemovalSelection {
+    let identity = listedIdentities[report.path] ?? report.displayRootIdentity
+    if var saved = appSelections[report.path] {
+      let changedBundle = saved.bundleID != nil && report.bundleID != nil && saved.bundleID != report.bundleID
+      if changedBundle {
+        appSelections.removeValue(forKey: report.path)
+      } else if let old = saved.rootIdentity, let identity,
+        old.device != identity.device || old.inode != identity.inode || old.kind != identity.kind
+          || old.birthSeconds != identity.birthSeconds || old.birthNanoseconds != identity.birthNanoseconds
+      {
+        appSelections.removeValue(forKey: report.path)
+      } else {
+        if saved.rootIdentity == nil { saved.rootIdentity = identity }
+        if saved.bundleID == nil { saved.bundleID = report.bundleID }
+        return saved
+      }
+    }
+    var choice = AppRemovalSelection(rootIdentity: identity, bundleID: report.bundleID)
+    choice.packageSelected = defaultPackage && packageUnavailableReason(report) == nil
+    if choice.packageSelected {
+      choice.dataPaths = Set(
+        report.related.filter { automaticSelectionAllowed($0, appBundleID: report.bundleID, refusalEvidence: []) }.map(
+          \.path))
+    }
+    return choice
+  }
+
+  private func focusApp(_ path: String, defaultPackage: Bool) {
     selectedReviewRequestedAt = .now
     selectedDrawRevision += 1
     selectedListDrawnAt = nil
@@ -572,32 +669,233 @@ final class AppsStore {
     selectedEvidenceFinished = false
     selectedReviewPhaseRank = -1
     selectedMeasurementProgress = nil
-    explicitlyDeselectedDataPaths = []
     navigationGeneration = UUID()
-    ownershipRefusalEvidence = []
-    selectedPath = path
-    packageSelected = selectPackage && selectedReport.map { packageUnavailableReason($0) == nil } == true
-    selectedDataPaths = []
-    if packageSelected, let report = selectedReport {
-      selectedDataPaths = Set(report.related.filter { automaticSelectionAllowed($0) }.map(\.path))
+    if let report = reports.first(where: { $0.path == path }) {
+      appSelections[path] = selection(for: report, defaultPackage: defaultPackage)
     }
-    explicitlySelectedUnproven = [:]
+    selectedPath = path
     message = nil
     requestSelectedReview(path)
   }
 
+  func select(_ path: String, selectPackage: Bool = false) {
+    guard !needsRescan, pictureRows.isEmpty, !dropping else { return }
+    focusApp(path, defaultPackage: selectPackage)
+    if !selectPackage { packageSelected = false }
+    selectedAppPaths = currentSelection.hasChoice ? [path] : []
+    selectionAnchor = path
+  }
+
   func select(_ path: String, actions: ActionStore, selectPackage: Bool = true) {
     let continueReview = preparing || reviewIntentRequested
-    invalidatePreparation(actions: actions, preserveReviewIntent: continueReview)
+    cancelPreparation(actions: actions, preserveReviewIntent: continueReview)
     select(path, selectPackage: selectPackage)
+    logPackageAvailability(actions: actions)
+    if continueReview { continueReviewIntent(actions: actions) }
+  }
+
+  private func logPackageAvailability(actions: ActionStore) {
     if packageSelected, canReviewSelectedData(actions: actions), let requested = selectedReviewRequestedAt {
       let ms = Self.milliseconds(requested.duration(to: .now))
       relatedLogger.info("package-review-available ms=\(ms, privacy: .public)")
     }
-    if continueReview { continueReviewIntent(actions: actions) }
   }
 
   func waitForSelectedReview() async { await selectedReviewTask?.value }
+  func waitForScan() async { await scanTask?.value }
+
+  private func listLocation(_ path: String) -> AppListScope {
+    AppListScope.location(of: path, homeDirectory: userPlanner.homeDirectory)
+  }
+
+  var defaultApplicationReports: [ApplicationReport] { reports.filter { listLocation($0.path) == .installed } }
+  var otherLocationReports: [ApplicationReport] { reports.filter { listLocation($0.path) == .other } }
+  var defaultPictureRows: [AppsPicture.Row] { pictureRows.filter { listLocation($0.path) == .installed } }
+  var otherPictureRows: [AppsPicture.Row] { pictureRows.filter { listLocation($0.path) == .other } }
+  var defaultMeasuredCount: Int { defaultApplicationReports.filter { !measuringPaths.contains($0.path) }.count }
+
+  func signerDescription(for app: ApplicationReport) -> String {
+    if let signer = app.signerTeamID { return signer }
+    if selectedPath == app.path && (selectedEvidencePending || selectedReviewPending) {
+      return String(localized: "Checking app signature…")
+    }
+    return String(localized: "Unavailable")
+  }
+
+  func selectApp(
+    _ path: String, intent: AppSelectionIntent = .single, orderedPaths: [String] = [], actions: ActionStore
+  ) {
+    guard !needsRescan, pictureRows.isEmpty, !dropping, !actions.busy,
+      let report = reports.first(where: { $0.path == path })
+    else { return }
+    let continueReview = preparing || reviewIntentRequested
+    cancelPreparation(actions: actions, preserveReviewIntent: continueReview)
+    let previous = selectedAppPaths
+    let anchor = selectionAnchor
+    focusApp(path, defaultPackage: true)
+    if let reason = packageUnavailableReason(report) {
+      selectedAppPaths = intent == .single ? [] : previous.subtracting([path])
+      message = reason
+    } else {
+      switch intent {
+      case .single:
+        if !currentSelection.hasChoice { packageSelected = true }
+        selectedAppPaths = [path]
+      case .toggle:
+        if previous.contains(path) {
+          selectedAppPaths = previous.subtracting([path])
+        } else {
+          if !currentSelection.hasChoice { packageSelected = true }
+          selectedAppPaths = previous.union([path])
+        }
+      case .range:
+        let range: [String]
+        if let anchor, let start = orderedPaths.firstIndex(of: anchor), let end = orderedPaths.firstIndex(of: path) {
+          range = Array(orderedPaths[min(start, end)...max(start, end)])
+        } else {
+          range = [path]
+        }
+        var additions: Set<String> = []
+        for path in range {
+          guard let app = reports.first(where: { $0.path == path }), packageUnavailableReason(app) == nil else {
+            continue
+          }
+          var choice = selection(for: app, defaultPackage: true)
+          if !choice.hasChoice { choice.packageSelected = true }
+          appSelections[path] = choice
+          additions.insert(path)
+        }
+        selectedAppPaths = previous.union(additions)
+      }
+    }
+    if intent != .range { selectionAnchor = path }
+    logPackageAvailability(actions: actions)
+    if continueReview { continueReviewIntent(actions: actions) }
+  }
+
+  func removeAppFromBasket(_ path: String, actions: ActionStore) {
+    let continueReview = preparing || reviewIntentRequested
+    cancelPreparation(actions: actions, preserveReviewIntent: continueReview)
+    selectedAppPaths.remove(path)
+    if continueReview { continueReviewIntent(actions: actions) }
+  }
+
+  func clearBasket(actions: ActionStore) {
+    cancelPreparation(actions: actions)
+    selectedAppPaths = []
+  }
+
+  func canReviewBasket(actions: ActionStore) -> Bool {
+    !preparing && !needsRescan && !actions.busy && pictureRows.isEmpty
+      && selectedAppPaths.contains { appSelections[$0]?.hasChoice == true }
+  }
+
+  var basketApplications: [ApplicationReport] { reports.filter { selectedAppPaths.contains($0.path) } }
+  var basketDataCount: Int { Set(selectedAppPaths.flatMap { appSelections[$0]?.dataPaths ?? [] }).count }
+  var basketLogical: ByteAggregate {
+    var sizes: [String: ByteAggregate] = [:]
+    for report in basketApplications {
+      guard let choice = appSelections[report.path] else { continue }
+      if choice.packageSelected { sizes[report.path] = report.logical }
+      for candidate in report.related where choice.dataPaths.contains(candidate.path) {
+        sizes[candidate.path] =
+          Self.userSelection(candidate).observedSize?.logical
+          ?? candidate.observation?.logical ?? ByteAggregate(knownLowerBound: 0, completeTotal: nil)
+      }
+    }
+    let roots = sizes.keys.filter { path in !sizes.keys.contains { path.hasPrefix($0 + "/") } }
+    return Self.total(roots.compactMap { sizes[$0] })
+  }
+
+  private nonisolated static func total(_ values: [ByteAggregate]) -> ByteAggregate {
+    var lower: Int64 = 0
+    var complete: Int64? = 0
+    for value in values {
+      let added = lower.addingReportingOverflow(max(0, value.knownLowerBound))
+      lower = added.overflow ? Int64.max : added.partialValue
+      if let previous = complete, let total = value.completeTotal, !added.overflow {
+        let sum = previous.addingReportingOverflow(max(0, total))
+        complete = sum.overflow ? nil : sum.partialValue
+      } else {
+        complete = nil
+      }
+    }
+    return ByteAggregate(knownLowerBound: lower, completeTotal: complete)
+  }
+
+  typealias BasketPlanBuilder =
+    @Sendable ([UserSelection], ActionKind) async -> RelatedDataService.AvailableUninstallPlan
+
+  func prepareBasket(actions: ActionStore) async {
+    guard canReviewBasket(actions: actions) else { return }
+    reviewKind = .basket
+    let paths = selectedAppPaths
+    let choices = appSelections.filter { paths.contains($0.key) }
+    var chosen: [UserSelection] = []
+    var rejections: [PlanRejection] = []
+    var manualPaths: Set<String> = []
+    for path in paths.sorted() {
+      guard let report = reports.first(where: { $0.path == path }), let choice = choices[path] else {
+        rejections.append(PlanRejection(.unavailable, path: path))
+        continue
+      }
+      if choice.packageSelected {
+        if let reason = packageUnavailableReason(report) {
+          message = reason
+          return
+        }
+        chosen.append(
+          UserSelection(
+            path: path,
+            expectedIdentity: listedIdentities[path] ?? (report.linkTarget == nil ? report.displayRootIdentity : nil),
+            observedSize: ObservedPlanSize(logical: report.logical, allocated: report.allocated),
+            applicationPackagePaths: [path]))
+      }
+      let candidates = report.related.filter { choice.dataPaths.contains($0.path) }
+      for candidate in candidates {
+        if candidate.classification == .unprovenNameOnly {
+          guard let original = choice.manualData[candidate.path], Self.sameUnprovenObservation(original, candidate)
+          else {
+            rejections.append(PlanRejection(.unavailable, path: candidate.path, ruleID: "explicitSelectionRequired"))
+            continue
+          }
+          manualPaths.insert(candidate.path)
+        }
+        chosen.append(Self.userSelection(candidate))
+      }
+      rejections += choice.dataPaths.subtracting(candidates.map(\.path)).sorted().map {
+        PlanRejection(.unavailable, path: $0)
+      }
+    }
+    let selections = chosen
+    let missing = rejections
+    let planner = userPlanner
+    let builder = basketPlanBuilder
+    let kind = preferences.deletionDefault.kind
+    await prepare(
+      actions: actions,
+      stillSelected: {
+        self.selectedAppPaths == paths
+          && choices.allSatisfy { path, old in
+            guard let current = self.appSelections[path] else { return false }
+            return old.packageSelected == current.packageSelected && old.dataPaths == current.dataPaths
+              && old.manualData.allSatisfy { key, original in
+                current.manualData[key].map { Self.sameUnprovenObservation(original, $0) } == true
+              }
+          }
+      }, selectedByNamePaths: manualPaths,
+      builder: {
+        let outcome: RelatedDataService.AvailableUninstallPlan
+        if let builder {
+          outcome = await builder(selections, kind)
+        } else {
+          let fresh = await planner.makeAvailableUserSelectionPlan(selections: selections, kind: kind)
+          outcome = .init(plan: fresh.plan, rejections: fresh.rejections)
+        }
+        return .init(
+          plan: outcome.plan, rejections: missing + outcome.rejections, refusalEvidence: outcome.refusalEvidence)
+      })
+  }
 
   private func cancelSelectedReview() {
     let previous = selectedReviewToken
@@ -834,43 +1132,44 @@ final class AppsStore {
       ownershipPending
       ? incoming + reports[index].related.filter { !incomingPaths.contains($0.path) && !displayRemoved($0) }
       : incoming
-    if selectedPath == path {
-      selectedDrawRevision += 1
-      let invalidated = explicitlySelectedUnproven.keys.filter { selected in
-        guard let original = explicitlySelectedUnproven[selected],
+    if selectedPath == path { selectedDrawRevision += 1 }
+    if var choice = appSelections[path] {
+      let invalidated = choice.manualData.keys.filter { selected in
+        guard let original = choice.manualData[selected],
           let fresh = reports[index].related.first(where: { $0.path == selected })
         else { return true }
         return fresh.classification == .unprovenNameOnly
           ? !Self.sameUnprovenObservation(original, fresh) : !Self.sameDisplayedRoot(original, fresh)
       }
       for selected in invalidated {
-        selectedDataPaths.remove(selected)
-        explicitlySelectedUnproven.removeValue(forKey: selected)
+        choice.dataPaths.remove(selected)
+        choice.manualData.removeValue(forKey: selected)
       }
-      for selected in Array(explicitlySelectedUnproven.keys) {
+      for selected in Array(choice.manualData.keys) {
         if let fresh = reports[index].related.first(where: { $0.path == selected }) {
           if fresh.classification == .unprovenNameOnly {
-            explicitlySelectedUnproven[selected] = fresh
-          } else {
-            explicitlySelectedUnproven.removeValue(forKey: selected)
+            choice.manualData[selected] = fresh
           }
         }
       }
-      if !invalidated.isEmpty {
-        invalidatePreparation(actions: preparedActions)
-        message = String(localized: "An item you selected by name changed. Review it and select it again.")
-      }
-      // A review covers the choices present when it started. Newly discovered data stays available
-      // for a later explicit choice without cancelling or expanding that confirmation.
       let hasPresentedReview = presentedPlanID != nil && preparedActions?.pending?.id == presentedPlanID
-      if packageSelected && !ownershipPending && !preparing && !hasPresentedReview
-        && preferences.automaticallySelectRelatedData
-      {
-        selectedDataPaths.formUnion(
+      if selectedAppPaths.contains(path), choice.packageSelected, !ownershipPending, !preparing, !hasPresentedReview {
+        choice.dataPaths.formUnion(
           reports[index].related.filter {
-            automaticSelectionAllowed($0) && !explicitlyDeselectedDataPaths.contains($0.path)
-          }
-          .map(\.path))
+            automaticSelectionAllowed($0, appBundleID: reports[index].bundleID, refusalEvidence: choice.refusalEvidence)
+              && !choice.deselectedDataPaths.contains($0.path)
+          }.map(\.path))
+      }
+      appSelections[path] = choice
+      let affectsCurrentReview: Bool
+      switch reviewKind {
+      case .basket: affectsCurrentReview = selectedAppPaths.contains(path)
+      case .focused: affectsCurrentReview = selectedPath == path
+      case .orphans: affectsCurrentReview = false
+      }
+      if !invalidated.isEmpty, affectsCurrentReview {
+        cancelPreparation(actions: preparedActions)
+        message = String(localized: "An item you selected by name changed. Review it and select it again.")
       }
     }
     relatedReviewedPaths.insert(path)
@@ -893,7 +1192,7 @@ final class AppsStore {
 
   func togglePackage(actions: ActionStore) {
     let continueReview = preparing || reviewIntentRequested
-    invalidatePreparation(actions: actions, preserveReviewIntent: continueReview)
+    cancelPreparation(actions: actions, preserveReviewIntent: continueReview)
     guard let report = selectedReport, packageUnavailableReason(report) == nil else {
       packageSelected = false
       return
@@ -909,10 +1208,18 @@ final class AppsStore {
   }
 
   func automaticSelectionAllowed(_ candidate: RelatedDataCandidate) -> Bool {
-    preferences.automaticallySelectRelatedData && candidate.automaticSelectionAllowed && candidate.defaultSelected
+    automaticSelectionAllowed(
+      candidate, appBundleID: selectedReport?.bundleID, refusalEvidence: ownershipRefusalEvidence)
+  }
+
+  private func automaticSelectionAllowed(
+    _ candidate: RelatedDataCandidate, appBundleID: String?, refusalEvidence: [RelatedOwnershipRefusalEvidence]
+  ) -> Bool {
+    appBundleID != nil && preferences.automaticallySelectRelatedData && candidate.automaticSelectionAllowed
+      && candidate.defaultSelected
       && candidate.classification != .unprovenNameOnly && candidate.provenance?.kind != .configuredDirectory
       && candidate.refusalEvidence.isEmpty
-      && !ownershipRefusalEvidence.contains { $0.candidatePath == candidate.path }
+      && !refusalEvidence.contains { $0.candidatePath == candidate.path }
   }
 
   /// Manual removal can be reviewed while evidence and sizes continue loading.
@@ -942,7 +1249,7 @@ final class AppsStore {
     guard !needsRescan, pictureRows.isEmpty, !dropping, !preparing, !actions.busy,
       otherInstallationPaths(candidate: candidate, app: app).contains(path)
     else { return }
-    invalidatePreparation(actions: actions)
+    cancelPreparation(actions: actions)
     let token = UUID()
     navigationGeneration = token
     let previousSelection = selectedPath
@@ -957,13 +1264,14 @@ final class AppsStore {
     }
     incompletePackagePaths.remove(path)
     reviewedDropPath = path
-    select(path, actions: actions, selectPackage: false)
+    focusApp(path, defaultPackage: false)
+    logPackageAvailability(actions: actions)
   }
 
   func toggleData(_ path: String, actions: ActionStore) {
     guard !needsRescan else { return }
     let continueReview = preparing || reviewIntentRequested
-    invalidatePreparation(actions: actions, preserveReviewIntent: continueReview)
+    cancelPreparation(actions: actions, preserveReviewIntent: continueReview)
     guard let app = selectedReport, let candidate = app.related.first(where: { $0.path == path }),
       canSelect(candidate, app: app)
     else { return }
@@ -985,7 +1293,7 @@ final class AppsStore {
     dropGeneration = UUID()
     navigationGeneration = UUID()
     dropping = false
-    invalidatePreparation(actions: actions, keepPresentedPlanID: actions.busy)
+    cancelPreparation(actions: actions, keepPresentedPlanID: actions.busy)
   }
 
   private func displayRemoved(path: String, identity: FileIdentity?) -> Bool {
@@ -1027,7 +1335,7 @@ final class AppsStore {
         if !orphanCandidates.contains(where: { $0.path == candidate.path }) { orphanCandidates.append(candidate) }
         if retainedAppData[candidate.path] == nil {
           retainedAppData[candidate.path] = RetainedAppData(
-            appPath: report.path, wasSelected: selectedDataPaths.contains(candidate.path))
+            appPath: report.path, wasSelected: appSelections[report.path]?.dataPaths.contains(candidate.path) == true)
         }
       }
     }
@@ -1078,7 +1386,9 @@ final class AppsStore {
         orphanCandidates.removeAll { candidate in orphans.contains { $0.path == candidate.path } }
         removedPaths.formUnion(matched.map(\.path))
         removedPaths.formUnion(data.values.flatMap { $0 }.map(\.path))
-        selectedDataPaths.subtract(data.values.flatMap { $0 }.map(\.path))
+        for (path, candidates) in data {
+          appSelections[path]?.dataPaths.subtract(candidates.map(\.path))
+        }
         selectedOrphanPaths.subtract(orphans.map(\.path))
         if let selectedPath, matched.contains(where: { $0.path == selectedPath }) {
           self.selectedPath = nil
@@ -1128,7 +1438,7 @@ final class AppsStore {
       observedResultID != result.planID
     else { return }
     observedResultID = result.planID
-    invalidatePreparation(actions: actions, keepPresentedPlanID: true)
+    cancelPreparation(actions: actions, keepPresentedPlanID: true)
     let moved = Set(
       result.items.filter { $0.outcome == .applied }.compactMap { presentedPaths[$0.itemID] })
     let results = Dictionary(uniqueKeysWithValues: result.items.map { ($0.itemID, $0) })
@@ -1175,9 +1485,16 @@ final class AppsStore {
     }
     orphanCandidates.removeAll { moved.contains($0.path) }
     for path in moved { retainedAppData.removeValue(forKey: path) }
-    selectedDataPaths.subtract(moved)
+    for path in Array(appSelections.keys) {
+      guard var choice = appSelections[path] else { continue }
+      choice.dataPaths.subtract(moved)
+      choice.manualData = choice.manualData.filter { !moved.contains($0.key) }
+      if removedApplications.contains(path) { choice.packageSelected = false }
+      appSelections[path] = choice
+    }
+    selectedAppPaths.subtract(removedApplications)
+    selectedAppPaths = selectedAppPaths.filter { appSelections[$0]?.hasChoice == true }
     selectedOrphanPaths.subtract(moved)
-    if !removedApplications.isEmpty { packageSelected = false }
     if let selectedPath, removedRows.contains(selectedPath) { self.selectedPath = nil }
     message = nil
   }
@@ -1267,13 +1584,14 @@ final class AppsStore {
       orphanCandidates.contains(where: { $0.path == path && canSelectOrphan($0) })
     else { return }
     let continueReview = preparing || reviewIntentRequested
-    invalidatePreparation(actions: actions, preserveReviewIntent: continueReview)
+    cancelPreparation(actions: actions, preserveReviewIntent: continueReview)
     if selectedOrphanPaths.contains(path) { selectedOrphanPaths.remove(path) } else { selectedOrphanPaths.insert(path) }
     if continueReview { continueReviewIntent(actions: actions, orphans: true) }
   }
 
   func prepareOrphans(actions: ActionStore) async {
     guard !preparing, !needsRescan, !actions.busy, pictureRows.isEmpty else { return }
+    reviewKind = .orphans
     let candidates = orphanCandidates.filter {
       selectedOrphanPaths.contains($0.path) && canSelectOrphan($0)
     }
@@ -1314,7 +1632,7 @@ final class AppsStore {
       return
     }
     if busy { cancelScan() }
-    invalidatePreparation(actions: actions)
+    cancelPreparation(actions: actions)
     let id = UUID()
     dropGeneration = id
     dropping = true
@@ -1335,6 +1653,7 @@ final class AppsStore {
     needsRescan = false
     selectedPath = report.path
     reviewedDropPath = report.path
+    selectedAppPaths = []
     selectedDataPaths = []
     explicitlySelectedUnproven = [:]
     packageSelected = false
@@ -1359,15 +1678,15 @@ final class AppsStore {
     message = reason
   }
 
-  private func invalidatePreparation(
+  private func cancelPreparation(
     actions: ActionStore? = nil, keepPresentedPlanID: Bool = false, preserveReviewIntent: Bool = false
   ) {
     let actions = actions ?? preparedActions
     actions?.clearKeptItems()
-    preparationGeneration = UUID()
+    choiceRevision = UUID()
     preparationTask?.cancel()
     preparationTask = nil
-    preparing = false
+    tool.preparation.invalidatePreparation()
     preparationStage = nil
     if !preserveReviewIntent { reviewIntentRequested = false }
     let pendingMatches = actions?.pending?.id == presentedPlanID && presentedPlanID != nil
@@ -1377,16 +1696,24 @@ final class AppsStore {
 
   private func continueReviewIntent(actions: ActionStore, orphans: Bool = false) {
     reviewIntentRequested = true
-    let id = preparationGeneration
-    let hasChoice = orphans ? !selectedOrphanPaths.isEmpty : packageSelected || !selectedDataPaths.isEmpty
+    let id = choiceRevision
+    if orphans { reviewKind = .orphans }
+    let hasChoice: Bool
+    switch reviewKind {
+    case .orphans: hasChoice = !selectedOrphanPaths.isEmpty
+    case .basket: hasChoice = selectedAppPaths.contains { appSelections[$0]?.hasChoice == true }
+    case .focused: hasChoice = packageSelected || !selectedDataPaths.isEmpty
+    }
     guard hasChoice else {
       message = String(localized: "Selection changed. Select an item to continue the removal review.")
       return
     }
     Task { @MainActor [weak self, weak actions] in
-      guard let self, let actions, self.preparationGeneration == id, self.reviewIntentRequested else { return }
-      if orphans {
+      guard let self, let actions, self.choiceRevision == id, self.reviewIntentRequested else { return }
+      if self.reviewKind == .orphans {
         await self.prepareOrphans(actions: actions)
+      } else if self.reviewKind == .basket {
+        await self.prepareBasket(actions: actions)
       } else {
         await self.prepareSelectedData(actions: actions)
       }
@@ -1421,6 +1748,7 @@ final class AppsStore {
       message = String(localized: "Select the app or eligible related data")
       return
     }
+    reviewKind = .focused
     if packageSelected, let reason = packageUnavailableReason(report) {
       message = reason
       return
@@ -1516,12 +1844,12 @@ final class AppsStore {
 
   private func prepare(
     actions: ActionStore, stillSelected: @escaping @MainActor () -> Bool,
+    selectedByNamePaths: Set<String>? = nil,
     builder: @escaping @Sendable () async throws -> RelatedDataService.AvailableUninstallPlan
   ) async {
     actions.clearKeptItems()
-    let id = UUID()
-    preparationGeneration = id
-    preparing = true
+    guard let id = tool.preparation.begin() else { return }
+    let manualPaths = selectedByNamePaths ?? Set(explicitlySelectedUnproven.keys)
     reviewIntentRequested = true
     preparationStage = .selectedItems
     message = nil
@@ -1529,8 +1857,8 @@ final class AppsStore {
     let requestedAt = ContinuousClock.now
     relatedLogger.info("review-preparation requested")
     defer {
-      if preparationGeneration == id {
-        preparing = false
+      if tool.preparation.accepts(id) {
+        tool.preparation.finish(id)
         preparationTask = nil
         preparationStage = nil
         reviewIntentRequested = false
@@ -1549,7 +1877,7 @@ final class AppsStore {
             var running = false
             if let plan = outcome.plan {
               await MainActor.run {
-                guard self.preparationGeneration == id else { return }
+                guard self.tool.preparation.accepts(id) else { return }
                 self.preparationStage = .runningApplications
               }
               running = await actions.containsRunningApplications(plan)
@@ -1584,7 +1912,7 @@ final class AppsStore {
         task.cancel()
       }
       let outcome = prepared.outcome
-      guard preparationGeneration == id, stillSelected(), !task.isCancelled, !Task.isCancelled, !actions.busy else {
+      guard tool.preparation.accepts(id), stillSelected(), !task.isCancelled, !Task.isCancelled, !actions.busy else {
         return
       }
       ownershipRefusalEvidence = outcome.refusalEvidence
@@ -1596,10 +1924,10 @@ final class AppsStore {
         }
         return
       }
-      guard preparationGeneration == id, stillSelected(), !Task.isCancelled, !actions.busy else { return }
+      guard tool.preparation.accepts(id), stillSelected(), !Task.isCancelled, !actions.busy else { return }
       let summaries = plan.items.map { item in
         let size = PlanItemSize.measure(item)
-        let selectedByName = explicitlySelectedUnproven[item.sourcePath] != nil
+        let selectedByName = manualPaths.contains(item.sourcePath)
         return ActionItemSummary(
           id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
           path: item.sourcePath,
@@ -1619,7 +1947,7 @@ final class AppsStore {
                 ),
           logicalBytes: size.logical, allocatedBytes: size.allocated)
       }
-      guard preparationGeneration == id, stillSelected(), !Task.isCancelled, !actions.busy else { return }
+      guard tool.preparation.accepts(id), stillSelected(), !Task.isCancelled, !actions.busy else { return }
       actions.present(
         plan: plan, items: summaries, rejectedItems: outcome.rejections,
         hasRunningApplications: prepared.hasRunningApplications)
@@ -1644,7 +1972,7 @@ final class AppsStore {
       let ms = Self.milliseconds(requestedAt.duration(to: .now))
       relatedLogger.info("review-preparation ms=\(ms, privacy: .public) outcome=presented")
     } catch PreparationFailure.timedOut {
-      if preparationGeneration == id, stillSelected(), !Task.isCancelled, !actions.busy {
+      if tool.preparation.accepts(id), stillSelected(), !Task.isCancelled, !actions.busy {
         message =
           preparationStage == .runningApplications
           ? String(localized: "Checking running apps took too long. Your selection is unchanged. Try reviewing again.")
@@ -1654,15 +1982,15 @@ final class AppsStore {
         relatedLogger.info("review-preparation ms=\(ms, privacy: .public) outcome=timed-out")
       }
     } catch let refused as PlanRejections {
-      if preparationGeneration == id, stillSelected(), !Task.isCancelled, !actions.busy {
+      if tool.preparation.accepts(id), stillSelected(), !Task.isCancelled, !actions.busy {
         showKeptItems(refused.rejections, actions: actions)
       }
     } catch let refused as PlanRejection {
-      if preparationGeneration == id, stillSelected(), !Task.isCancelled, !actions.busy {
+      if tool.preparation.accepts(id), stillSelected(), !Task.isCancelled, !actions.busy {
         showKeptItems([refused], actions: actions)
       }
     } catch {
-      if preparationGeneration == id, stillSelected(), !Task.isCancelled, !actions.busy {
+      if tool.preparation.accepts(id), stillSelected(), !Task.isCancelled, !actions.busy {
         message = FailureText.describe(error)
       }
     }

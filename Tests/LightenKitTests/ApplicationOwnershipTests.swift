@@ -211,6 +211,94 @@ struct ApplicationOwnershipTests {
     #expect(try service.planInstalled(app: app, candidate: candidate).items.count == 1)
   }
 
+  @Test("Only canonical Apple system namespaces scope unreadable metadata as system data")
+  func appleSystemNamespaceIsConcrete() throws {
+    #expect(
+      ApplicationOwnershipIssue(path: "/Library/Application Support/Apple/AssetCache/Data", code: EACCES).systemScope)
+    #expect(
+      ApplicationOwnershipIssue(path: "/Library/Application Support/Apple/ParentalControls/Users", code: EACCES)
+        .systemScope)
+    for path in [
+      "/Library/Application Support/AppleLookalike/AssetCache/Data", "/Library/Application Support/Apple/../Other/Data",
+      "/Library/LaunchDaemons/com.apple.lookalike.plist", "/System/../Applications/LightenQA.app",
+      "/System/Library/Frameworks/Foundation.framework/Versions/Current/Resources",
+    ] {
+      #expect(!ApplicationOwnershipIssue(path: path, code: EACCES).systemScope)
+    }
+    let home = try ownerFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let link = home + "/Apple"
+    #expect(symlink("/Library/Application Support/Apple", link) == 0)
+    #expect(!ApplicationOwnershipIssue(path: link + "/AssetCache/Data", code: EACCES).systemScope)
+  }
+
+  @Test(
+    "A user-controlled child cannot inherit its root-owned Apple namespace",
+    arguments: ["managed", "owner", "writable", "ancestor"])
+  func userControlledAppleDescendantIsNotSystem(_ control: String) {
+    var ancestor = stat()
+    #expect(lstat("/Library/Application Support", &ancestor) == 0)
+    let path = "/Library/Application Support/Apple/LightenQA-lookalike"
+    let scoped = ApplicationSystemNamespace.contains(
+      path,
+      readEntry: { _, _, details in
+        details = stat()
+        details.st_mode = mode_t(S_IFDIR | 0o755)
+        details.st_uid = control == "owner" ? geteuid() : 0
+        return 0
+      },
+      writable: { descriptor, name in
+        if control == "ancestor", name == "." {
+          var inspected = stat()
+          return fstat(descriptor, &inspected) == 0
+            && inspected.st_dev == ancestor.st_dev && inspected.st_ino == ancestor.st_ino
+        }
+        return name != "." && control == "writable"
+      })
+    #expect(scoped == (control == "managed"))
+  }
+
+  @Test("An unreadable matching third-party launch record names only the affected exact-ID data")
+  func unreadableLaunchRecordNamesAffectedRows() async throws {
+    let home = try ownerFixture()
+    defer { try? FileManager.default.removeItem(atPath: home) }
+    let apps = home + "/Applications"
+    let appPath = apps + "/LightenQA-selected.app"
+    let id = "qa.lighten.selected"
+    try ownerApp(appPath, id: id)
+    let unrelatedApp = apps + "/LightenQA-unrelated.app"
+    let unrelatedID = "qa.other.application"
+    try ownerApp(unrelatedApp, id: unrelatedID)
+    let daemonRoot = home + "/Library/LaunchDaemons"
+    try FileManager.default.createDirectory(atPath: daemonRoot, withIntermediateDirectories: true)
+    let unreadable = daemonRoot + "/" + id + ".helper.plist"
+    try Data("unreadable third-party metadata".utf8).write(to: URL(fileURLWithPath: unreadable))
+    #expect(chmod(unreadable, 0) == 0)
+    defer { _ = chmod(unreadable, 0o600) }
+    for domain in [id, unrelatedID] {
+      try FileManager.default.createDirectory(
+        atPath: RelatedLocation.caches.path(domain: domain, homeDirectory: home), withIntermediateDirectories: true)
+    }
+    let service = RelatedDataService(
+      homeDirectory: home, applicationRoots: [apps], ownershipApplicationRoots: [apps, daemonRoot],
+      writeVerifiedReceipts: false, signingMetadata: { _ in nil },
+      packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
+    let context = service.makeContext()
+    let affected = try #require((await service.discover(context: context)).first { $0.bundleID == id })
+    #expect(affected.classification == .uncertain && !affected.canSelect && !affected.defaultSelected)
+    #expect(affected.refusalEvidence.contains { $0.reason == .unknownMetadata && $0.ownerPaths == [unreadable] })
+    let app = try #require(service.application(at: appPath))
+    #expect(throws: RelatedFailure.self) { try service.planInstalled(app: app, candidate: affected) }
+    let scoped = service.makeStandardContext(app: app, listing: context.installedListing, dataEvidenceSource: context)
+    #expect(scoped.inventory.ownershipIssues.contains { $0.path == unreadable })
+    let available = await service.makeAvailableUninstallPlan(
+      app: app, selectedRelated: [affected], includePackage: false, context: context)
+    #expect(available.plan == nil)
+    #expect(available.refusalEvidence.contains { $0.reason == .unknownMetadata && $0.ownerPaths == [unreadable] })
+    let unrelated = try #require((await service.discover(context: context)).first { $0.bundleID == unrelatedID })
+    #expect(unrelated.canSelect && unrelated.defaultSelected && unrelated.refusalEvidence.isEmpty)
+  }
+
   @Test("System uncertainty does not poison third-party group ownership")
   func systemFailureIsSeparateFromThirdParty() throws {
     let home = try ownerFixture()

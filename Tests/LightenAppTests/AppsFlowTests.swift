@@ -318,8 +318,8 @@ private actor AppsAvailableGate {
 }
 
 @Test(
-  "Linked and wrapper application choices reach one fresh package review", arguments: [false, true])
-@MainActor func appsNormalPackagesReachReview(isWrapper: Bool) async throws {
+  "Linked and wrapper application choices reach one fresh package review", arguments: [false, true], [false, true])
+@MainActor func appsNormalPackagesReachReview(isWrapper: Bool, automaticallySelect: Bool) async throws {
   let root = try flowRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }
   let appPath = root + "/LightenQA-listed.app"
@@ -347,7 +347,8 @@ private actor AppsAvailableGate {
       #expect(requested.path == appPath && includePackage)
       #expect(candidates.map(\.path) == [candidate.path])
       return .init(plan: plan, rejections: [])
-    }, running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+    }, preferences: flowAutomaticPreferences(automaticallySelect), running: AppsClosedSource(),
+    events: { AsyncStream { $0.finish() } })
   let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
   store.reports = [report]
   store.inventoryComplete = true
@@ -356,8 +357,8 @@ private actor AppsAvailableGate {
   #expect(store.selectedPath == appPath)
   #expect(store.canSelect(candidate, app: report))
   store.togglePackage(actions: actions)
-  #expect(store.selectedDataPaths.isEmpty)
-  store.toggleData(candidate.path, actions: actions)
+  #expect(store.selectedDataPaths == (automaticallySelect ? [candidate.path] : []))
+  if !automaticallySelect { store.toggleData(candidate.path, actions: actions) }
   await store.prepareSelectedData(actions: actions)
   let presentation = try #require(actions.pending)
   #expect(presentation.plan == plan)
@@ -365,8 +366,8 @@ private actor AppsAvailableGate {
   #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
 }
 
-@Test("Identifierless package review keeps its missing ID and selects no related data")
-@MainActor func appsIdentifierlessPackageReview() async throws {
+@Test("Identifierless package review keeps its missing ID and selects no related data", arguments: [false, true])
+@MainActor func appsIdentifierlessPackageReview(selectPackageInitially: Bool) async throws {
   let root = try flowRoot()
   defer { try? FileManager.default.removeItem(atPath: root) }
   let app = root + "/LightenQA-identifierless.app"
@@ -400,13 +401,14 @@ private actor AppsAvailableGate {
       Issue.record("Identifierless app acquired an ID-based review")
       return nil
     },
-    running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
+    preferences: flowAutomaticPreferences(), running: AppsClosedSource(), events: { AsyncStream { $0.finish() } })
   let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
   store.reports = [report]
   store.inventoryComplete = true
-  store.select(app, actions: actions, selectPackage: false)
-  store.togglePackage(actions: actions)
+  store.select(app, actions: actions, selectPackage: selectPackageInitially)
+  if !selectPackageInitially { store.togglePackage(actions: actions) }
   #expect(store.canSelect(candidate, app: report) && store.selectedDataPaths.isEmpty)
+  #expect(!store.automaticSelectionAllowed(candidate))
   await store.prepareSelectedData(actions: actions)
   #expect(actions.pending?.plan == plan)
   #expect(actions.pending?.plan.items.first?.applicationBundleID == nil)
@@ -1213,11 +1215,11 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   #expect(store.selectedDataPaths.contains(candidate.path) == allowed)
 }
 
-@MainActor private func flowAutomaticPreferences() -> RemovalPreferences {
+@MainActor private func flowAutomaticPreferences(_ automaticallySelect: Bool = true) -> RemovalPreferences {
   let name = "LightenQA-auto-" + UUID().uuidString
   let defaults = UserDefaults(suiteName: name)!
   defer { defaults.removePersistentDomain(forName: name) }
-  defaults.set(true, forKey: RemovalPreferences.relatedKey)
+  defaults.set(automaticallySelect, forKey: RemovalPreferences.relatedKey)
   return RemovalPreferences(defaults: defaults, persistentDomainName: name)
 }
 
@@ -1320,6 +1322,7 @@ private func flowUnprovenCandidate(_ path: String, inode: UInt64 = 2) -> Related
   let name = "LightenQA-explicit-" + UUID().uuidString
   let defaults = try #require(UserDefaults(suiteName: name))
   defer { defaults.removePersistentDomain(forName: name) }
+  defaults.set(false, forKey: RemovalPreferences.relatedKey)
   let preferences = RemovalPreferences(defaults: defaults, persistentDomainName: name)
   let store = AppsStore(
     pictures: flowPictures(root), preferences: preferences,
@@ -1602,4 +1605,122 @@ private struct AppsActiveSelectionActivity: ApplicationActivitySource {
   #expect(Set(actions.pending?.plan.items.map(\.sourcePath) ?? []) == [path, dataPath])
   #expect(actions.pending?.plan.items.allSatisfy { $0.userSelection == true } == true)
   #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+}
+
+@Test("Five app packages and their ready chosen data use one confirmation and one History Undo group")
+@MainActor func appsBasketFiveFixturesHaveOneHistoryGroup() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let name = "qa.lighten.basket." + UUID().uuidString
+  let defaults = try #require(UserDefaults(suiteName: name))
+  defer { defaults.removePersistentDomain(forName: name) }
+  let preferences = RemovalPreferences(defaults: defaults, persistentDomainName: name)
+  preferences.automaticallySelectRelatedData = true
+  let planner = PlanService(homeDirectory: root)
+  let journal = JSONLActionJournal(path: root + "/journal.jsonl")
+  let history = ActionHistory(journal: journal, homeDirectory: root)
+  let trash = root + "/trash"
+  try FileManager.default.createDirectory(atPath: trash, withIntermediateDirectories: false)
+  let store = AppsStore(
+    pictures: flowPictures(root), preferences: preferences, userPlanner: planner, running: AppsClosedSource())
+  let actions = ActionStore(
+    journal: journal, trash: OwnedFlowTrash(destination: trash), historyService: history, planService: planner,
+    runningApplications: AppsClosedSource(), applicationActivity: ClearFlowApplicationActivity())
+  var expected: Set<String> = []
+  for index in 1...5 {
+    let app = root + "/LightenQA-basket-\(index).app"
+    let candidates = try ["Caches", "Application Support"].map { category in
+      let path = root + "/Library/\(category)/qa.lighten.\(index)-\(category.replacingOccurrences(of: " ", with: ""))"
+      try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+      try Data("fixture data \(index)".utf8).write(to: URL(fileURLWithPath: path + "/payload"))
+      let identity = try DescriptorFileSystem.identity(at: path)
+      expected.insert(path)
+      return RelatedDataCandidate(
+        id: path, path: path, classification: .installed, reason: .installed,
+        snapshot: ScanSnapshot(
+          rootPath: path, volumeDevice: identity.device,
+          entries: [ScanEntry(parentID: nil, path: path, identity: identity, issues: [], readable: true)], nodes: []),
+        receipt: nil)
+    }
+    try FileManager.default.createDirectory(atPath: app, withIntermediateDirectories: false)
+    try Data("fixture app \(index)".utf8).write(to: URL(fileURLWithPath: app + "/payload"))
+    expected.insert(app)
+    store.reports.append(
+      flowReport(
+        path: app, candidates: candidates, bundleID: "qa.lighten.\(index)",
+        identity: try DescriptorFileSystem.identity(at: app)))
+    store.selectApp(app, intent: .toggle, actions: actions)
+  }
+  #expect(store.selectedAppPaths.count == 5)
+  await store.prepareBasket(actions: actions)
+  let presentation = try #require(actions.pending)
+  #expect(Set(presentation.plan.items.map(\.sourcePath)) == expected)
+  #expect(presentation.plan.items.count == 15)
+  #expect(presentation.plan.items.allSatisfy { $0.userSelection == true && $0.inventory.count == 1 })
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+  let confirmed = try #require(actions.takeConfirmedPlan(presentation))
+  await actions.executeConfirmed(confirmed)
+  #expect(actions.result?.items.allSatisfy { $0.outcome == .applied } == true)
+  #expect(expected.allSatisfy { !FileManager.default.fileExists(atPath: $0) })
+  store.observeResult(actions: actions)
+  let readout = try await history.reconcile()
+  #expect(readout.plans.count == 1 && readout.plans.first?.id == presentation.plan.id)
+  _ = try await history.undo(planID: presentation.plan.id)
+  #expect(expected.allSatisfy { FileManager.default.fileExists(atPath: $0 + "/payload") })
+}
+
+private struct AppsOneActiveSelectionActivity: ApplicationActivitySource {
+  func activity(applicationPath: String) async -> ApplicationActivity {
+    ApplicationActivity(
+      state: applicationPath.hasSuffix("LightenQA-running-basket-1.app") ? .active : .clearObservedProcesses,
+      scope: .currentUser)
+  }
+}
+
+@Test("One running app in a five-app basket preserves the Close and Trash confirmation")
+@MainActor func appsBasketOneRunningAppRequiresCloseConfirmation() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let planner = PlanService(homeDirectory: root)
+  let store = AppsStore(pictures: flowPictures(root), userPlanner: planner)
+  let journalPath = root + "/journal.jsonl"
+  let actions = ActionStore(
+    journal: JSONLActionJournal(path: journalPath), planService: planner,
+    userSelectionApplicationActivity: AppsOneActiveSelectionActivity())
+  for index in 1...5 {
+    let path = root + "/LightenQA-running-basket-\(index).app"
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: false)
+    store.reports.append(flowReport(path: path, identity: try DescriptorFileSystem.identity(at: path)))
+    store.selectApp(path, intent: .toggle, actions: actions)
+  }
+  await store.prepareBasket(actions: actions)
+  let presentation = try #require(actions.pending)
+  #expect(presentation.plan.items.count == 5 && presentation.hasRunningApplications)
+  #expect(store.selectedAppPaths.count == 5 && actions.result == nil)
+  #expect(!FileManager.default.fileExists(atPath: journalPath))
+}
+
+@Test("An empty previous Apps result retains its date without granting action authority")
+@MainActor func appsEmptyPictureRemainsDisplayOnly() async throws {
+  let root = try flowRoot()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  let observedAt = Date(timeIntervalSince1970: 1_700_000_000)
+  let picture = ResultPicture(
+    observedAt: observedAt, content: AppsPicture(reports: [], inventoryComplete: true))
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  defer { continuation.finish() }
+  let store = AppsStore(pictures: flowPictures(root), loadPicture: { picture }, events: { stream })
+  let actions = ActionStore(journal: JSONLActionJournal(path: root + "/journal.jsonl"))
+  store.open(actions: actions)
+  try await waitFlow { store.pictureOpeningTiming != nil }
+  #expect(store.pictureRows.isEmpty && store.pictureObservedAt == observedAt && store.showsPreviousResult)
+  #expect(store.toolSummary.observedAt == observedAt)
+  #expect(store.toolSummary.count == 0 && store.toolSummary.partial)
+  #expect(store.needsRescan && !store.canReviewBasket(actions: actions))
+  store.selectApp(root + "/LightenQA-unobserved.app", actions: actions)
+  await store.prepareBasket(actions: actions)
+  #expect(store.selectedAppPaths.isEmpty && actions.pending == nil)
+  #expect(!FileManager.default.fileExists(atPath: root + "/journal.jsonl"))
+  store.cancelScan()
+  #expect(store.pictureObservedAt == observedAt && !store.canReviewBasket(actions: actions))
 }

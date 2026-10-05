@@ -52,26 +52,30 @@ struct CleanView: View {
         Text(scanStatus).font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
         Spacer()
         Button(String(localized: "Select all")) { store.selectAll(actions: actions) }
-          .disabled(store.phase != .ready || actions.busy)
+          .disabled(store.picture != nil || store.phase != .ready || actions.busy)
       }
       Divider()
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 12) {
-          ForEach(Array(actionableRows.prefix(7))) { row in categoryCard(row) }
-          if actionableRows.count > 7 {
-            DisclosureGroup(String(localized: "More categories")) {
-              ForEach(Array(actionableRows.dropFirst(7))) { row in categoryCard(row) }
+          if let picture = store.picture {
+            previousResults(picture)
+          } else {
+            ForEach(Array(actionableRows.prefix(7))) { row in categoryCard(row) }
+            if actionableRows.count > 7 {
+              DisclosureGroup(String(localized: "More categories")) {
+                ForEach(Array(actionableRows.dropFirst(7))) { row in categoryCard(row) }
+              }
             }
-          }
-          if store.discoveringRelated {
-            HStack(spacing: 8) {
-              ProgressView().controlSize(.small)
-              Text(String(localized: "Checking removed app data"))
-                .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+            if store.discoveringRelated {
+              HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(String(localized: "Checking removed app data"))
+                  .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+              }
             }
+            if !related.isEmpty { removedData }
+            reportOnly
           }
-          if !related.isEmpty { removedData }
-          reportOnly
         }
         .padding(.vertical, 4)
       }
@@ -83,7 +87,8 @@ struct CleanView: View {
         Spacer()
         Button(String(localized: "Clean")) { Task { await store.prepare(actions: actions) } }
           .buttonStyle(.borderedProminent)
-          .disabled(store.selected.isEmpty || store.phase != .ready || store.busy || actions.busy)
+          .disabled(
+            store.picture != nil || store.selected.isEmpty || store.phase != .ready || store.busy || actions.busy)
       }
       if let message = store.message {
         Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
@@ -98,6 +103,7 @@ struct CleanView: View {
     .background(LightenStyle.canvas)
     .navigationTitle(String(localized: "Clean"))
     .sheet(item: $actions.pending) { ConfirmationView(presentation: $0, actions: actions) }
+    .task { store.open() }
     .onChange(of: actions.result?.planID) { store.observeResult(actions: actions) }
     .onDisappear { store.deactivate(actions: actions) }
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.selected)
@@ -105,10 +111,72 @@ struct CleanView: View {
   }
 
   private var scanStatus: String {
+    if let picture = store.picture {
+      let date = String(localized: "Last scan") + ": " + picture.observedAt.formatted()
+      return store.phase == .scanning ? date + " · " + String(localized: "Scanning") : date
+    }
     if store.partial { return String(localized: "Partial scan. Scan again before cleaning.") }
     if store.phase == .scanning { return String(localized: "Scanning") }
     return store.scannedAt.map { String(localized: "Last scan") + ": " + $0.formatted() }
       ?? String(localized: "Scan to inspect candidate areas")
+  }
+
+  private func previousResults(_ picture: ResultPicture<CleanPicture>) -> some View {
+    let rows = picture.content.rows.filter { row in
+      searchTerm.isEmpty || row.path.localizedStandardContains(searchTerm)
+        || store.rows.first { $0.id == row.categoryID }?.title(turkish: turkish)
+          .localizedStandardContains(searchTerm) == true
+    }
+    let related = picture.content.relatedRows.filter {
+      searchTerm.isEmpty || $0.path.localizedStandardContains(searchTerm)
+    }
+    return LazyVStack(alignment: .leading, spacing: 12) {
+      Text(String(localized: "Previous result. Scan again before cleaning."))
+        .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+      if picture.content.partial {
+        Text(String(localized: "Partial scan. Scan again before cleaning."))
+          .font(.system(size: 12)).foregroundStyle(LightenStyle.warning)
+      }
+      if rows.isEmpty && related.isEmpty {
+        Text(String(localized: "No items"))
+          .font(.system(size: 13)).foregroundStyle(LightenStyle.muted)
+      }
+      ForEach(rows) { row in
+        previousRow(
+          path: row.path,
+          category: store.rows.first { $0.id == row.categoryID }?.title(turkish: turkish),
+          bytes: row.logicalBytes, complete: row.sizeComplete, detail: row.detail)
+      }
+      ForEach(related) { row in
+        previousRow(
+          path: row.path, category: String(localized: "Removed app data"),
+          bytes: row.logicalBytes, complete: false, detail: row.detail)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(CleanPictureDrawProbe { store.pictureDidDraw() })
+  }
+
+  private func previousRow(
+    path: String, category: String?, bytes: Int64?, complete: Bool, detail: String?
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 5) {
+      HStack {
+        Text(URL(fileURLWithPath: path).lastPathComponent).font(.system(size: 14, weight: .medium))
+        Spacer()
+        if let bytes {
+          Text((complete ? "" : String(localized: "At least") + " ") + format(bytes))
+            .font(.system(size: 12)).monospacedDigit()
+        }
+      }
+      if let category { Text(category).font(.system(size: 11)).foregroundStyle(LightenStyle.muted) }
+      Text(path).font(.system(size: 11)).foregroundStyle(LightenStyle.muted).textSelection(.enabled)
+      if let detail { Text(detail).font(.system(size: 11)).foregroundStyle(LightenStyle.muted) }
+      Button(String(localized: "Show in Finder")) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+      }.font(.system(size: 11))
+    }
+    .padding(13).background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
   }
 
   private func categoryCard(_ row: CatalogRow) -> some View {
@@ -309,4 +377,30 @@ struct CleanView: View {
   }
 
   private func format(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+}
+
+/// Reports an AppKit draw separately from the store's first publication.
+private struct CleanPictureDrawProbe: NSViewRepresentable {
+  let didDraw: @MainActor () -> Void
+
+  func makeNSView(context: Context) -> ProbeView { ProbeView(didDraw: didDraw) }
+  func updateNSView(_ view: ProbeView, context: Context) {
+    view.didDraw = didDraw
+    view.needsDisplay = true
+  }
+
+  final class ProbeView: NSView {
+    var didDraw: @MainActor () -> Void
+    init(didDraw: @escaping @MainActor () -> Void) {
+      self.didDraw = didDraw
+      super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { return nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+      guard window != nil, !isHiddenOrHasHiddenAncestor else { return }
+      let callback = didDraw
+      DispatchQueue.main.async { callback() }
+    }
+  }
 }

@@ -1,6 +1,8 @@
 import Foundation
 import LightenKit
+import OSLog
 import Observation
+import Synchronization
 
 struct CleanCandidate: Identifiable, Sendable {
   let id: UUID
@@ -48,7 +50,7 @@ final class CleanStore: ToolSummaryProviding {
   @ObservationIgnored private let catalog: CleanCatalog?
   @ObservationIgnored private let catalogFailure: (any Error)?
   @ObservationIgnored let homeDirectory: String
-  @ObservationIgnored private let scanner: Scanner
+  @ObservationIgnored private let scanner: Scanner?
   @ObservationIgnored private let discoverRelated: @Sendable () async -> [RelatedDataCandidate]
   @ObservationIgnored private let availablePlanBuilder: AvailablePlanBuilder
   @ObservationIgnored private var scanTask: Task<Void, Never>?
@@ -61,6 +63,16 @@ final class CleanStore: ToolSummaryProviding {
   @ObservationIgnored private var removedCandidates: [UUID: [CleanCandidate]] = [:]
   @ObservationIgnored private var removedRelated: [UUID: [RelatedDataCandidate]] = [:]
   @ObservationIgnored private var displayChanges: [UUID: ActionDisplayItem] = [:]
+  @ObservationIgnored private let loadPicture: @Sendable () -> ResultPicture<CleanPicture>?
+  @ObservationIgnored private let savePicture: @Sendable (ResultPicture<CleanPicture>) throws -> Void
+  @ObservationIgnored private let pictureQueue = DispatchQueue(label: "com.tavsn.lighten.clean-pictures", qos: .utility)
+  @ObservationIgnored private let pictureWriteGeneration = CleanPictureWriteGeneration()
+  @ObservationIgnored private var pictureTask: Task<Void, Never>?
+  @ObservationIgnored private var opened = false
+  @ObservationIgnored private var openingRequestedAt: ContinuousClock.Instant?
+  @ObservationIgnored private var pictureDrawn = false
+  @ObservationIgnored private let openingLogger = Logger(subsystem: "com.tavsn.lighten", category: "clean-opening")
+  @ObservationIgnored private var pictureBeforeDisplayChanges: ResultPicture<CleanPicture>?
   private(set) var displayRevision = 0
   let tool = ToolStore()
   var candidates: [CleanCandidate] = []
@@ -72,12 +84,16 @@ final class CleanStore: ToolSummaryProviding {
   var scannedAt: Date?
   var presentedPlanID: UUID?
   var message: String?
+  private(set) var picture: ResultPicture<CleanPicture>?
 
   init(
     activity: any ProcessActivitySource = MacOSProcessActivitySource(),
     homeDirectory: String = NSHomeDirectory(),
+    pictures: ResultPictureStore = ResultPictureStore(),
+    loadPicture: (@Sendable () -> ResultPicture<CleanPicture>?)? = nil,
+    savePicture: (@Sendable (ResultPicture<CleanPicture>) throws -> Void)? = nil,
     catalogLoader: @Sendable (String) throws -> CleanCatalog = { try CleanCatalog(homeDirectory: $0) },
-    scanner: @escaping Scanner = { path, home in try await ScanService(homeDirectory: home).scan(rootPath: path) },
+    scanner: Scanner? = nil,
     discoverRelated: @escaping @Sendable () async -> [RelatedDataCandidate] = {
       await RelatedDataService.system.discover()
     },
@@ -85,6 +101,8 @@ final class CleanStore: ToolSummaryProviding {
     availablePlanBuilder: AvailablePlanBuilder? = nil,
     preferences: RemovalPreferences = .shared, userPlanner: PlanService? = nil
   ) {
+    self.loadPicture = loadPicture ?? { pictures.load(CleanPicture.self, named: "clean") }
+    self.savePicture = savePicture ?? { try pictures.save($0, named: "clean") }
     self.preferences = preferences
     self.userPlanner = userPlanner ?? PlanService(homeDirectory: homeDirectory)
     usesInjectedPlanner = availablePlanBuilder != nil || planBuilder != nil
@@ -108,6 +126,7 @@ final class CleanStore: ToolSummaryProviding {
           catalog.planAvailable(selections: selections, kind: kind)
         }.value
       }
+    pictureWriteGeneration.replace(with: scanGeneration)
   }
 
   var rows: [CatalogRow] { catalog?.rows ?? [] }
@@ -116,13 +135,101 @@ final class CleanStore: ToolSummaryProviding {
   var partial: Bool { phase == .partial }
   var actionableCandidates: [CleanCandidate] { candidates.filter(\.canAct) }
   var toolSummary: ToolSummary {
-    ToolSummary(
+    if let picture {
+      return ToolSummary(
+        count: picture.content.rows.count + picture.content.relatedRows.count,
+        logicalBytes: picture.content.rows.reduce(0) { $0 + $1.logicalBytes }
+          + picture.content.relatedRows.reduce(0) { $0 + ($1.logicalBytes ?? 0) },
+        observedAt: picture.observedAt, partial: picture.content.partial)
+    }
+    return ToolSummary(
       count: actionableCandidates.count,
       logicalBytes: actionableCandidates.reduce(0) { $0 + $1.logicalBytes },
       observedAt: scannedAt, partial: partial)
   }
   var selectedLogicalBytes: Int64 {
     candidates.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.logicalBytes }
+  }
+
+  func open() {
+    guard !opened else { return }
+    opened = true
+    guard tool.phase == .idle, scannedAt == nil else { return }
+    let generation = scanGeneration
+    let requestedAt = ContinuousClock.now
+    openingRequestedAt = requestedAt
+    let queue = pictureQueue
+    let load = loadPicture
+    pictureTask = Task(priority: .utility) { @concurrent [weak self] in
+      let cached: ResultPicture<CleanPicture>? = await withCheckedContinuation { continuation in
+        queue.async { continuation.resume(returning: load()) }
+      }
+      guard !Task.isCancelled else { return }
+      await self?.publishPicture(cached, generation: generation, requestedAt: requestedAt)
+    }
+  }
+
+  private func publishPicture(
+    _ cached: ResultPicture<CleanPicture>?, generation: UUID, requestedAt: ContinuousClock.Instant
+  ) {
+    guard scanGeneration == generation, scannedAt == nil, candidates.isEmpty else { return }
+    picture = cached
+    pictureBeforeDisplayChanges = nil
+    guard let cached else { return }
+    let elapsed = Self.milliseconds(requestedAt.duration(to: .now))
+    let count = cached.content.rows.count + cached.content.relatedRows.count
+    openingLogger.info(
+      "Clean picture published milliseconds=\(elapsed, privacy: .public) rows=\(count, privacy: .public)")
+  }
+
+  func pictureDidDraw() {
+    guard picture != nil, !pictureDrawn, let requestedAt = openingRequestedAt else { return }
+    pictureDrawn = true
+    let elapsed = Self.milliseconds(requestedAt.duration(to: .now))
+    openingLogger.info("Clean picture drawn milliseconds=\(elapsed, privacy: .public)")
+  }
+
+  private static func milliseconds(_ duration: Duration) -> Double {
+    let value = duration.components
+    return Double(value.seconds) * 1000 + Double(value.attoseconds) / 1_000_000_000_000_000
+  }
+
+  func waitForPicture() async { await pictureTask?.value }
+
+  func waitForPictureSaves() async {
+    let queue = pictureQueue
+    await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
+  }
+
+  private func persistPicture() {
+    let snapshot: ResultPicture<CleanPicture>
+    if let picture {
+      snapshot = picture
+    } else {
+      guard tool.phase == .ready, let scannedAt else { return }
+      snapshot = ResultPicture(
+        observedAt: scannedAt,
+        content: CleanPicture(
+          rows: candidates.map {
+            CleanPicture.Row(
+              path: $0.entry.path, categoryID: $0.row.id,
+              logicalBytes: $0.logicalBytes, sizeComplete: $0.sizeComplete, detail: $0.refusal)
+          },
+          relatedRows: relatedCandidates.map {
+            CleanPicture.RelatedRow(
+              path: $0.path, logicalBytes: $0.observation?.logical.knownLowerBound,
+              detail: String(localized: "Previous result. Scan again before cleaning."))
+          },
+          partial: candidates.contains { !$0.sizeComplete } || rowStatuses.values.contains { $0 == .unavailable }))
+    }
+    let token = scanGeneration
+    let state = pictureWriteGeneration
+    let save = savePicture
+    // Enqueue on the main actor so disk writes retain publication order.
+    pictureQueue.async {
+      guard state.accepts(token) else { return }
+      try? save(snapshot)
+    }
   }
 
   func refresh() { startScan() }
@@ -133,6 +240,8 @@ final class CleanStore: ToolSummaryProviding {
     cancelRelatedDiscovery()
     let generation = UUID()
     scanGeneration = generation
+    pictureWriteGeneration.replace(with: generation)
+    pictureTask?.cancel()
     tool.phase = .scanning
     candidates = []
     relatedCandidates = []
@@ -150,6 +259,8 @@ final class CleanStore: ToolSummaryProviding {
   func cancelScan(actions: ActionStore? = nil) {
     guard phase == .scanning else { return }
     scanGeneration = UUID()
+    pictureWriteGeneration.replace(with: scanGeneration)
+    pictureTask?.cancel()
     scanTask?.cancel()
     scanTask = nil
     cancelRelatedDiscovery()
@@ -181,70 +292,79 @@ final class CleanStore: ToolSummaryProviding {
       let activityState = rowActivity.state
       if Task.isCancelled || scanGeneration != generation { return }
       do {
-        let snapshot = try await scanner(catalog.root(for: row), homeDirectory)
+        let discovered: CatalogDiscovery
+        if let scanner {
+          let snapshot = try await scanner(catalog.root(for: row), homeDirectory)
+          discovered = try await Task.detached(priority: .utility) {
+            try catalog.discovery(snapshot: snapshot, rowID: row.id)
+          }.value
+        } else {
+          discovered = try await catalog.discover(rowID: row.id)
+        }
         if Task.isCancelled || scanGeneration != generation { return }
-        let nodes = Dictionary(uniqueKeysWithValues: snapshot.nodes.map { ($0.id, $0) })
-        let direct = snapshot.entries.filter { $0.parentID == snapshot.entries.first?.id }
-        for entry in direct {
-          if let node = nodes[entry.id] {
-            let candidateActivity =
-              childScoped
-              ? await activity.activity(for: row, rootPath: catalog.activityRoot(for: row, candidatePath: entry.path))
-              : rowActivity
-            if Task.isCancelled || scanGeneration != generation { return }
-            let rejection = await Task.detached(priority: .utility) {
-              catalog.candidateRejection(path: entry.path, row: row, kind: .trash)
-            }.value
-            if Task.isCancelled || scanGeneration != generation { return }
-            var allowed = rejection == nil
-            var exactLogical: Int64?
-            var refusal = rejection.map(SpaceText.rejection)
-            var requiresFullDiskAccess = false
-            if allowed && candidateActivity.state == .clearObservedCurrentUID
-              && (node.partial || node.protected || !entry.issues.isEmpty)
-            {
-              do {
-                let plan = try await Task.detached(priority: .utility) {
-                  try catalog.plan(snapshot: snapshot, selectedIDs: [entry.id], rowID: row.id, kind: .trash)
-                }.value
-                if !plan.items.contains(where: { $0.containsOpaquePackages }) {
-                  exactLogical = plan.items.reduce(Int64(0)) { $0 + PlanItemSize.measure($1).0 }
-                }
-              } catch {
-                allowed = false
-                requiresFullDiskAccess =
-                  (error as? PlanRejections)?.rejections.contains { $0.reason == .unreadableFolder } == true
-                refusal =
-                  (error as? PlanRejections).map {
-                    $0.rejections.map(SpaceText.rejection).joined(separator: "\n")
-                  }
-                  ?? (error as? PlanRejection).map(SpaceText.rejection)
-                  ?? FailureText.describe(error)
+        let snapshot = discovered.snapshot
+        for observed in discovered.candidates {
+          let entry = observed.entry
+          let node = observed.node
+          let candidateActivity =
+            childScoped
+            ? await activity.activity(for: row, rootPath: catalog.activityRoot(for: row, candidatePath: entry.path))
+            : rowActivity
+          if Task.isCancelled || scanGeneration != generation { return }
+          let rejection = observed.rejection
+          var allowed = rejection == nil
+          var exactLogical: Int64?
+          var refusal = rejection.map(SpaceText.rejection)
+          var requiresFullDiskAccess = false
+          if allowed && candidateActivity.state == .clearObservedCurrentUID
+            && (node.partial || node.protected || !entry.issues.isEmpty)
+          {
+            do {
+              let plan = try await Task.detached(priority: .utility) {
+                try catalog.plan(snapshot: snapshot, selectedIDs: [entry.id], rowID: row.id, kind: .trash)
+              }.value
+              if !plan.items.contains(where: { $0.containsOpaquePackages }) {
+                exactLogical = plan.items.reduce(Int64(0)) { $0 + PlanItemSize.measure($1).0 }
               }
-              if Task.isCancelled || scanGeneration != generation { return }
+            } catch {
+              allowed = false
+              requiresFullDiskAccess =
+                (error as? PlanRejections)?.rejections.contains { $0.reason == .unreadableFolder } == true
+              refusal =
+                (error as? PlanRejections).map {
+                  $0.rejections.map(SpaceText.rejection).joined(separator: "\n")
+                }
+                ?? (error as? PlanRejection).map(SpaceText.rejection)
+                ?? FailureText.describe(error)
             }
-            candidates.append(
-              CleanCandidate(
-                id: entry.id, row: row, snapshot: snapshot, entry: entry, node: node,
-                activity: candidateActivity.state, allowed: allowed, exactLogicalBytes: exactLogical,
-                refusal: refusal, requiresFullDiskAccess: requiresFullDiskAccess,
-                processNames: candidateActivity.processNames))
+            if Task.isCancelled || scanGeneration != generation { return }
           }
+          candidates.append(
+            CleanCandidate(
+              id: entry.id, row: row, snapshot: snapshot, entry: entry, node: node,
+              activity: candidateActivity.state, allowed: allowed, exactLogicalBytes: exactLogical,
+              refusal: refusal, requiresFullDiskAccess: requiresFullDiskAccess,
+              processNames: candidateActivity.processNames))
+          picture = nil
+          pictureBeforeDisplayChanges = nil
         }
         rowStatuses[row.id] =
           activityState == .active
           ? .toolRunning
-          : activityState == .unknown ? .processUnknown : direct.isEmpty ? .empty : .clear
+          : activityState == .unknown ? .processUnknown : discovered.candidates.isEmpty ? .empty : .clear
       } catch {
         if Task.isCancelled || scanGeneration != generation { return }
         rowStatuses[row.id] = .unavailable
       }
     }
     if Task.isCancelled || scanGeneration != generation { return }
+    picture = nil
+    pictureBeforeDisplayChanges = nil
     scannedAt = Date()
     tool.phase = .ready
     selected = Set(actionableCandidates.filter { $0.row.defaultSelected }.map(\.id))
     scanTask = nil
+    persistPicture()
     startRelatedDiscovery(scan: generation)
   }
 
@@ -266,6 +386,7 @@ final class CleanStore: ToolSummaryProviding {
     discoveringRelated = false
     relatedGeneration = nil
     relatedTask = nil
+    persistPicture()
   }
 
   private func cancelRelatedDiscovery() {
@@ -276,14 +397,14 @@ final class CleanStore: ToolSummaryProviding {
   }
 
   func toggleCategory(_ rowID: String, actions: ActionStore) {
-    guard tool.phase == .ready, !actions.busy else { return }
+    guard picture == nil, tool.phase == .ready, !actions.busy else { return }
     let ids = Set(candidates.filter { $0.row.id == rowID }.map(\.id))
     expirePreparation(actions: actions)
     if ids.isSubset(of: selected) { selected.subtract(ids) } else { selected.formUnion(ids) }
   }
 
   func selectAll(actions: ActionStore) {
-    guard tool.phase == .ready, !actions.busy else { return }
+    guard picture == nil, tool.phase == .ready, !actions.busy else { return }
     expirePreparation(actions: actions)
     let ids = Set(candidates.map(\.id))
     selected = selected == ids ? [] : ids
@@ -308,6 +429,7 @@ final class CleanStore: ToolSummaryProviding {
   }
 
   func applyDisplayChange(_ change: ActionDisplayChange) {
+    if picture != nil, pictureBeforeDisplayChanges == nil { pictureBeforeDisplayChanges = picture }
     for item in change.items {
       switch change.kind {
       case .applied:
@@ -358,7 +480,39 @@ final class CleanStore: ToolSummaryProviding {
       updated.displaySizeComplete = complete
       return updated
     }
+    projectPreviousPicture()
     displayRevision += 1
+    persistPicture()
+  }
+
+  /// Completed actions update presentation by path without manufacturing fresh scan proof.
+  private func projectPreviousPicture() {
+    guard picture != nil, let original = pictureBeforeDisplayChanges else { return }
+    let removed = Array(displayChanges.values)
+    func wasRemoved(_ path: String) -> Bool {
+      removed.contains { path == $0.path || path.hasPrefix($0.path + "/") }
+    }
+    let rows = original.content.rows.filter { !wasRemoved($0.path) }.map { row in
+      let descendants = removed.filter { $0.path.hasPrefix(row.path + "/") }
+      var bytes = row.logicalBytes
+      var complete = row.sizeComplete
+      for item in descendants where !descendants.contains(where: { item.path.hasPrefix($0.path + "/") }) {
+        if let amount = item.size.logical {
+          bytes = max(0, bytes - min(bytes, amount.knownLowerBound))
+          complete = complete && amount.completeTotal != nil
+        } else {
+          complete = false
+        }
+      }
+      return CleanPicture.Row(
+        path: row.path, categoryID: row.categoryID, logicalBytes: bytes,
+        sizeComplete: complete, detail: row.detail)
+    }
+    picture = ResultPicture(
+      observedAt: original.observedAt,
+      content: CleanPicture(
+        rows: rows, relatedRows: original.content.relatedRows.filter { !wasRemoved($0.path) },
+        partial: original.content.partial))
   }
 
   func observeResult(actions: ActionStore) {
@@ -373,10 +527,11 @@ final class CleanStore: ToolSummaryProviding {
     }
     selected.subtract(moved)
     expirePreparation(actions: actions, keepPresentedPlanID: true)
+    persistPicture()
   }
 
   func prepareRelated(_ candidate: RelatedDataCandidate, actions: ActionStore) async {
-    guard tool.allowsPreparation, !actions.busy,
+    guard picture == nil, tool.allowsPreparation, !actions.busy,
       let token = tool.preparation.begin()
     else { return }
     defer { tool.preparation.finish(token) }
@@ -414,7 +569,7 @@ final class CleanStore: ToolSummaryProviding {
   }
 
   func prepare(actions: ActionStore, kind: ActionKind = .trash) async {
-    guard let catalog, tool.allowsPreparation, !actions.busy, !selected.isEmpty else { return }
+    guard picture == nil, let catalog, tool.allowsPreparation, !actions.busy, !selected.isEmpty else { return }
     let chosen = candidates.filter { selected.contains($0.id) }
     guard chosen.count == selected.count else {
       message = String(localized: "Some selected items are unavailable. Scan again before cleaning.")
@@ -513,4 +668,11 @@ final class CleanStore: ToolSummaryProviding {
       }
     }
   }
+}
+
+/// Shared only with the serial disk queue; the UI's generation stays on the main actor.
+private nonisolated final class CleanPictureWriteGeneration: Sendable {
+  private let value = Mutex(UUID())
+  func replace(with generation: UUID) { value.withLock { $0 = generation } }
+  func accepts(_ generation: UUID) -> Bool { value.withLock { $0 == generation } }
 }

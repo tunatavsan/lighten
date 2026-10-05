@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/proc_info.h>
+#include <sys/proc.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -19,6 +20,13 @@ static int application_executable(const char *path) {
     if (size > 4 && strncasecmp(end - 4, ".app", 4) == 0) return 1;
   }
   return 0;
+}
+
+static uint32_t observation_failure(int error, int descriptor) {
+  // Exited processes and closed descriptors invalidate this whole observation.
+  // Permission and unknown failures remain unavailable and cannot be retried away.
+  return error == ESRCH || (descriptor && error == EBADF)
+    ? LIGHTEN_CENSUS_PROCESS_CHANGED : LIGHTEN_CENSUS_UNAVAILABLE;
 }
 
 static uint64_t monotonic_milliseconds(void) {
@@ -128,14 +136,17 @@ int lighten_copy_application_data_paths(size_t maximum_bytes, uint32_t timeout_m
     census->processes_inspected++;
     struct proc_bsdinfo before, after;
     memset(&before, 0, sizeof(before));
+    errno = 0;
     if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &before, sizeof(before)) != sizeof(before)) {
-      census->failure_flags |= LIGHTEN_CENSUS_UNAVAILABLE;
+      census->failure_flags |= observation_failure(errno, 0);
       continue;
     }
     if (before.pbi_uid != geteuid()) { census->failure_flags |= LIGHTEN_CENSUS_PROCESS_CHANGED; continue; }
+    if (before.pbi_status == SZOMB) continue;
     char executable[PROC_PIDPATHINFO_MAXSIZE] = {0};
+    errno = 0;
     if (proc_pidpath(pid, executable, sizeof(executable)) <= 0) {
-      census->failure_flags |= LIGHTEN_CENSUS_UNAVAILABLE;
+      census->failure_flags |= observation_failure(errno, 0);
       continue;
     }
     if (!application_executable(executable)) continue;
@@ -143,11 +154,15 @@ int lighten_copy_application_data_paths(size_t maximum_bytes, uint32_t timeout_m
     uint32_t begin = buffer.count;
     struct proc_vnodepathinfo cwd;
     memset(&cwd, 0, sizeof(cwd));
+    errno = 0;
     if (proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &cwd, sizeof(cwd)) == sizeof(cwd)) {
       append_path(&buffer, pid, &before, executable, &cwd.pvi_cdir, 1);
-    } else { census->failure_flags |= LIGHTEN_CENSUS_UNAVAILABLE; }
+    } else { census->failure_flags |= observation_failure(errno, 0); }
+    errno = 0;
     int required = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
-    if (required < 0 || required > 16 * 1024 * 1024) { census->failure_flags |= LIGHTEN_CENSUS_UNAVAILABLE; }
+    if (required < 0 || (required == 0 && errno != 0) || required > 16 * 1024 * 1024) {
+      census->failure_flags |= observation_failure(errno, 0);
+    }
     else if (required > 0) {
       struct proc_fdinfo *fds = NULL;
       size_t fd_capacity = 0;
@@ -160,11 +175,13 @@ int lighten_copy_application_data_paths(size_t maximum_bytes, uint32_t timeout_m
         if (!next) { census->failure_flags |= LIGHTEN_CENSUS_MEMORY_LIMIT; break; }
         fds = next;
         fd_capacity = needed;
+        errno = 0;
         got = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, (int)fd_capacity);
+        if (got == 0 && errno != 0) { got = -1; break; }
         if (got >= 0 && (size_t)got < fd_capacity && got % sizeof(struct proc_fdinfo) == 0) break;
         got = -1;
       }
-      if (got < 0) { census->failure_flags |= LIGHTEN_CENSUS_UNAVAILABLE; }
+      if (got < 0) { census->failure_flags |= observation_failure(errno, 0); }
       else {
         for (size_t fd_index = 0; fd_index < (size_t)got / sizeof(struct proc_fdinfo); fd_index++) {
           if (!within_deadline(&buffer)) break;
@@ -172,8 +189,9 @@ int lighten_copy_application_data_paths(size_t maximum_bytes, uint32_t timeout_m
           census->descriptors_inspected++;
           struct vnode_fdinfowithpath info;
           memset(&info, 0, sizeof(info));
+          errno = 0;
           if (proc_pidfdinfo(pid, fds[fd_index].proc_fd, PROC_PIDFDVNODEPATHINFO, &info, sizeof(info)) != sizeof(info)) {
-            census->failure_flags |= LIGHTEN_CENSUS_UNAVAILABLE;
+            census->failure_flags |= observation_failure(errno, 1);
             continue;
           }
           append_path(&buffer, pid, &before, executable, &info.pvip, 0);
@@ -184,9 +202,17 @@ int lighten_copy_application_data_paths(size_t maximum_bytes, uint32_t timeout_m
     }
     char current_executable[PROC_PIDPATHINFO_MAXSIZE] = {0};
     memset(&after, 0, sizeof(after));
-    if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &after, sizeof(after)) != sizeof(after)
-        || proc_pidpath(pid, current_executable, sizeof(current_executable)) <= 0
-        || before.pbi_uid != after.pbi_uid || before.pbi_start_tvsec != after.pbi_start_tvsec
+    errno = 0;
+    int after_size = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &after, sizeof(after));
+    int identity_error = errno;
+    errno = 0;
+    int after_path = proc_pidpath(pid, current_executable, sizeof(current_executable));
+    int path_error = errno;
+    if (after_size != sizeof(after) || after_path <= 0) {
+      buffer.count = begin;
+      if (after_size != sizeof(after)) census->failure_flags |= observation_failure(identity_error, 0);
+      if (after_path <= 0) census->failure_flags |= observation_failure(path_error, 0);
+    } else if (before.pbi_uid != after.pbi_uid || before.pbi_start_tvsec != after.pbi_start_tvsec
         || before.pbi_start_tvusec != after.pbi_start_tvusec
         || strcmp(executable, current_executable) != 0) {
       buffer.count = begin;

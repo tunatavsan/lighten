@@ -33,6 +33,8 @@ typedef struct {
 // One current-UID census with growing record and fd buffers, bounded by the
 // caller's record-memory and runtime limits. PID/fd scratch space is at most
 // 17 MiB. A limit or unreadable process always makes the census incomplete.
+// Exited processes and closed descriptors report PROCESS_CHANGED so callers
+// may replace the whole observation within their original deadline.
 // Records are emitted only after PID, executable, UID and start time remain
 // equal across its fd/cwd reads. Free records with the matching function.
 // 0: complete; -1: incomplete (returned records remain observations).

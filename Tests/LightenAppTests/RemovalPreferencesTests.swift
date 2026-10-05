@@ -4,7 +4,7 @@ import Testing
 
 @testable import Lighten
 
-@Test("Removal settings start with Trash and no automatic app-data selection")
+@Test("New removal settings start with Trash and automatic eligible app-data selection")
 @MainActor func removalDefaultsAreConservative() throws {
   let name = "LightenQA-preferences-" + UUID().uuidString
   let defaults = try #require(UserDefaults(suiteName: name))
@@ -21,7 +21,17 @@ import Testing
   #expect(defaults.bool(forKey: RemovalPreferences.relatedKey))
   let preferences = RemovalPreferences(defaults: defaults, persistentDomainName: name)
   #expect(preferences.deletionDefault == .trash)
-  #expect(!preferences.automaticallySelectRelatedData)
+  #expect(preferences.automaticallySelectRelatedData)
+}
+
+@Test("Saved app-data selection preferences survive the new default", arguments: [false, true])
+@MainActor func removalRelatedPreferencePreservesSavedValue(saved: Bool) throws {
+  let name = "LightenQA-preferences-" + UUID().uuidString
+  let defaults = try #require(UserDefaults(suiteName: name))
+  defer { defaults.removePersistentDomain(forName: name) }
+  defaults.set(saved, forKey: RemovalPreferences.relatedKey)
+  #expect(RemovalPreferences(defaults: defaults, persistentDomainName: name).automaticallySelectRelatedData == saved)
+  #expect(RemovalPreferences(defaults: defaults).automaticallySelectRelatedData == saved)
 }
 
 @Test("Removal settings persist independently and survive a new store")

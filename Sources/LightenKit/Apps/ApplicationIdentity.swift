@@ -2,6 +2,22 @@ import Darwin
 import Foundation
 
 public enum ApplicationIdentity {
+  /// Bundle identifiers used as exact standard domains share one ASCII grammar.
+  /// Underscores occur in shipped system applications as well as third-party apps.
+  static func validBundleIdentifier(_ id: String) -> Bool {
+    let parts = id.split(separator: ".", omittingEmptySubsequences: false)
+    return parts.count >= 2 && id.utf8.count <= 1024
+      && parts.allSatisfy { part in
+        !part.isEmpty && part.count <= 63
+          && part.unicodeScalars.allSatisfy {
+            switch $0.value {
+            case 45, 48...57, 65...90, 95, 97...122: true
+            default: false
+            }
+          }
+      }
+  }
+
   static func metadata(ofBundleAt path: String) throws -> [String: Any] {
     let infoPath = RelatedDataService.infoPlistPath(ofBundleAt: path)
     guard let data = try SecureMetadataFile.read(path: infoPath, limit: 1024 * 1024, ownerOnly: false) else {
@@ -143,6 +159,8 @@ struct ApplicationMetadataObservation: Sendable {
     }
   }
 
+  /// Readable nonstandard identifiers are retained only as negative owner evidence.
+  /// Exact-domain application eligibility uses ApplicationIdentity.validBundleIdentifier.
   static func safeLiteral(_ value: String) -> Bool {
     !value.isEmpty && value.utf8.count <= 1024 && value != "." && value != ".."
       && !value.contains("/") && !value.contains("\\")

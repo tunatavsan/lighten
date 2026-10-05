@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 
 @testable import Lighten
@@ -28,19 +29,38 @@ private struct CleanFixture {
     }
   }
 
-  func remove() { try? FileManager.default.removeItem(atPath: home) }
+  var pictures: ResultPictureStore { ResultPictureStore(directory: home + "/pictures", maximumBytes: 0) }
+  var persistedPictures: ResultPictureStore { ResultPictureStore(directory: home + "/pictures") }
+  // Dedicated pip rows provide actionable files; the generic cache row also reports their refused parent.
+  var presentationPaths: Set<String> {
+    Set(catalog.rows.prefix(2).map { catalog.root(for: $0) + "/cache-item" })
+      .union([home + "/Library/Caches/pip"])
+  }
+  private var defaultsName: String { URL(fileURLWithPath: home).lastPathComponent + ".preferences" }
+
+  @MainActor func preferences() throws -> RemovalPreferences {
+    let defaults = try #require(UserDefaults(suiteName: defaultsName))
+    return RemovalPreferences(defaults: defaults, persistentDomainName: defaultsName)
+  }
+
+  func remove() {
+    UserDefaults(suiteName: defaultsName)?.removePersistentDomain(forName: defaultsName)
+    try? FileManager.default.removeItem(atPath: home)
+  }
 
   @MainActor func store(
+    persistPictures: Bool = false,
     scanner: @escaping CleanStore.Scanner = { path, home in
       try await ScanService(homeDirectory: home).scan(rootPath: path)
     },
     planBuilder: @escaping CleanStore.PlanBuilder = { catalog, selections, kind in
       try catalog.plan(selections: selections, kind: kind)
     }
-  ) -> CleanStore {
+  ) throws -> CleanStore {
     CleanStore(
-      activity: ClearCleanActivity(), homeDirectory: home, scanner: scanner,
-      discoverRelated: { [] }, planBuilder: planBuilder)
+      activity: ClearCleanActivity(), homeDirectory: home,
+      pictures: persistPictures ? persistedPictures : pictures, scanner: scanner,
+      discoverRelated: { [] }, planBuilder: planBuilder, preferences: try preferences())
   }
 
   @MainActor func actions() -> ActionStore {
@@ -119,11 +139,11 @@ private actor CleanDiscoverySequence {
   defer { fixture.remove() }
   let gate = CleanScanGate()
   let store = CleanStore(
-    activity: ClearCleanActivity(), homeDirectory: fixture.home,
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: fixture.pictures,
     discoverRelated: {
       await gate.pause()
       return []
-    })
+    }, preferences: try fixture.preferences())
   store.startScan()
   await store.waitForScan()
   await gate.waitForArrival()
@@ -145,8 +165,8 @@ private actor CleanDiscoverySequence {
   defer { fixture.remove() }
   let discovery = CleanDiscoverySequence()
   let store = CleanStore(
-    activity: ClearCleanActivity(), homeDirectory: fixture.home,
-    discoverRelated: { await discovery.discover() })
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: fixture.pictures,
+    discoverRelated: { await discovery.discover() }, preferences: try fixture.preferences())
   store.startScan()
   await store.waitForScan()
   await discovery.first.waitForArrival()
@@ -176,7 +196,7 @@ private actor CleanDiscoverySequence {
 @MainActor func cleanScanCandidates() async throws {
   let fixture = try CleanFixture()
   defer { fixture.remove() }
-  let store = fixture.store()
+  let store = try fixture.store()
   store.startScan()
   #expect(store.phase == .scanning)
   await store.waitForScan()
@@ -193,7 +213,7 @@ private actor CleanDiscoverySequence {
   defer { fixture.remove() }
   let gate = CleanScanGate()
   let firstRoot = fixture.catalog.root(for: fixture.catalog.rows[0])
-  let store = fixture.store(scanner: { path, home in
+  let store = try fixture.store(scanner: { path, home in
     if path != firstRoot { await gate.pause() }
     return try await ScanService(homeDirectory: home).scan(rootPath: path)
   })
@@ -214,14 +234,16 @@ private actor CleanDiscoverySequence {
 }
 
 @Test("Missing catalog is a visible failure and does not discover related data")
-@MainActor func cleanMissingCatalog() async {
+@MainActor func cleanMissingCatalog() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
   let store = CleanStore(
-    activity: ClearCleanActivity(), homeDirectory: "/nonexistent",
+    activity: ClearCleanActivity(), homeDirectory: "/nonexistent", pictures: fixture.pictures,
     catalogLoader: { _ in throw CleanTestFailure.injected },
     discoverRelated: {
       Issue.record("must not discover")
       return []
-    })
+    }, preferences: try fixture.preferences())
   store.startScan()
   await store.waitForScan()
   #expect(store.phase == .failed)
@@ -235,7 +257,7 @@ private actor CleanDiscoverySequence {
   let fixture = try CleanFixture()
   defer { fixture.remove() }
   let gate = CleanScanGate()
-  let store = fixture.store(scanner: { _, _ in
+  let store = try fixture.store(scanner: { _, _ in
     await gate.pause()
     throw CleanTestFailure.injected
   })
@@ -253,7 +275,7 @@ private actor CleanDiscoverySequence {
   let fixture = try CleanFixture()
   defer { fixture.remove() }
   let gate = CleanPlanGate()
-  let store = fixture.store(planBuilder: { _, _, _ in try await gate.plan() })
+  let store = try fixture.store(planBuilder: { _, _, _ in try await gate.plan() })
   let actions = fixture.actions()
   store.startScan()
   await store.waitForScan()
@@ -279,7 +301,7 @@ private actor CleanDiscoverySequence {
 @MainActor func cleanMultiCategoryResult() async throws {
   let fixture = try CleanFixture()
   defer { fixture.remove() }
-  let store = fixture.store()
+  let store = try fixture.store()
   let actions = fixture.actions()
   store.startScan()
   await store.waitForScan()
@@ -316,8 +338,8 @@ private actor CleanDiscoverySequence {
     id: "unknown", path: fixture.home + "/Library/Caches/qa.lighten.unknown",
     classification: .uncertain, reason: .nameOnly, snapshot: nil, receipt: nil)
   let store = CleanStore(
-    activity: ClearCleanActivity(), homeDirectory: fixture.home,
-    discoverRelated: { [installed, uncertain] })
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: fixture.pictures,
+    discoverRelated: { [installed, uncertain] }, preferences: try fixture.preferences())
   store.startScan()
   await store.waitForScan()
   await store.waitForRelatedDiscovery()
@@ -336,7 +358,7 @@ private actor CleanDiscoverySequence {
   try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
     .write(to: URL(fileURLWithPath: package + "/Contents/Info.plist"))
   try Data("fixture".utf8).write(to: URL(fileURLWithPath: package + "/Contents/payload"))
-  let store = fixture.store()
+  let store = try fixture.store()
   store.startScan()
   await store.waitForScan()
   let candidate = try #require(store.candidates.first { $0.entry.path == package })
@@ -386,7 +408,9 @@ private actor ScopedCleanActivity: ProcessActivitySource {
       [.modificationDate: Date().addingTimeInterval(-30 * 86_400)], ofItemAtPath: path + "/payload")
   }
   let activity = ScopedCleanActivity(blockedPath: activePath)
-  let store = CleanStore(activity: activity, homeDirectory: fixture.home, discoverRelated: { [] })
+  let store = CleanStore(
+    activity: activity, homeDirectory: fixture.home, pictures: fixture.pictures, discoverRelated: { [] },
+    preferences: try fixture.preferences())
   store.startScan()
   await store.waitForScan()
   let blocked = try #require(store.candidates.first { $0.entry.path == activePath })
@@ -404,7 +428,8 @@ private actor ScopedCleanActivity: ProcessActivitySource {
   let fixture = try CleanFixture()
   defer { fixture.remove() }
   let store = CleanStore(
-    activity: ClearCleanActivity(), homeDirectory: fixture.home, discoverRelated: { [] })
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: fixture.pictures, discoverRelated: { [] },
+    preferences: try fixture.preferences())
   let actions = fixture.actions()
   store.startScan()
   await store.waitForScan()
@@ -436,7 +461,9 @@ private actor ScopedCleanActivity: ProcessActivitySource {
 @MainActor func cleanAllUnavailableSelections() async throws {
   let fixture = try CleanFixture()
   defer { fixture.remove() }
-  let store = CleanStore(activity: ClearCleanActivity(), homeDirectory: fixture.home, discoverRelated: { [] })
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: fixture.pictures, discoverRelated: { [] },
+    preferences: try fixture.preferences())
   let actions = fixture.actions()
   store.startScan()
   await store.waitForScan()
@@ -459,7 +486,9 @@ private actor ScopedCleanActivity: ProcessActivitySource {
     try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
     try Data("fixture".utf8).write(to: URL(fileURLWithPath: path + "/payload"))
   }
-  let store = CleanStore(activity: ClearCleanActivity(), homeDirectory: fixture.home, discoverRelated: { [] })
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: fixture.pictures, discoverRelated: { [] },
+    preferences: try fixture.preferences())
   store.startScan()
   await store.waitForScan()
   let appleCandidate = try #require(store.candidates.first { $0.entry.path == apple })
@@ -478,10 +507,10 @@ private actor ScopedCleanActivity: ProcessActivitySource {
   let gate = CleanPlanGate()
   let refusal = PlanRejection(.unavailable, path: fixture.home + "/disappeared")
   let store = CleanStore(
-    activity: ClearCleanActivity(), homeDirectory: fixture.home, discoverRelated: { [] },
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: fixture.pictures, discoverRelated: { [] },
     availablePlanBuilder: { _, _, _ in
       CatalogPlanOutcome(plan: try await gate.plan(), rejections: [refusal])
-    })
+    }, preferences: try fixture.preferences())
   let actions = fixture.actions()
   store.startScan()
   await store.waitForScan()
@@ -505,7 +534,7 @@ private actor ScopedCleanActivity: ProcessActivitySource {
 @MainActor func cleanPermanentSecondaryRebuild() async throws {
   let fixture = try CleanFixture()
   defer { fixture.remove() }
-  let store = fixture.store()
+  let store = try fixture.store()
   let actions = fixture.actions()
   store.startScan()
   await store.waitForScan()
@@ -528,7 +557,7 @@ private actor ScopedCleanActivity: ProcessActivitySource {
 @MainActor func cleanCrossModuleLiveDisplayAndUndo() async throws {
   let fixture = try CleanFixture()
   defer { fixture.remove() }
-  let store = fixture.store()
+  let store = try fixture.store()
   store.startScan()
   await store.waitForScan()
   let before = store.candidates
@@ -549,4 +578,331 @@ private actor ScopedCleanActivity: ProcessActivitySource {
   #expect(store.candidates.count == before.count)
   #expect(store.toolSummary.logicalBytes == total)
   #expect(!store.selected.contains(candidate.id))
+}
+
+@Test("Clean cold opening restores only display rows and the original result date", arguments: [false, true])
+@MainActor func cleanColdPictureHasNoAuthority(empty: Bool) async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let observedAt = Date(timeIntervalSince1970: 1_700_000_000)
+  let rows: [CleanPicture.Row] =
+    empty
+    ? []
+    : [
+      CleanPicture.Row(
+        path: fixture.home + "/Library/Caches/previous", categoryID: fixture.catalog.rows[0].id,
+        logicalBytes: 123, sizeComplete: false, detail: "Previous result")
+    ]
+  try fixture.persistedPictures.save(
+    ResultPicture(observedAt: observedAt, content: CleanPicture(rows: rows, partial: true)), named: "clean")
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: fixture.persistedPictures,
+    discoverRelated: { [] }, preferences: try fixture.preferences())
+  store.open()
+  await store.waitForPicture()
+  #expect(store.picture?.observedAt == observedAt)
+  #expect(store.picture?.content.rows == rows)
+  #expect(store.picture?.content.partial == true)
+  #expect(store.candidates.isEmpty && store.relatedCandidates.isEmpty && store.selected.isEmpty)
+  #expect(store.scannedAt == nil && store.phase == .idle && !store.tool.allowsPreparation)
+  let actions = fixture.actions()
+  store.selected = [UUID()]
+  store.tool.phase = .ready
+  await store.prepare(actions: actions)
+  #expect(actions.pending == nil)
+}
+
+@Test("Fresh Clean catalog results persist without scan authority")
+@MainActor func cleanFreshPictureRoundTrip() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let store = try fixture.store(persistPictures: true)
+  store.startScan()
+  await store.waitForScan()
+  await store.waitForRelatedDiscovery()
+  await store.waitForPictureSaves()
+  let saved = fixture.persistedPictures.load(CleanPicture.self, named: "clean")
+  #expect(Set(saved?.content.rows.map(\.path) ?? []) == fixture.presentationPaths)
+  #expect(saved?.observedAt == store.scannedAt)
+  let reopened = CleanStore(
+    homeDirectory: fixture.home, pictures: fixture.persistedPictures, discoverRelated: { [] },
+    preferences: try fixture.preferences())
+  reopened.open()
+  await reopened.waitForPicture()
+  #expect(reopened.picture?.content == saved?.content)
+  #expect(reopened.candidates.isEmpty && reopened.selected.isEmpty && !reopened.tool.allowsPreparation)
+}
+
+@Test("Injected Clean observations use the Kit producer and reject another catalog root")
+@MainActor func cleanInjectedDiscoveryRejectsWrongCatalogRoot() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let first = try #require(fixture.catalog.rows.first)
+  let snapshot = try await ScanService(homeDirectory: fixture.home).scan(rootPath: fixture.catalog.root(for: first))
+  let store = try fixture.store(scanner: { _, _ in snapshot })
+  store.startScan()
+  await store.waitForScan()
+  #expect(store.candidates.count == 1)
+  #expect(store.candidates.allSatisfy { $0.row.id == first.id })
+  #expect(fixture.catalog.rows.dropFirst().allSatisfy { store.rowStatuses[$0.id] == .unavailable })
+}
+
+private final class CleanPictureTestState: Sendable {
+  private let state = Mutex((calls: 0, paused: false))
+  func firstSave() -> Bool {
+    state.withLock {
+      $0.calls += 1
+      return $0.calls == 1
+    }
+  }
+  var scanPaused: Bool { state.withLock { $0.paused } }
+  func pauseScan() { state.withLock { $0.paused = true } }
+}
+
+// A deliberately stalled native disk callback; the cooperative executor never waits on its semaphore.
+private final class CleanPictureIOGate: Sendable {
+  private struct State: Sendable {
+    var entered = false
+    var arrival: CheckedContinuation<Void, Never>?
+  }
+  private let state = Mutex(State())
+  private let releaseSignal = DispatchSemaphore(value: 0)
+
+  func block() {
+    #expect(!Thread.isMainThread)
+    let arrival = state.withLock { state in
+      state.entered = true
+      let arrival = state.arrival
+      state.arrival = nil
+      return arrival
+    }
+    arrival?.resume()
+    releaseSignal.wait()
+  }
+
+  func waitForArrival() async {
+    await withCheckedContinuation { continuation in
+      let arrived = state.withLock { state in
+        if state.entered { return true }
+        state.arrival = continuation
+        return false
+      }
+      if arrived { continuation.resume() }
+    }
+  }
+
+  func release() { releaseSignal.signal() }
+}
+
+@Test("A delayed Clean picture read cannot block or replace a fresh native result")
+@MainActor func cleanLatePictureLoadCannotReplaceFreshScan() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let gate = CleanPictureIOGate()
+  defer { gate.release() }
+  let old = ResultPicture(
+    observedAt: Date(timeIntervalSince1970: 1_700_000_000),
+    content: CleanPicture(rows: [
+      CleanPicture.Row(
+        path: fixture.home + "/old", categoryID: fixture.catalog.rows[0].id,
+        logicalBytes: 99, sizeComplete: true)
+    ]))
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: fixture.persistedPictures,
+    loadPicture: {
+      gate.block()
+      return old
+    }, discoverRelated: { [] },
+    preferences: try fixture.preferences())
+  store.open()
+  await gate.waitForArrival()
+  store.startScan()
+  await store.waitForScan()
+  await store.waitForRelatedDiscovery()
+  #expect(store.phase == .ready)
+  #expect(Set(store.candidates.map { $0.entry.path }) == fixture.presentationPaths)
+  #expect(store.actionableCandidates.count == 2)
+  let overlap = try #require(store.candidates.first { $0.entry.path == fixture.home + "/Library/Caches/pip" })
+  #expect(!overlap.allowed && !overlap.canAct && !store.selected.contains(overlap.id))
+  gate.release()
+  await store.waitForPicture()
+  await store.waitForPictureSaves()
+  #expect(store.picture == nil)
+  let saved = try #require(fixture.persistedPictures.load(CleanPicture.self, named: "clean"))
+  #expect(Set(saved.content.rows.map(\.path)) == fixture.presentationPaths)
+}
+
+@Test("Clean picture saves retain publication order when an older disk write stalls")
+@MainActor func cleanPictureSaveOrderKeepsNewestResult() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let gate = CleanPictureIOGate()
+  defer { gate.release() }
+  let calls = CleanPictureTestState()
+  let pictures = fixture.persistedPictures
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: pictures,
+    savePicture: { picture in
+      let first = calls.firstSave()
+      if first { gate.block() }
+      try pictures.save(picture, named: "clean")
+    }, discoverRelated: { [] }, preferences: try fixture.preferences())
+  store.startScan()
+  await store.waitForScan()
+  await store.waitForRelatedDiscovery()
+  await gate.waitForArrival()
+  let root = fixture.catalog.root(for: fixture.catalog.rows[0])
+  try Data("newer result".utf8).write(to: URL(fileURLWithPath: root + "/newer-item"))
+  store.startScan()
+  await store.waitForScan()
+  await store.waitForRelatedDiscovery()
+  let newestPaths = fixture.presentationPaths.union([root + "/newer-item"])
+  #expect(Set(store.candidates.map { $0.entry.path }) == newestPaths)
+  #expect(store.actionableCandidates.count == 3)
+  let newestDate = store.scannedAt
+  gate.release()
+  await store.waitForPictureSaves()
+  let saved = try #require(pictures.load(CleanPicture.self, named: "clean"))
+  #expect(Set(saved.content.rows.map(\.path)) == newestPaths)
+  #expect(saved.observedAt == newestDate)
+}
+
+@Test("A cancelled Clean scan rejects queued obsolete saves and retains the previous successful file")
+@MainActor func cleanCancelledScanRejectsQueuedPictures() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let io = CleanPictureIOGate()
+  defer { io.release() }
+  let scan = CleanScanGate()
+  let pictures = fixture.persistedPictures
+  let old = ResultPicture(
+    observedAt: Date(timeIntervalSince1970: 1_700_000_000), content: CleanPicture(rows: []))
+  try pictures.save(old, named: "clean")
+  let shouldPause = CleanPictureTestState()
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: pictures,
+    loadPicture: {
+      io.block()
+      return old
+    },
+    scanner: { path, home in
+      if shouldPause.scanPaused { await scan.pause() }
+      return try await ScanService(homeDirectory: home).scan(rootPath: path)
+    }, discoverRelated: { [] }, preferences: try fixture.preferences())
+  store.open()
+  await io.waitForArrival()
+  store.startScan()
+  await store.waitForScan()
+  await store.waitForRelatedDiscovery()
+  shouldPause.pauseScan()
+  store.startScan()
+  await scan.waitForArrival()
+  store.cancelScan()
+  await scan.release()
+  io.release()
+  await store.waitForPicture()
+  await store.waitForPictureSaves()
+  let saved = try #require(pictures.load(CleanPicture.self, named: "clean"))
+  #expect(saved.observedAt == old.observedAt && saved.content.rows.isEmpty)
+  #expect(store.phase == .partial && store.selected.isEmpty && store.picture == nil)
+}
+
+@Test("A completed empty Clean result replaces a nonempty previous picture")
+@MainActor func cleanEmptyFreshResultReplacesPreviousPicture() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let pictures = fixture.persistedPictures
+  let oldDate = Date(timeIntervalSince1970: 1_700_000_000)
+  try pictures.save(
+    ResultPicture(
+      observedAt: oldDate,
+      content: CleanPicture(rows: [
+        CleanPicture.Row(
+          path: fixture.home + "/old", categoryID: fixture.catalog.rows[0].id,
+          logicalBytes: 42, sizeComplete: true)
+      ])), named: "clean")
+  // Removing only the files leaves a real report-only pip folder in the generic cache row.
+  try FileManager.default.removeItem(atPath: fixture.home + "/Library/Caches/pip")
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: pictures,
+    discoverRelated: { [] }, preferences: try fixture.preferences())
+  store.open()
+  await store.waitForPicture()
+  #expect(store.picture?.content.rows.count == 1)
+  store.startScan()
+  await store.waitForScan()
+  await store.waitForRelatedDiscovery()
+  await store.waitForPictureSaves()
+  let saved = try #require(pictures.load(CleanPicture.self, named: "clean"))
+  #expect(saved.content.rows.isEmpty && saved.observedAt == store.scannedAt && saved.observedAt != oldDate)
+  #expect(store.picture == nil && store.phase == .ready)
+}
+
+@Test("Clean previous-picture apply and Undo preserve the result date without creating authority")
+@MainActor func cleanPreviousPictureDisplayUndoHasNoAuthority() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let pictures = fixture.persistedPictures
+  let path = fixture.home + "/Library/Caches/previous"
+  let old = ResultPicture(
+    observedAt: Date(timeIntervalSince1970: 1_700_000_000),
+    content: CleanPicture(
+      rows: [
+        CleanPicture.Row(path: path, categoryID: fixture.catalog.rows[0].id, logicalBytes: 123, sizeComplete: true)
+      ], relatedRows: [.init(path: path + "/data", logicalBytes: 50, detail: "Previous")]))
+  try pictures.save(old, named: "clean")
+  let store = CleanStore(
+    homeDirectory: fixture.home, pictures: pictures,
+    discoverRelated: { [] }, preferences: try fixture.preferences())
+  store.open()
+  await store.waitForPicture()
+  let item = ActionDisplayItem(
+    planID: UUID(), itemID: UUID(), path: path, identity: nil,
+    size: ObservedPlanSize(logical: ByteAggregate(knownLowerBound: 123, completeTotal: 123), allocated: nil),
+    label: "Previous", returnedTrashPath: nil)
+  store.applyDisplayChange(ActionDisplayChange(kind: .applied, items: [item]))
+  await store.waitForPictureSaves()
+  #expect(pictures.load(CleanPicture.self, named: "clean")?.content.rows.isEmpty == true)
+  #expect(store.picture?.content.relatedRows.isEmpty == true)
+  store.applyDisplayChange(ActionDisplayChange(kind: .restored, items: [item]))
+  await store.waitForPictureSaves()
+  let saved = try #require(pictures.load(CleanPicture.self, named: "clean"))
+  #expect(saved.content == old.content && saved.observedAt == old.observedAt)
+  #expect(store.candidates.isEmpty && store.relatedCandidates.isEmpty && store.selected.isEmpty)
+  #expect(store.phase == .idle && !store.tool.allowsPreparation)
+}
+
+@Test("Late removed-data publication persists the catalog result date and rejects a superseded discovery")
+@MainActor func cleanRelatedPictureRetainsDateAndGeneration() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let discovery = CleanDiscoverySequence()
+  let pictures = fixture.persistedPictures
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: pictures,
+    discoverRelated: { await discovery.discover() }, preferences: try fixture.preferences())
+  store.startScan()
+  await store.waitForScan()
+  await discovery.first.waitForArrival()
+  await store.waitForPictureSaves()
+  #expect(pictures.load(CleanPicture.self, named: "clean")?.content.relatedRows.isEmpty == true)
+  var firstWaiter: Task<Void, Never>?
+  await withCheckedContinuation { started in
+    firstWaiter = Task {
+      started.resume()
+      await store.waitForRelatedDiscovery()
+    }
+  }
+  store.startScan()
+  await store.waitForScan()
+  await discovery.second.waitForArrival()
+  let catalogDate = store.scannedAt
+  await discovery.first.release()
+  await firstWaiter?.value
+  await discovery.second.release()
+  await store.waitForRelatedDiscovery()
+  await store.waitForPictureSaves()
+  let saved = try #require(pictures.load(CleanPicture.self, named: "clean"))
+  #expect(saved.observedAt == catalogDate)
+  #expect(saved.content.relatedRows.map(\.path) == ["/report-only-2"])
 }

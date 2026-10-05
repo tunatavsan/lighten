@@ -33,10 +33,10 @@ final class RemovalPreferences {
     if let persistentDomainName {
       let stored = defaults.persistentDomain(forName: persistentDomainName) ?? [:]
       deletionDefault = DefaultMethod(rawValue: stored[Self.deletionKey] as? String ?? "") ?? .trash
-      automaticallySelectRelatedData = stored[Self.relatedKey] as? Bool ?? false
+      automaticallySelectRelatedData = stored[Self.relatedKey] as? Bool ?? true
     } else {
       deletionDefault = DefaultMethod(rawValue: defaults.string(forKey: Self.deletionKey) ?? "") ?? .trash
-      automaticallySelectRelatedData = defaults.bool(forKey: Self.relatedKey)
+      automaticallySelectRelatedData = defaults.object(forKey: Self.relatedKey) as? Bool ?? true
     }
   }
 }

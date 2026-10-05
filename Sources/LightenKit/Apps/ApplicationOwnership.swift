@@ -86,6 +86,66 @@ public struct ApplicationOwnerCandidate: Sendable, Equatable {
   }
 }
 
+/// System-only uncertainty is limited to canonical, root-managed namespaces.
+/// Path spelling, an Apple-like filename, and a link to system data are insufficient.
+enum ApplicationSystemNamespace {
+  static func contains(
+    _ path: String,
+    readEntry: (Int32, String, inout stat) -> Int32 = { fstatat($0, $1, &$2, AT_SYMLINK_NOFOLLOW_ANY) },
+    writable: (Int32, String) -> Bool = { faccessat($0, $1, W_OK, 0) == 0 }
+  ) -> Bool {
+    guard let components = try? DescriptorFileSystem.validatedComponents(path) else { return false }
+    let namespaces = ["/System", "/Library/Application Support/Apple"]
+    guard !path.hasPrefix("/System/Volumes/"),
+      let namespace = namespaces.first(where: { path == $0 || path.hasPrefix($0 + "/") }),
+      let prefix = try? DescriptorFileSystem.validatedComponents(namespace)
+    else { return false }
+    let root = open(namespace, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY)
+    guard root >= 0 else { return false }
+    var current = root
+    defer { close(current) }
+    var details = stat()
+    guard fstat(root, &details) == 0, details.st_uid == 0, details.st_mode & S_IFMT == S_IFDIR,
+      !writable(root, ".")
+    else { return false }
+    // A writable ancestor could replace or rename a root-owned namespace.
+    // Authenticate each accessible prefix directory as well as its descendants.
+    for count in 0..<prefix.count {
+      let ancestor = count == 0 ? "/" : "/" + prefix.prefix(count).joined(separator: "/")
+      let descriptor = open(ancestor, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY)
+      guard descriptor >= 0 else { return false }
+      defer { close(descriptor) }
+      var parent = stat()
+      guard fstat(descriptor, &parent) == 0, parent.st_uid == 0, parent.st_mode & S_IFMT == S_IFDIR,
+        !writable(descriptor, ".")
+      else { return false }
+    }
+    let suffix = Array(components.dropFirst(prefix.count))
+    for (index, name) in suffix.enumerated() {
+      guard readEntry(current, name, &details) == 0 else {
+        // The accessible parent chain is authenticated. Permission failure
+        // prevents observing only the remaining system-managed descendants.
+        return errno == EACCES || errno == EPERM || errno == ENOENT
+      }
+      guard details.st_mode & S_IFMT != S_IFLNK, details.st_uid != geteuid(), !writable(current, name) else {
+        return false
+      }
+      var checked = stat()
+      guard readEntry(current, name, &checked) == 0,
+        checked.st_dev == details.st_dev, checked.st_ino == details.st_ino,
+        checked.st_mode == details.st_mode, checked.st_uid == details.st_uid, checked.st_gid == details.st_gid
+      else { return false }
+      if index == suffix.count - 1 { return true }
+      guard details.st_mode & S_IFMT == S_IFDIR else { return false }
+      let next = openat(current, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY)
+      guard next >= 0 else { return errno == EACCES || errno == EPERM }
+      close(current)
+      current = next
+    }
+    return true
+  }
+}
+
 public struct ApplicationOwnershipIssue: Sendable, Equatable {
   public let path: String
   public let code: Int32
@@ -94,7 +154,7 @@ public struct ApplicationOwnershipIssue: Sendable, Equatable {
   public init(path: String, code: Int32) {
     self.path = path
     self.code = code
-    self.systemScope = path == "/System" || path.hasPrefix("/System/")
+    self.systemScope = ApplicationSystemNamespace.contains(path)
   }
 }
 
@@ -106,7 +166,7 @@ struct ApplicationOwnershipInventory {
   let directories: [String: FileIdentity]
   var metadataIssues: [ApplicationMetadataIssue] = []
   var thirdPartyComplete: Bool {
-    issues.allSatisfy(\.systemScope) && metadataIssues.allSatisfy { $0.path.hasPrefix("/System/") }
+    issues.allSatisfy(\.systemScope) && metadataIssues.allSatisfy { ApplicationSystemNamespace.contains($0.path) }
   }
 
   static func collect(

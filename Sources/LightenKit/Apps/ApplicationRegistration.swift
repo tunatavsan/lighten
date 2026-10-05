@@ -73,6 +73,9 @@ enum ApplicationRegistration {
         }
         path = String(path[..<annotation.lowerBound])
       }
+      // LaunchServices also registers volumes and directories. The root has
+      // no application namespace to authenticate and is an irrelevant record.
+      if path == "/" { continue }
       guard path.hasPrefix("/"), !path.unicodeScalars.contains(where: { $0.value < 32 }),
         (try? DescriptorFileSystem.validatedComponents(path)) != nil
       else {

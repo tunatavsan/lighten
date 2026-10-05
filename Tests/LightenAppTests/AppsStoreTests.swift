@@ -377,12 +377,15 @@ private actor SelectedRunningGate: RunningApplicationSource {
   #expect(!store.selectedEvidencePending)
 }
 
-private func selectedAppReport(_ path: String, bundleID: String, bytes: Int64 = 0) -> ApplicationReport {
+private func selectedAppReport(
+  _ path: String, bundleID: String, bytes: Int64 = 0, identity: FileIdentity? = nil
+) -> ApplicationReport {
   ApplicationReport(
     path: path, bundleID: bundleID, version: "1", signerTeamID: nil,
     logical: ByteAggregate(knownLowerBound: bytes, completeTotal: bytes == 0 ? nil : bytes),
     allocated: ByteAggregate(knownLowerBound: bytes, completeTotal: bytes == 0 ? nil : bytes),
-    knownItemCount: bytes == 0 ? 0 : 1, partial: bytes == 0, related: [], manualUninstallerSuggested: false)
+    knownItemCount: bytes == 0 ? 0 : 1, partial: bytes == 0, related: [], manualUninstallerSuggested: false,
+    displayRootIdentity: identity)
 }
 
 private func selectedAppCandidate(_ path: String) -> RelatedDataCandidate {
@@ -543,10 +546,13 @@ private func selectedAppCandidate(_ path: String) -> RelatedDataCandidate {
   store.inventoryComplete = true
   store.runningCheckedIDs = [bundleID]
   store.selectedPath = firstPath
+  store.packageSelected = true
+  #expect(store.selectedAppPaths == [firstPath])
   #expect(store.canSelect(candidate, app: first))
   #expect(!store.automaticSelectionAllowed(candidate))
   #expect(store.otherInstallationPaths(candidate: candidate, app: first) == [otherPath])
   await store.openOtherInstallation(otherPath, candidate: candidate, app: first, actions: actions)
+  #expect(store.selectedAppPaths == [firstPath])
   await store.waitForSelectedReview()
   #expect(store.selectedReport?.path == otherPath)
   #expect(store.selectedReport?.logical.completeTotal == 123)
@@ -1089,4 +1095,340 @@ private actor AppsSuspendedFinalActivity: ApplicationActivitySource {
   #expect(store.orphanCandidates.isEmpty && store.retainedAppData.isEmpty)
   #expect(store.reports.first?.related.first?.classification == candidate.classification)
   store.cancelScan()
+}
+
+@Test("Each app keeps explicit data choices and deselections across browse and re-add")
+@MainActor func appsBasketRetainsIndependentChoices() throws {
+  let a = "/fixture/LightenQA-choices-a.app"
+  let b = "/fixture/LightenQA-choices-b.app"
+  let first = selectedAppCandidate("/fixture/LightenQA-choice-first")
+  let second = selectedAppCandidate("/fixture/LightenQA-choice-second")
+  let name = "qa.lighten.basket." + UUID().uuidString
+  let defaults = try #require(UserDefaults(suiteName: name))
+  defer { defaults.removePersistentDomain(forName: name) }
+  let preferences = RemovalPreferences(defaults: defaults, persistentDomainName: name)
+  preferences.automaticallySelectRelatedData = true
+  let store = AppsStore(pictures: disabledAppsPictures(), preferences: preferences, running: ClosedAppSource())
+  let actions = ActionStore()
+  var reportA = selectedAppReport(a, bundleID: "qa.lighten.a")
+  var reportB = selectedAppReport(b, bundleID: "qa.lighten.b")
+  reportA.related = [first]
+  reportB.related = [second]
+  store.reports = [reportA, reportB]
+  store.selectApp(a, actions: actions)
+  store.toggleData(first.path, actions: actions)
+  #expect(store.selectedDataPaths.isEmpty)
+  store.selectApp(b, actions: actions)
+  #expect(store.selectedDataPaths == [second.path])
+  store.selectApp(a, actions: actions)
+  #expect(store.selectedDataPaths.isEmpty)
+  store.selectApp(b, intent: .toggle, actions: actions)
+  #expect(store.selectedAppPaths == [a, b] && store.selectedDataPaths == [second.path])
+  store.selectApp(b, intent: .toggle, actions: actions)
+  store.selectApp(b, intent: .toggle, actions: actions)
+  #expect(store.selectedDataPaths == [second.path])
+}
+
+@Test(
+  "The lightweight installed-app list stays stable when ownership inventory includes other packages",
+  arguments: [false, true])
+@MainActor func appsOwnershipInventoryDoesNotExpandDefaultList(ownershipComplete: Bool) async throws {
+  let primary = "/Applications/LightenQA-visible.app"
+  let home = "/fixture/home"
+  let other = "/Volumes/Fixture/LightenQA-external.app"
+  let excluded = [
+    "/System/Applications/LightenQA-system.app",
+    "/Applications/Host.app/Contents/Helpers/LightenQA-helper.app",
+    home + "/dev/product/.build/debug/LightenQA-built.app",
+    home + "/.Trash/LightenQA-trashed.app",
+  ]
+  let all = [primary, other] + excluded
+  let metadata = all.map { selectedAppReport($0, bundleID: "qa.lighten.scope") }
+  let inventory = BundleInventory(
+    applications: all.map { InstalledApplication(bundleID: "qa.lighten.scope", path: $0, version: nil) },
+    unidentifiedPaths: [], complete: ownershipComplete, observedAt: Date())
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  defer { continuation.finish() }
+  let store = AppsStore(
+    pictures: disabledAppsPictures(), userPlanner: PlanService(homeDirectory: home), events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  continuation.yield(
+    .listed([
+      ApplicationListEntry(
+        path: primary, name: "Visible", bundleID: "qa.lighten.scope", version: nil, displayRootIdentity: nil)
+    ]))
+  #expect(await appsEventually { store.reports.count == 1 })
+  #expect(store.defaultApplicationReports.map(\.path) == [primary])
+  continuation.yield(.inventory(inventory, metadata))
+  #expect(await appsEventually { store.inventoryPublishedAt != nil })
+  #expect(store.defaultApplicationReports.map(\.path) == [primary])
+  #expect(store.otherLocationReports.map(\.path) == [other])
+  #expect(Set(store.reports.map(\.path)) == [primary, other])
+  continuation.yield(.completed(inventory, metadata))
+  continuation.finish()
+  await store.waitForScan()
+  #expect(!store.busy)
+  #expect(store.displayListingFinished && !store.toolSummary.partial)
+  #expect(store.inventoryComplete == ownershipComplete && !store.externalVolumesUnchecked)
+  #expect(store.defaultApplicationReports.map(\.path) == [primary])
+  #expect(store.otherLocationReports.map(\.path) == [other])
+}
+
+@Test("Default app-data selection uses existing proof eligibility without selecting excluded evidence")
+@MainActor func appsNewPreferenceOnlySelectsEligibleProof() throws {
+  let name = "LightenQA-preferences-" + UUID().uuidString
+  let defaults = try #require(UserDefaults(suiteName: name))
+  defer { defaults.removePersistentDomain(forName: name) }
+  let preferences = RemovalPreferences(defaults: defaults, persistentDomainName: name)
+  let accepted = selectedAppCandidate("/fixture/LightenQA-accepted")
+  var weak = selectedAppCandidate("/fixture/LightenQA-weak")
+  weak.matchStrength = .weak
+  var live = selectedAppCandidate("/fixture/LightenQA-live")
+  live.evidenceKinds = [.liveProcess]
+  var vendor = selectedAppCandidate("/fixture/LightenQA-vendor")
+  vendor.evidenceKinds = [.vendorDirectory]
+  var configured = selectedAppCandidate("/fixture/LightenQA-configured")
+  configured.evidenceKinds = [.configuredDirectory]
+  configured.provenance = RelatedDataProvenance(
+    kind: .configuredDirectory, sourcePath: "/fixture/settings", detail: nil)
+  let unproven = RelatedDataCandidate(
+    id: "/fixture/LightenQA-name", path: "/fixture/LightenQA-name", classification: .unprovenNameOnly,
+    reason: .nameOnly,
+    snapshot: accepted.snapshot, receipt: nil)
+  var report = selectedAppReport("/Applications/LightenQA-default.app", bundleID: "qa.lighten.default")
+  report.related = [accepted, weak, live, vendor, configured, unproven]
+  let store = AppsStore(pictures: disabledAppsPictures(), preferences: preferences)
+  store.reports = [report]
+  store.select(report.path, actions: ActionStore())
+  #expect(store.selectedDataPaths == [accepted.path])
+  #expect(report.related.count == 6)
+}
+
+@Test("Signer presentation distinguishes pending evidence from a returned signer")
+@MainActor func appsSignerDoesNotSayUnavailableWhileEvidenceIsPending() async {
+  let path = "/Applications/LightenQA-signer.app"
+  let bundleID = "qa.lighten.signer"
+  let review = SelectedAppReviewGate()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    selectedReview: { path, progress in
+      try await review.review(path: path, progress: progress)
+    }, running: ClosedAppSource())
+  let actions = ActionStore()
+  store.reports = [selectedAppReport(path, bundleID: bundleID)]
+  store.select(path, actions: actions, selectPackage: false)
+  await review.waitForRequests(1)
+  #expect(store.signerDescription(for: store.reports[0]) == String(localized: "Checking app signature…"))
+  await review.finish(
+    ApplicationRelatedReview(
+      application: InstalledApplication(bundleID: bundleID, path: path, version: nil), candidates: [],
+      signerTeamID: "FIXTURETEAM", phase: .enriched), request: 0)
+  await store.waitForSelectedReview()
+  #expect(store.signerDescription(for: store.reports[0]) == "FIXTURETEAM")
+}
+
+private func appsBasketPlan(_ paths: [String]) -> ActionPlan {
+  ActionPlan(
+    snapshotRunID: UUID(), kind: .trash,
+    items: paths.map {
+      PlanItem(
+        id: UUID(), sourcePath: $0, inventory: [], ancestors: [], policy: .wholeBundle,
+        applicationBundleID: "qa.lighten.basket")
+    })
+}
+
+@Test("A basket deadline keeps every choice and only a fresh explicit retry may present")
+@MainActor func appsBasketDeadlineDiscardsLatePlan() async throws {
+  let paths = ["/fixture/LightenQA-deadline-a.app", "/fixture/LightenQA-deadline-b.app"]
+  let planning = AppsPlanGate()
+  let deadline = AppsManualDeadline()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    basketPlanBuilder: { selections, _ in
+      #expect(Set(selections.map(\.path)) == Set(paths))
+      return .init(plan: try? await planning.next(), rejections: [])
+    }, preparationTimeout: { await deadline.wait() }, running: ClosedAppSource())
+  let actions = ActionStore()
+  store.reports = paths.map { selectedAppReport($0, bundleID: "qa.lighten.basket") }
+  for path in paths { store.selectApp(path, intent: .toggle, actions: actions) }
+  let old = Task { await store.prepareBasket(actions: actions) }
+  await planning.waitForRequest(1)
+  #expect(store.phase == .preparing)
+  await deadline.signal()
+  await old.value
+  #expect(store.selectedAppPaths == Set(paths) && !store.preparing)
+  #expect(store.message?.contains("took too long") == true && actions.pending == nil && actions.result == nil)
+  await deadline.reset()
+  let freshPlan = appsBasketPlan(paths)
+  let retry = Task { await store.prepareBasket(actions: actions) }
+  await planning.waitForRequest(2)
+  await planning.finish(.success(appsBasketPlan(paths)))
+  #expect(actions.pending == nil)
+  await planning.finish(.success(freshPlan))
+  await retry.value
+  #expect(actions.pending?.plan == freshPlan && actions.result == nil)
+  await deadline.signal()
+}
+
+@Test("Changing basket membership during preparation preserves the newest review intent")
+@MainActor func appsBasketChangeContinuesLatestReview() async throws {
+  let paths = ["/fixture/LightenQA-latest-a.app", "/fixture/LightenQA-latest-b.app"]
+  let planning = AppsPlanGate()
+  let deadline = AppsManualDeadline()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    basketPlanBuilder: { _, _ in .init(plan: try? await planning.next(), rejections: []) },
+    preparationTimeout: { await deadline.wait() }, running: ClosedAppSource())
+  let actions = ActionStore()
+  store.reports = paths.map { selectedAppReport($0, bundleID: "qa.lighten.basket") }
+  for path in paths { store.selectApp(path, intent: .toggle, actions: actions) }
+  let old = Task { await store.prepareBasket(actions: actions) }
+  await planning.waitForRequest(1)
+  store.removeAppFromBasket(paths[0], actions: actions)
+  await planning.waitForRequest(2)
+  await planning.finish(.success(appsBasketPlan(paths)))
+  await old.value
+  #expect(actions.pending == nil && store.selectedAppPaths == [paths[1]])
+  let latest = appsBasketPlan([paths[1]])
+  await planning.finish(.success(latest))
+  #expect(await appsEventually { actions.pending?.plan == latest })
+  #expect(actions.result == nil)
+  await deadline.signal()
+}
+
+@Test("Basket preparation and confirmation freeze automatic additions for unfocused apps", arguments: [false, true])
+@MainActor func appsBasketFreezesEveryAppDuringReview(alreadyPresented: Bool) async throws {
+  let paths = ["/Applications/LightenQA-frozen-a.app", "/Applications/LightenQA-frozen-b.app"]
+  let candidate = selectedAppCandidate("/fixture/LightenQA-frozen-data")
+  let name = "qa.lighten.freeze." + UUID().uuidString
+  let defaults = try #require(UserDefaults(suiteName: name))
+  defer { defaults.removePersistentDomain(forName: name) }
+  let preferences = RemovalPreferences(defaults: defaults, persistentDomainName: name)
+  let planning = AppsPlanGate()
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    basketPlanBuilder: { _, _ in .init(plan: try? await planning.next(), rejections: []) },
+    preferences: preferences, running: ClosedAppSource(), events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  // The fixture initially contains current rows while its controlled discovery stream is still open.
+  let reports = paths.map { selectedAppReport($0, bundleID: "qa.lighten.basket") }
+  store.reports = reports
+  for path in paths { store.selectApp(path, intent: .toggle, actions: actions) }
+  let preparation = Task { await store.prepareBasket(actions: actions) }
+  await planning.waitForRequest(1)
+  let plan = appsBasketPlan(paths)
+  if alreadyPresented {
+    await planning.finish(.success(plan))
+    await preparation.value
+  }
+  let inventory = BundleInventory(applications: [], unidentifiedPaths: [], complete: false, observedAt: Date())
+  continuation.yield(.related(path: paths[0], candidates: [candidate], ownershipPending: false))
+  continuation.yield(.completed(inventory, reports))
+  continuation.finish()
+  await store.waitForScan()
+  #expect(store.basketDataCount == 0 && store.reports.first?.related.map(\.path) == [candidate.path])
+  if !alreadyPresented {
+    await planning.finish(.success(plan))
+    await preparation.value
+  }
+  #expect(actions.pending?.plan == plan && store.basketDataCount == 0)
+  // Focusing/readding preserves the frozen per-app choices, then an explicit data toggle invalidates review.
+  store.selectApp(paths[0], actions: actions)
+  #expect(store.selectedDataPaths.isEmpty && actions.pending == nil)
+  store.toggleData(candidate.path, actions: actions)
+  #expect(store.selectedDataPaths == [candidate.path])
+}
+
+@Test("Self protection and stale pictures cannot contribute package authority to a basket")
+@MainActor func appsBasketProtectsSelfAndPictures() async {
+  let path = "/Applications/LightenQA-self.app"
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    basketPlanBuilder: { _, _ in
+      Issue.record("A protected or stale basket reached planning")
+      return .init(plan: nil, rejections: [])
+    }, running: ClosedAppSource())
+  let actions = ActionStore()
+  store.reports = [selectedAppReport(path, bundleID: LightenIdentity.bundleIdentifier)]
+  store.selectApp(path, actions: actions)
+  #expect(store.selectedAppPaths.isEmpty && !store.packageSelected)
+  // The preparation guard also rejects a choice assigned outside the ordinary row controls.
+  store.selectedPath = path
+  store.packageSelected = true
+  await store.prepareBasket(actions: actions)
+  #expect(actions.pending == nil && store.message == String(localized: "Lighten does not remove itself."))
+  store.needsRescan = true
+  #expect(!store.canReviewBasket(actions: actions))
+  await store.prepareBasket(actions: actions)
+  #expect(actions.pending == nil)
+}
+
+@Test("Replacing a focused app root or bundle invalidates its cached explicit data choices", arguments: [false, true])
+@MainActor func appsBasketReplacementDropsCachedChoices(changeIdentity: Bool) {
+  let path = "/fixture/LightenQA-replaced.app"
+  let data = selectedAppCandidate("/fixture/LightenQA-replaced-data")
+  let oldIdentity = FileIdentity(
+    device: 1, inode: 10, changeSeconds: 1, changeNanoseconds: 0, logicalBytes: 0, allocatedBytes: 0,
+    linkCount: 1, flags: 0, kind: .directory, birthSeconds: 1, birthNanoseconds: 0)
+  let newIdentity = FileIdentity(
+    device: 1, inode: 11, changeSeconds: 1, changeNanoseconds: 0, logicalBytes: 0, allocatedBytes: 0,
+    linkCount: 1, flags: 0, kind: .directory, birthSeconds: 1, birthNanoseconds: 0)
+  let store = AppsStore(pictures: disabledAppsPictures(), running: ClosedAppSource())
+  let actions = ActionStore()
+  var report = selectedAppReport(path, bundleID: "qa.lighten.original", identity: oldIdentity)
+  report.related = [data]
+  store.reports = [report]
+  store.selectApp(path, actions: actions)
+  if !store.selectedDataPaths.contains(data.path) { store.toggleData(data.path, actions: actions) }
+  #expect(store.selectedDataPaths == [data.path])
+  let replaced = selectedAppReport(
+    path, bundleID: changeIdentity ? "qa.lighten.original" : "qa.lighten.replacement",
+    identity: changeIdentity ? newIdentity : oldIdentity)
+  store.reports = [replaced]
+  store.selectApp(path, actions: actions)
+  #expect(store.packageSelected && store.selectedDataPaths.isEmpty)
+}
+
+@Test(
+  "Unrelated cached changes and same-root proof upgrades preserve the requested basket review",
+  arguments: [false, true])
+@MainActor func appsBasketEnrichmentPreservesReview(upgradeSelectedChoice: Bool) async {
+  let paths = ["/Applications/LightenQA-enrichment-a.app", "/Applications/LightenQA-enrichment-b.app"]
+  let candidate = storeUnprovenCandidate("/fixture/LightenQA-enrichment-data", inode: 10)
+  let planning = AppsPlanGate()
+  let (stream, continuation) = AsyncStream<ApplicationDiscovery.Event>.makeStream()
+  let store = AppsStore(
+    pictures: disabledAppsPictures(),
+    basketPlanBuilder: { _, _ in .init(plan: try? await planning.next(), rejections: []) },
+    running: ClosedAppSource(), events: { stream })
+  let actions = ActionStore()
+  store.startScan(actions: actions)
+  var reports = paths.map { selectedAppReport($0, bundleID: "qa.lighten.basket") }
+  reports[0].related = [candidate]
+  store.reports = reports
+  store.selectApp(paths[0], actions: actions)
+  store.toggleData(candidate.path, actions: actions)
+  store.selectApp(paths[1], intent: upgradeSelectedChoice ? .toggle : .single, actions: actions)
+  let preparation = Task { await store.prepareBasket(actions: actions) }
+  await planning.waitForRequest(1)
+  let fresh =
+    upgradeSelectedChoice
+    ? RelatedDataCandidate(
+      id: candidate.path, path: candidate.path, classification: .installed,
+      reason: .installed, snapshot: candidate.snapshot, receipt: nil)
+    : storeUnprovenCandidate(candidate.path, inode: 11)
+  let inventory = BundleInventory(applications: [], unidentifiedPaths: [], complete: false, observedAt: Date())
+  continuation.yield(.related(path: paths[0], candidates: [fresh], ownershipPending: false))
+  continuation.yield(.completed(inventory, reports))
+  continuation.finish()
+  await store.waitForScan()
+  let plan = appsBasketPlan(upgradeSelectedChoice ? paths + [candidate.path] : [paths[1]])
+  await planning.finish(.success(plan))
+  await preparation.value
+  #expect(actions.pending?.plan == plan && store.message == nil)
+  #expect(store.basketDataCount == (upgradeSelectedChoice ? 1 : 0))
+  #expect(actions.result == nil)
 }

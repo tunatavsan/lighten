@@ -243,3 +243,26 @@ func applicationViewportTracksViewportChanges() {
   actions.busy = true
   #expect(store.reviewExplanation(actions: actions) == String(localized: "Waiting for the current action to finish."))
 }
+
+@Test("Apps row selection uses single, toggle and visible-range semantics")
+@MainActor func appsBasketSelectionUsesFinderSemantics() {
+  let paths = (1...5).map { "/fixture/LightenQA-selection-\($0).app" }
+  let store = AppsStore(pictures: ResultPictureStore(directory: "/dev/null/apps"))
+  let actions = ActionStore()
+  store.reports = paths.map { path in
+    ApplicationReport(
+      path: path, bundleID: "qa.lighten.selection", version: nil, signerTeamID: nil,
+      logical: .init(knownLowerBound: 0, completeTotal: nil), allocated: .init(knownLowerBound: 0, completeTotal: nil),
+      knownItemCount: 0, partial: true, related: [], manualUninstallerSuggested: false)
+  }
+  store.selectApp(paths[0], actions: actions)
+  store.selectApp(paths[2], intent: .toggle, orderedPaths: paths, actions: actions)
+  #expect(store.selectedAppPaths == [paths[0], paths[2]])
+  store.selectApp(paths[4], intent: .range, orderedPaths: [paths[0], paths[2], paths[4]], actions: actions)
+  #expect(store.selectedAppPaths == [paths[0], paths[2], paths[4]])
+  #expect(!store.selectedAppPaths.contains(paths[3]))
+  store.selectApp(paths[2], intent: .toggle, actions: actions)
+  #expect(store.selectedAppPaths == [paths[0], paths[4]])
+  store.selectApp(paths[1], actions: actions)
+  #expect(store.selectedAppPaths == [paths[1]])
+}

@@ -600,7 +600,49 @@ struct ApplicationLiveDataObservation: Sendable {
   let complete: Bool
   var report: ApplicationLiveDataCensusReport? = nil
 
-  static func observe(maximumBytes: Int = 256 * 1024 * 1024, timeoutMilliseconds: UInt32 = 3000) -> Self {
+  static func observe(
+    maximumBytes: Int = 256 * 1024 * 1024, timeoutMilliseconds: UInt32 = 3000,
+    read: (Int, UInt32) -> Self = readNative,
+    uptime: () -> UInt64 = { UInt64(ProcessInfo.processInfo.systemUptime * 1000) }
+  ) -> Self {
+    let started = uptime()
+    let deadline = started.addingReportingOverflow(UInt64(timeoutMilliseconds))
+    func timed(_ observation: Self, now: UInt64, extraFlags: UInt32 = 0) -> Self {
+      let original = observation.report
+      let flags = (original?.failureFlags ?? UInt32(LIGHTEN_CENSUS_UNAVAILABLE)) | extraFlags
+      let complete = observation.complete && flags == 0
+      return Self(
+        records: observation.records, complete: complete,
+        report: ApplicationLiveDataCensusReport(
+          complete: complete, recordCount: observation.records.count,
+          processesInspected: original?.processesInspected ?? 0,
+          applicationProcesses: original?.applicationProcesses ?? 0,
+          descriptorsInspected: original?.descriptorsInspected ?? 0,
+          failureFlags: flags, elapsedMilliseconds: now >= started ? now - started : 0))
+    }
+    var observed = Self(records: [], complete: false)
+    for _ in 0..<3 {
+      let before = uptime()
+      guard !Task.isCancelled else { return timed(observed, now: before) }
+      guard !deadline.overflow, timeoutMilliseconds > 0, timeoutMilliseconds <= 10_000,
+        before >= started, before < deadline.partialValue
+      else { return timed(observed, now: before, extraFlags: UInt32(LIGHTEN_CENSUS_TIME_LIMIT)) }
+      let remaining = UInt32(deadline.partialValue - before)
+      // Each retry replaces a whole observation. Partial records never combine
+      // into evidence that another live owner is absent.
+      observed = read(maximumBytes, remaining)
+      let after = uptime()
+      guard after >= before, after < deadline.partialValue else {
+        return timed(observed, now: after, extraFlags: UInt32(LIGHTEN_CENSUS_TIME_LIMIT))
+      }
+      if observed.complete || observed.report?.failureFlags != UInt32(LIGHTEN_CENSUS_PROCESS_CHANGED) {
+        return timed(observed, now: after)
+      }
+    }
+    return timed(observed, now: uptime())
+  }
+
+  private static func readNative(maximumBytes: Int, timeoutMilliseconds: UInt32) -> Self {
     var values: UnsafeMutablePointer<LightenApplicationDataPath>?
     var count: UInt32 = 0
     var census = LightenApplicationDataCensus()

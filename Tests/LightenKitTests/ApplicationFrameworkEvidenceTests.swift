@@ -467,6 +467,22 @@ struct ApplicationFrameworkEvidenceTests {
     #expect(!ApplicationRegistration.parseDump("path: relative/LightenQA.app\n").complete)
   }
 
+  @Test("Spotlight-disabled registration accepts the native dump root record without losing fallback coverage")
+  func disabledSpotlightUsesRootBearingDump() throws {
+    let fixture = try FrameworkFixture()
+    defer { fixture.cleanup() }
+    let observed = ApplicationRegistration.observe(
+      readIndexingStatus: { "disabled" },
+      readSpotlight: {
+        Issue.record("Disabled Spotlight must not start an indexed query")
+        return ApplicationRegistrationObservation(paths: [], complete: false)
+      },
+      readDump: { ApplicationRegistration.parseDump("path: /\npath: " + fixture.app + " (0x1)\n") },
+      byIdentifier: { _ in [fixture.app] })
+    #expect(observed.complete && observed.paths == [fixture.app])
+    #expect(observed.report?.source == "launch-services-dump")
+  }
+
   @Test("Unknown global registration blocks group ownership while exact standard data remains available")
   func unknownRegistrationIsScoped() async throws {
     let fixture = try FrameworkFixture()

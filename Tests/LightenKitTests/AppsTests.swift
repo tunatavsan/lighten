@@ -152,6 +152,104 @@ func selectedShallowListPrecedesMeasurement() async throws {
   #expect(nativeReads.withLock { $0 } == 0)
 }
 
+@Test(
+  "Shallow helper associations retain app paths without generic helper or framework floods",
+  arguments: ["Discord", "Obsidian"])
+func shallowHelperAssociationsAreAppSpecific(name: String) throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let bundleID = name == "Discord" ? "com.hnc.Discord" : "md.obsidian"
+  let appPath = fixture.appRoot + "/" + name + ".app"
+  func writePackage(_ path: String, id: String, bundleName: String, displayName: String) throws {
+    try FileManager.default.createDirectory(atPath: path + "/Contents", withIntermediateDirectories: true)
+    let data = try PropertyListSerialization.data(
+      fromPropertyList: [
+        "CFBundleIdentifier": id, "CFBundleName": bundleName,
+        "CFBundleDisplayName": displayName, "CFBundleExecutable": displayName,
+      ], format: .xml, options: 0)
+    try data.write(to: URL(fileURLWithPath: path + "/Contents/Info.plist"))
+  }
+  try writePackage(appPath, id: bundleID, bundleName: name, displayName: name)
+  try writePackage(
+    appPath + "/Contents/Frameworks/" + name + " Helper.app", id: bundleID + ".helper",
+    bundleName: name == "Obsidian" ? "Electron Helper" : name + " Helper", displayName: name + " Helper")
+  try writePackage(
+    appPath + "/Contents/Frameworks/Framework Helper.app", id: "com.github.electron.helper",
+    bundleName: "Electron Helper", displayName: "Electron Helper")
+  let library = fixture.home + "/Library/"
+  let retained = [
+    "Application Support/" + name.lowercased(),
+    "Application Support/CrashReporter/" + name + "_78E2FF69-EFB0-5593-A527-2BE153A46CA1.plist",
+    "Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments/"
+      + bundleID.lowercased() + ".sfl4",
+    "Preferences/" + bundleID + ".plist",
+    "Caches/" + bundleID + ".helper.GPU",
+    "HTTPStorages/" + bundleID + ".binarycookies",
+    "Preferences/ByHost/" + bundleID + ".ShipIt.78E2FF69-EFB0-5593-A527-2BE153A46CA1.plist",
+    "Application Support/CrashReporter/" + name + " Helper_78E2FF69-EFB0-5593-A527-2BE153A46CA1.plist",
+  ].map { library + $0 }
+  let unrelated = [
+    "Application Support/Cold Turkey/data-helper.db", "Caches/com.other.helper",
+    "LaunchAgents/com.other.helper.plist", "Logs/CrashReporter/Helium Helper.log",
+    "Caches/electron", "Application Support/Electron Helper", "Caches/com.github.electron.helper",
+  ].map { library + $0 }
+  for path in retained + unrelated {
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+  }
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false)
+  let app = try #require(service.application(at: appPath))
+  let candidates = service.shallowCandidates(for: app).filter { $0.path.hasPrefix(fixture.home + "/") }
+  #expect(Set(candidates.map(\.path)) == Set(retained))
+  #expect(candidates.count == 8)
+  #expect(
+    candidates.allSatisfy {
+      $0.classification == .unprovenNameOnly && !$0.defaultSelected && $0.snapshot == nil && $0.receipt == nil
+        && $0.explicitManualChoiceAvailable
+    })
+}
+
+@Test("A UUID-named app does not inherit a shared short launcher name")
+func shallowUniqueNameDoesNotMatchSiblingLaunchers() throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let name = "ScopedFixture-" + UUID().uuidString
+  let appPath = fixture.appRoot + "/" + name + ".app"
+  try FileManager.default.createDirectory(atPath: appPath + "/Contents", withIntermediateDirectories: true)
+  let data = try PropertyListSerialization.data(
+    fromPropertyList: [
+      "CFBundleIdentifier": "qa.scoped.root-fixture", "CFBundleName": name, "CFBundleExecutable": "ScopedFixture",
+    ], format: .xml, options: 0)
+  try data.write(to: URL(fileURLWithPath: appPath + "/Contents/Info.plist"))
+  let support = fixture.home + "/Library/Application Support/"
+  let retained = [support + name, support + "CrashReporter/" + name + ".plist"]
+  let unrelated = [support + "ScopedFixture-" + UUID().uuidString, support + "ScopedFixture"]
+  for path in retained + unrelated {
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+  }
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false)
+  let app = try #require(service.application(at: appPath))
+  let candidates = service.shallowCandidates(for: app).filter { $0.path.hasPrefix(fixture.home + "/") }
+  #expect(Set(candidates.map(\.path)) == Set(retained))
+  #expect(candidates.count == 2)
+  #expect(candidates.allSatisfy { !$0.defaultSelected && $0.snapshot == nil && $0.receipt == nil })
+}
+
+@Test(
+  "Bundle identifier validation preserves ASCII and component length boundaries",
+  arguments: [
+    ("com.example.App-123", true), ("a.-", true),
+    ("a." + String(repeating: "Z", count: 63), true),
+    ("a." + String(repeating: "Z", count: 64), false),
+    ("a", false), (".a", false), ("a.", false), ("a..b", false),
+    ("com.example_app", true), ("com.apple.Image_Capture", true), ("com.ex ample", false), ("com.é", false),
+    ("com.e\u{301}", false), ("com.１２３", false), ("com.app/other", false),
+  ])
+func bundleIdentifierValidationBoundaries(identifier: String, valid: Bool) {
+  #expect(RelatedDataService.validBundleID(identifier) == valid)
+}
+
 @Test("Stalled native evidence leaves explicit root planning schedulable and cancelled reads are skipped")
 func nativeEvidenceDoesNotBlockUserSelection() async throws {
   let fixture = try AppsFixture()
@@ -1131,6 +1229,29 @@ func registryDumpUsesActualPathGrammar() {
     ).paths.isEmpty)
 }
 
+@Test("A root registration does not invalidate a complete LaunchServices application dump")
+func registryDumpIgnoresNonapplicationRoot() {
+  let observed = ApplicationRegistration.parseDump(
+    "path: /\npath: /Applications\npath: /Applications/LightenQA.app (0x1)\n")
+  #expect(observed.complete && observed.paths == ["/Applications/LightenQA.app"])
+  #expect(!ApplicationRegistration.parseDump("path: relative/LightenQA.app\n").complete)
+}
+
+@Test("Underscore identifiers agree across installed and observed metadata")
+func underscoreIdentifierIsInstalled() throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let id = "com.apple.Image_Capture"
+  let bytes = try PropertyListSerialization.data(
+    fromPropertyList: ["CFBundleIdentifier": id], format: .xml, options: 0)
+  try bytes.write(to: URL(fileURLWithPath: fixture.app + "/Contents/Info.plist"))
+  let inventory = fixture.service.inventory()
+  #expect(inventory.complete && inventory.installedRootsComplete == true)
+  #expect(inventory.applications.first?.bundleID == id)
+  #expect(ApplicationIdentity.bundleIdentifier(ofApplicationAt: fixture.app) == id)
+  #expect(inventory.metadataIssues.isEmpty)
+}
+
 @Test("A session retains uncertain unmatched rows without a second related discovery")
 func allRelatedRowsKeepUncertainDenominator() async throws {
   let fixture = try AppsFixture()
@@ -1599,4 +1720,31 @@ private func simulatorScopeObservationsSurviveDiscovery() async throws {
     path: alias, expectedBundleID: fixture.bundleID, selectedRelated: [], includePackage: true)
   #expect(refused.plan == nil && refused.rejections.contains { $0.ruleID == "simulator-device-application" })
   await session.cancel()
+}
+
+@Test("Daemon-container iOS placeholders are excluded while neighboring Mac apps remain installed")
+func daemonPlaceholderExclusionIsExact() throws {
+  let fixture = try AppsFixture()
+  defer { fixture.remove() }
+  let container = fixture.home + "/Library/Daemon Containers/" + UUID().uuidString
+  let placeholder = container + "/Data/Library/Caches/Placeholders-v6.noindex/qa.lighten.phone-1.0/LightenQA-phone.app"
+  let ordinary = container + "/Data/Library/Caches/Placeholders-v6/qa.lighten.phone-1.0/LightenQA-Mac.app"
+  for path in [placeholder, ordinary] {
+    try FileManager.default.createDirectory(
+      atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    try FileManager.default.copyItem(atPath: fixture.app, toPath: path)
+  }
+  let alias = fixture.appRoot + "/LightenQA-phone-alias.app"
+  #expect(symlink(placeholder, alias) == 0)
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [fixture.appRoot], writeVerifiedReceipts: false,
+    registration: { ApplicationRegistrationObservation(paths: [placeholder, ordinary], complete: true) })
+  let inventory = service.inventory()
+  #expect(!inventory.applications.contains { $0.path == placeholder || $0.path == alias })
+  #expect(inventory.applications.contains { $0.path == ordinary })
+  #expect(Set(inventory.scopeExclusions.map(\.path)) == [placeholder, alias])
+  #expect(inventory.scopeExclusions.allSatisfy { $0.reason == "ios-daemon-placeholder" && !$0.nextStep.isEmpty })
+  #expect(!inventory.unidentifiedPaths.contains(placeholder))
+  #expect(RelatedDataService.isCachedApplication(placeholder, homeDirectory: fixture.home))
+  #expect(!RelatedDataService.isCachedApplication(ordinary, homeDirectory: fixture.home))
 }
