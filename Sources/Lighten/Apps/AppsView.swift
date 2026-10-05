@@ -10,8 +10,6 @@ struct AppsView: View {
   @State private var showingCompactDetail = false
   @State private var expandedOrphans: Set<String> = []
   @State private var showingOtherLocations = false
-  @State private var showingCoverageDetails = false
-  @State private var showingOmittedDetails = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   private var filtered: [ApplicationReport] {
@@ -31,163 +29,45 @@ struct AppsView: View {
 
   var body: some View {
     let scanBusy = store.busy
-    LegacyToolScreen(String(localized: "Apps")) {
-      GeometryReader { geometry in
-        let compact = geometry.size.width < 800
-        VStack(alignment: .leading, spacing: 0) {
-          HStack(spacing: 12) {
-            Text(
-              store.showsPreviousResult
-                ? "\(store.defaultPictureRows.count)" : "\(filtered.count) / \(store.defaultApplicationReports.count)"
-            )
-            .font(.system(size: 11)).monospacedDigit().foregroundStyle(LightenStyle.muted)
-            Spacer()
-            if let date = store.pictureObservedAt ?? store.scannedAt {
-              HStack(spacing: 4) {
-                Text(String(localized: "Last scan:"))
-                Text(date, style: .date)
-                Text(date, style: .time)
-              }
-              .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-            }
-          }
-          .padding(.bottom, 10)
-          if store.busy {
-            ToolScanProgress(
-              status: store.measuringPaths.isEmpty
-                ? String(localized: "Checking app data") : String(localized: "Measuring apps"),
-              count: store.defaultMeasuredCount
-            )
-            .padding(.bottom, 10)
-          }
-          coverageNotice
-          omittedApplicationsNotice
-          if store.needsRescan {
-            Label(
-              String(localized: "This list needs a new scan before actions are available."),
-              systemImage: "arrow.clockwise.circle"
-            )
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-            .padding(.bottom, 10)
-          }
-          Divider()
-          if store.showsPreviousResult {
-            pictureList
-          } else if store.reports.isEmpty && store.orphanCandidates.isEmpty && !store.busy {
-            ContentUnavailableView(
-              store.scannedAt == nil
-                ? String(localized: "Scan installed apps") : String(localized: "No applications found"),
-              systemImage: "app.dashed",
-              description: Text(
-                String(localized: "Inspect applications in /Applications and your Applications folder."))
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-          } else if store.busy && store.reports.isEmpty {
-            VStack(spacing: 10) {
-              ProgressView()
-              Text(String(localized: "Scanning applications"))
-                .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-          } else if compact {
-            if showingCompactDetail, let app = store.selectedReport {
-              VStack(spacing: 0) {
-                HStack {
-                  Button {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
-                      showingCompactDetail = false
-                    }
-                  } label: {
-                    Label(String(localized: "All apps"), systemImage: "chevron.left")
-                  }
-                  .buttonStyle(.plain)
-                  .foregroundStyle(LightenStyle.accent)
-                  Spacer()
-                }
-                .padding(.vertical, 10)
-                detail(app)
-              }
-              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else {
-              applicationList
-            }
-          } else {
-            HStack(spacing: 0) {
-              applicationList
-                .frame(width: min(420, (geometry.size.width - 40) * 0.34))
-              Divider()
-              if let app = store.selectedReport {
-                detail(app)
-                  .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-              } else {
-                ContentUnavailableView(
-                  String(localized: "Select an application"), systemImage: "app.dashed"
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-              }
-            }
-          }
-          if !store.selectedAppPaths.isEmpty {
-            Divider()
-            AppsBasketView(store: store, actions: actions)
-          }
-          if let message = store.message {
-            Divider()
-            Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning).padding(.top, 9)
-          }
-          ActionFeedbackView(actions: actions).padding(.top, 7)
-          ForEach(store.packageItemResults) { item in
-            VStack(alignment: .leading, spacing: 2) {
-              Text(
-                "\(item.isLink ? String(localized: "Application link") : String(localized: "Application")): \(packageOutcome(item.outcome))"
-              )
-              .font(.system(size: 11, weight: .medium))
-              Text(item.sourcePath).font(.system(size: 10)).textSelection(.enabled)
-                .foregroundStyle(LightenStyle.muted)
-              if item.outcome != .applied {
-                FailureReasonView(
-                  presentation: FailureText.executionPresentation(
-                    ItemActionResult(
-                      itemID: item.id, outcome: item.outcome, detail: item.detail, mutationStage: item.mutationStage))
-                )
-                .font(.system(size: 10))
-              }
-            }
-            .padding(.top, 5)
-          }
-
+    ToolScreen(String(localized: "Apps"), subtitle: subtitle) {
+      VStack(alignment: .leading, spacing: 0) {
+        header
+        GeometryReader { geometry in
+          content(compact: geometry.size.width < Theme.Layout.appsCompactWidth)
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(minHeight: 0, maxHeight: .infinity)
+        .padding(.bottom, Theme.Space.l)
+      }
+      .padding(.horizontal, Theme.Layout.gutter)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .floatingBar(isPresented: !store.selectedAppPaths.isEmpty || !store.selectedOrphanPaths.isEmpty) {
+        AppsBasketView(store: store, actions: actions)
       }
     } toolbar: {
-      Button(store.busy ? String(localized: "Cancel scan") : String(localized: "Scan")) {
-        if store.busy { store.cancelScan() } else { store.startScan(actions: actions) }
-      }
-      .accessibilityIdentifier("apps.scan-control")
-      if !store.selectedAppPaths.isEmpty {
-        Button(String(localized: "Review removal")) { Task { await store.prepareBasket(actions: actions) } }
-          .buttonStyle(.borderedProminent).disabled(!store.canReviewBasket(actions: actions))
-          .accessibilityIdentifier("apps.review-removal")
-      }
-      if !store.selectedOrphanPaths.isEmpty {
-        Button(String(localized: "Review selected app data")) { Task { await store.prepareOrphans(actions: actions) } }
-          .disabled(store.preparing || store.needsRescan || actions.busy)
+      ToolbarItem(placement: .primaryAction) {
+        Button(
+          store.busy ? String(localized: "Cancel scan") : String(localized: "Scan"),
+          systemImage: store.busy ? "stop.fill" : "arrow.clockwise"
+        ) {
+          if store.busy { store.cancelScan() } else { store.startScan(actions: actions) }
+        }
+        .labelStyle(.titleAndIcon)
+        .accessibilityIdentifier("apps.scan-control")
       }
     }
     .searchable(text: $searchText, prompt: String(localized: "Search by name or path"))
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .onGeometryChange(for: Bool.self) { _ in
       scanBusy
     } action: { busy in
       if !busy { store.scanDidLayout() }
     }
-    .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: store.displayRevision)
+    .animation(Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion), value: store.displayRevision)
     .sheet(item: $actions.pending) { presentation in
       ConfirmationView(presentation: presentation, actions: actions)
     }
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: store.selectedPath)
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: store.selectedDataPaths)
+    .animation(Theme.Motion.resolve(Theme.Motion.quick, reduceMotion: reduceMotion), value: store.selectedPath)
+    .animation(Theme.Motion.resolve(Theme.Motion.quick, reduceMotion: reduceMotion), value: store.selectedDataPaths)
     .onChange(of: store.selectedPath) { _, path in
       if path == nil { showingCompactDetail = false }
     }
@@ -203,38 +83,185 @@ struct AppsView: View {
     }
   }
 
-  @ViewBuilder private var coverageNotice: some View {
+  private var subtitle: String {
+    if store.busy { return String(localized: "Scanning") }
+    let date = store.pictureObservedAt ?? store.scannedAt
+    return date.map { String(localized: "Last scan") + " " + $0.formatted(date: .abbreviated, time: .shortened) }
+      ?? String(localized: "Not scanned")
+  }
+
+  // MARK: Header
+
+  private var header: some View {
+    VStack(alignment: .leading, spacing: Theme.Space.s) {
+      HStack(alignment: .bottom, spacing: Theme.Space.xl) {
+        HeroMetric(
+          value: .bytes(store.toolSummary.logicalBytes, atLeast: store.toolSummary.partial),
+          caption: String.localizedStringWithFormat(
+            String(localized: "%lld applications"),
+            Int64(store.showsPreviousResult ? store.defaultPictureRows.count : store.defaultApplicationReports.count)))
+        Spacer(minLength: Theme.Space.l)
+        InfoButton(
+          text: String(
+            localized: "The app and its data are measured separately. Disk space is freed when you empty Trash."))
+      }
+      statusRow
+    }
+    .padding(.top, Theme.Space.l)
+    .padding(.bottom, Theme.Space.m)
+  }
+
+  @ViewBuilder private var statusRow: some View {
+    if store.busy {
+      ScanStatusRow(
+        status: store.measuringPaths.isEmpty
+          ? String(localized: "Checking app data") : String(localized: "Measuring apps"),
+        count: store.defaultMeasuredCount)
+    }
+    if store.needsRescan {
+      NoticeBar(
+        String(localized: "This list needs a new scan before actions are available."),
+        symbol: "arrow.clockwise.circle")
+    }
+    if let message = store.message {
+      NoticeBar(message).textSelection(.enabled)
+    }
+    let chips = coverageChips
+    FlowChips {
+      chips
+      omittedChip
+      ForEach(store.packageItemResults) { item in
+        DetailChip(
+          (item.isLink ? String(localized: "Application link") : String(localized: "Application")) + ": "
+            + packageOutcome(item.outcome),
+          symbol: item.outcome == .applied ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+          tone: item.outcome == .applied ? .positive : .warning
+        ) {
+          VStack(alignment: .leading, spacing: Theme.Space.s) {
+            PathLabel(path: item.sourcePath, lines: 3).textSelection(.enabled)
+            if item.outcome != .applied {
+              FailureReasonView(
+                presentation: FailureText.executionPresentation(
+                  ItemActionResult(
+                    itemID: item.id, outcome: item.outcome, detail: item.detail, mutationStage: item.mutationStage)))
+            }
+          }
+        }
+      }
+    }
+    ActionFeedbackView(actions: actions)
+  }
+
+  @ViewBuilder private var coverageChips: some View {
     let incompleteInventory = !store.busy && store.backgroundFinishedAt != nil && !store.inventoryComplete
     if store.hasCoverageIssue || store.relatedDiscoveryStopped {
-      VStack(alignment: .leading, spacing: 5) {
-        if incompleteInventory || store.relatedDiscoveryStopped {
-          PartialResultNotice(
-            reason: store.relatedDiscoveryStopped
-              ? String(
-                localized: "App data checking stopped before all items were found. Scan again to complete the list.")
-              : String(localized: "Some apps could not be checked. Scan again to complete the list."))
-        } else {
-          Label(
-            String(localized: "Some open files could not be checked. Your selections are still available."),
-            systemImage: "info.circle"
-          )
-          .font(.caption).foregroundStyle(LightenStyle.muted)
-        }
-        DisclosureGroup(String(localized: "Details"), isExpanded: $showingCoverageDetails) {
-          if store.relatedDiscoveryStopped {
-            Text(String(localized: "App data checking stopped before all items were found."))
+      let stopped = incompleteInventory || store.relatedDiscoveryStopped
+      DetailChip(
+        stopped ? String(localized: "Incomplete list") : String(localized: "Some open files not checked"),
+        symbol: stopped ? "exclamationmark.triangle.fill" : "info.circle", tone: stopped ? .warning : .neutral
+      ) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+          if stopped {
+            Text(
+              store.relatedDiscoveryStopped
+                ? String(
+                  localized: "App data checking stopped before all items were found. Scan again to complete the list.")
+                : String(localized: "Some apps could not be checked. Scan again to complete the list."))
+          } else {
+            Text(String(localized: "Some open files could not be checked. Your selections are still available."))
           }
           ForEach(store.coverageIssueDescriptions, id: \.self) { reason in
-            Text(reason).textSelection(.enabled)
+            Text(reason).foregroundStyle(Theme.Palette.inkSecondary).textSelection(.enabled)
           }
         }
-        .font(.caption).foregroundStyle(LightenStyle.muted)
       }
-      .padding(.bottom, 10)
     }
     if store.externalVolumesUnchecked {
-      Text(String(localized: "Apps on disks that are disconnected or unavailable are not included."))
-        .font(.caption).foregroundStyle(LightenStyle.muted).padding(.bottom, 8)
+      DetailChip(String(localized: "Other disks not included"), symbol: "externaldrive", tone: .neutral) {
+        Text(String(localized: "Apps on disks that are disconnected or unavailable are not included."))
+      }
+    }
+  }
+
+  @ViewBuilder private var omittedChip: some View {
+    let counts = omittedCounts
+    let total = counts.values.reduce(0, +)
+    if total > 0 {
+      DetailChip(
+        String.localizedStringWithFormat(String(localized: "%lld hidden"), Int64(total)), symbol: "eye.slash",
+        tone: .neutral
+      ) {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+          Text(
+            String.localizedStringWithFormat(
+              String(localized: "%lld applications omitted from this list"), Int64(total))
+          )
+          .font(Theme.Font.bodyMedium)
+          ForEach(AppListScope.ExclusionReason.allCases, id: \.self) { reason in
+            if let count = counts[reason], count > 0 {
+              Text("\(omissionLabel(reason)): \(count)").foregroundStyle(Theme.Palette.inkSecondary)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // MARK: Content
+
+  @ViewBuilder private func content(compact: Bool) -> some View {
+    if store.showsPreviousResult {
+      pictureList.moduleSurface()
+    } else if store.reports.isEmpty && store.orphanCandidates.isEmpty && !store.busy {
+      EmptyState(
+        symbol: "app.dashed",
+        title: store.scannedAt == nil
+          ? String(localized: "Scan installed apps") : String(localized: "No applications found"),
+        message: String(localized: "Inspect applications in /Applications and your Applications folder."),
+        tint: Theme.Palette.toolApps
+      ) {
+        if store.scannedAt == nil {
+          Button(String(localized: "Scan")) { store.startScan(actions: actions) }.buttonStyle(.hero)
+        }
+      }
+    } else if store.busy && store.reports.isEmpty {
+      EmptyState(symbol: "app.dashed", title: String(localized: "Scanning applications"), tint: Theme.Palette.toolApps)
+      {
+        ProgressView().controlSize(.small)
+      }
+    } else if compact {
+      if showingCompactDetail, let app = store.selectedReport {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+          Button {
+            withAnimation(Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion)) {
+              showingCompactDetail = false
+            }
+          } label: {
+            Label(String(localized: "All apps"), systemImage: "chevron.left")
+          }
+          .buttonStyle(.borderless)
+          detail(app).moduleSurface()
+        }
+      } else {
+        applicationList.moduleSurface()
+      }
+    } else {
+      HStack(alignment: .top, spacing: Theme.Space.m) {
+        applicationList
+          .frame(width: Theme.Layout.listColumn)
+          .moduleSurface()
+        Group {
+          if let app = store.selectedReport {
+            detail(app)
+          } else {
+            EmptyState(
+              symbol: "cursorarrow.click.2", title: String(localized: "Select an application"),
+              tint: Theme.Palette.inkTertiary)
+          }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .moduleSurface()
+      }
     }
   }
 
@@ -243,27 +270,6 @@ struct AppsView: View {
       store.omittedApplicationPaths
       + (store.showsPreviousResult ? store.pictureRows.map(\.path) : store.reports.map(\.path))
     return AppListScope.omittedCounts(paths: paths, homeDirectory: store.listScopeHomeDirectory)
-  }
-
-  @ViewBuilder private var omittedApplicationsNotice: some View {
-    let counts = omittedCounts
-    let total = counts.values.reduce(0, +)
-    if total > 0 {
-      DisclosureGroup(isExpanded: $showingOmittedDetails) {
-        ForEach(AppListScope.ExclusionReason.allCases, id: \.self) { reason in
-          if let count = counts[reason], count > 0 {
-            Text("\(omissionLabel(reason)): \(count)")
-              .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-          }
-        }
-      } label: {
-        Text(
-          String.localizedStringWithFormat(String(localized: "%lld applications omitted from this list"), Int64(total))
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-      }
-      .padding(.bottom, 10)
-    }
   }
 
   private func omissionLabel(_ reason: AppListScope.ExclusionReason) -> String {
@@ -287,24 +293,25 @@ struct AppsView: View {
   private var applicationList: some View {
     Group {
       if filtered.isEmpty && otherFiltered.isEmpty && store.orphanCandidates.isEmpty {
-        ContentUnavailableView(String(localized: "No matching applications"), systemImage: "magnifyingglass")
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        EmptyState(
+          symbol: "magnifyingglass", title: String(localized: "No matching applications"),
+          tint: Theme.Palette.inkTertiary)
       } else {
         ScrollView {
-          LazyVStack(spacing: 5) {
+          LazyVStack(spacing: Theme.Space.xxs) {
             applicationRows(filtered)
             if !otherFiltered.isEmpty {
               DisclosureGroup(isExpanded: $showingOtherLocations) {
                 applicationRows(otherFiltered)
               } label: {
                 Text("\(String(localized: "Other locations")) (\(otherFiltered.count))")
-                  .font(.system(size: 12, weight: .medium))
+                  .font(Theme.Font.headline)
               }
-              .padding(.vertical, 8)
+              .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.s)
             }
             orphanSection
           }
-          .padding(.vertical, 10)
+          .padding(Theme.Space.xs + 2)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .modifier(listViewport(paths: filtered.map(\.path) + (showingOtherLocations ? otherFiltered.map(\.path) : [])))
@@ -314,19 +321,13 @@ struct AppsView: View {
 
   private func applicationRows(_ applications: [ApplicationReport]) -> some View {
     ForEach(applications) { app in
-      VStack(alignment: .leading, spacing: 2) {
-        appRow(app)
-        if let reason = actions.failure(at: app.path) {
-          Text(reason).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-            .fixedSize(horizontal: false, vertical: true)
+      appRow(app)
+        .transformAnchorPreference(key: ApplicationRowPreferenceKey.self, value: .bounds) { values, anchor in
+          var row = values[app.path] ?? ApplicationRowPreference()
+          row.bounds = anchor
+          values[app.path] = row
         }
-      }
-      .transformAnchorPreference(key: ApplicationRowPreferenceKey.self, value: .bounds) { values, anchor in
-        var row = values[app.path] ?? ApplicationRowPreference()
-        row.bounds = anchor
-        values[app.path] = row
-      }
-      .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.96)))
+        .transition(Theme.Motion.transition(Theme.Motion.pop, reduceMotion: reduceMotion))
     }
   }
 
@@ -341,49 +342,48 @@ struct AppsView: View {
     let primary = matchingPictures(store.defaultPictureRows)
     let other = matchingPictures(store.otherPictureRows)
     return ScrollView {
-      LazyVStack(alignment: .leading, spacing: 12) {
-        Label(
+      LazyVStack(alignment: .leading, spacing: Theme.Space.xxs) {
+        NoticeBar(
           store.busy
             ? String(localized: "Previous result · refreshing before actions")
-            : String(localized: "Previous result · scan again before actions"), systemImage: "clock"
+            : String(localized: "Previous result · scan again before actions"), symbol: "clock", tone: .neutral
         )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        .padding(.bottom, Theme.Space.xs)
         if primary.isEmpty && other.isEmpty {
           Text(String(localized: "No applications found"))
-            .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+            .font(Theme.Font.body).foregroundStyle(Theme.Palette.inkSecondary).padding(Theme.Space.s)
         }
         ForEach(primary) { pictureRow($0) }
         if !other.isEmpty {
           DisclosureGroup(isExpanded: $showingOtherLocations) {
             ForEach(other) { pictureRow($0) }
           } label: {
-            Text("\(String(localized: "Other locations")) (\(other.count))")
-              .font(.system(size: 12, weight: .medium))
+            Text("\(String(localized: "Other locations")) (\(other.count))").font(Theme.Font.headline)
           }
+          .padding(Theme.Space.s)
         }
       }
-      .padding(.vertical, 10)
+      .padding(Theme.Space.s)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .modifier(listViewport(paths: primary.map(\.path) + (showingOtherLocations ? other.map(\.path) : [])))
   }
 
   private func pictureRow(_ row: AppsPicture.Row) -> some View {
-    HStack(spacing: 10) {
+    HStack(spacing: Theme.Space.m) {
       ApplicationIconView(path: row.path, isVisible: visibleListPaths.contains(row.path))
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: Theme.Space.xxs) {
         Text(URL(fileURLWithPath: row.path).deletingPathExtension().lastPathComponent)
-          .font(.system(size: 12, weight: .medium))
-        Text(row.path).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-          .lineLimit(1).truncationMode(.middle)
-        if let reason = otherLocationExplanation(row.path) {
-          Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-        }
+          .font(Theme.Font.bodyMedium).lineLimit(1)
+        Text(otherLocationExplanation(row.path) ?? row.path)
+          .font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary)
+          .lineLimit(1).truncationMode(.middle).help(row.path)
       }
-      Spacer()
+      Spacer(minLength: Theme.Space.s)
       Text(format(row.logical.completeTotal ?? row.logical.knownLowerBound))
-        .font(.system(size: 11)).monospacedDigit()
+        .font(Theme.Font.mono).foregroundStyle(Theme.Palette.inkSecondary)
     }
+    .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.xs + 2)
     .accessibilityElement(children: .combine)
     .transformAnchorPreference(key: ApplicationRowPreferenceKey.self, value: .bounds) { values, anchor in
       var value = values[row.path] ?? ApplicationRowPreference()
@@ -408,16 +408,17 @@ struct AppsView: View {
     let groups = Dictionary(grouping: store.orphanCandidates) {
       $0.bundleID ?? $0.receipt?.bundleID ?? String(localized: "Unknown")
     }
-    return VStack(alignment: .leading, spacing: 10) {
+    return VStack(alignment: .leading, spacing: Theme.Space.s) {
       if !groups.isEmpty {
-        Text(String(localized: "Data from removed apps")).font(.system(size: 14, weight: .semibold))
-        Text(
-          String(
-            localized:
-              "Remaining app data may contain settings or documents. Review each reason; nothing is selected automatically."
-          )
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+        HStack {
+          Text(String(localized: "Data from removed apps")).font(Theme.Font.headline)
+          Spacer()
+          InfoButton(
+            text: String(
+              localized:
+                "Remaining app data may contain settings or documents. Review each reason; nothing is selected automatically."
+            ))
+        }
         ForEach(groups.keys.sorted(), id: \.self) { bundleID in
           DisclosureGroup(
             isExpanded: Binding(
@@ -426,52 +427,62 @@ struct AppsView: View {
             )
           ) {
             ForEach(groups[bundleID] ?? []) { candidate in
-              HStack(alignment: .top, spacing: 8) {
+              HStack(alignment: .top, spacing: Theme.Space.s) {
                 if store.canSelectOrphan(candidate) {
                   Button {
                     store.toggleOrphan(candidate.path, actions: actions)
                   } label: {
-                    Image(
-                      systemName: store.selectedOrphanPaths.contains(candidate.path)
-                        ? "checkmark.square.fill" : "square")
-                  }.buttonStyle(.plain)
-                    .accessibilityLabel(candidate.path)
+                    CheckSymbol(isOn: store.selectedOrphanPaths.contains(candidate.path))
+                  }
+                  .buttonStyle(.plain)
+                  .accessibilityLabel(candidate.path)
                 } else {
-                  Image(systemName: "info.circle.fill").foregroundStyle(LightenStyle.warning)
+                  Image(systemName: "info.circle.fill").foregroundStyle(Theme.Palette.warning)
+                    .accessibilityHidden(true)
                 }
-                VStack(alignment: .leading, spacing: 3) {
-                  Text(candidate.path).font(.system(size: 10)).lineLimit(2).truncationMode(.middle)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                  Text(URL(fileURLWithPath: candidate.path).lastPathComponent).font(Theme.Font.callout)
+                    .lineLimit(1).truncationMode(.middle).help(candidate.path)
                   FailureReasonView(
                     presentation: store.retainedReason(candidate) ?? FailureText.candidate(candidate))
-                  Button(String(localized: "Show in Finder")) {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: candidate.path)])
-                  }.buttonStyle(.plain).font(.system(size: 10))
                   if let date = candidate.modifiedAt {
-                    HStack(spacing: 3) {
+                    HStack(spacing: Theme.Space.xxs) {
                       Text(String(localized: "Modified:"))
                       Text(date, style: .date)
-                    }.font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+                    }
+                    .font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary)
                   }
                 }
-              }.padding(.vertical, 4)
+                Spacer(minLength: Theme.Space.xs)
+                ShowInFinderButton(path: candidate.path, compact: true).buttonStyle(.borderless)
+              }
+              .padding(.vertical, Theme.Space.xs)
             }
           } label: {
-            Text(bundleID).font(.system(size: 11, weight: .medium))
+            Text(bundleID).font(Theme.Font.bodyMedium).lineLimit(1).truncationMode(.middle)
           }
         }
         if store.preparing || actions.busy { reviewExplanation }
       }
-    }.padding(.top, groups.isEmpty ? 0 : 14)
+    }
+    .padding(.horizontal, Theme.Space.s)
+    .padding(.top, groups.isEmpty ? 0 : Theme.Space.l)
   }
 
   private var reviewExplanation: some View {
     Text(store.reviewExplanation(actions: actions))
-      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      .font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary)
   }
 
   private func appRow(_ app: ApplicationReport) -> some View {
     let selected = store.selectedPath == app.path
-    return HStack(spacing: 4) {
+    let warning: String? =
+      store.busy
+      ? nil
+      : store.packageUnavailableReason(app)
+        ?? (store.ownershipPendingPaths.contains(app.path)
+          ? String(localized: "Some app data could not be matched.") : nil)
+    return HStack(spacing: Theme.Space.xs) {
       Toggle(
         isOn: Binding(
           get: { store.selectedAppPaths.contains(app.path) },
@@ -489,44 +500,32 @@ struct AppsView: View {
         store.selectApp(app.path, intent: intent, orderedPaths: ordered, actions: actions)
         showingCompactDetail = true
       } label: {
-        HStack(spacing: 10) {
+        HStack(spacing: Theme.Space.s) {
           ApplicationIconView(path: app.path, isVisible: visibleListPaths.contains(app.path))
-          VStack(alignment: .leading, spacing: 3) {
+          VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             Text(store.displayName(app))
-              .font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
-            Text(app.bundleID ?? String(localized: "Identity unavailable"))
-              .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+              .font(Theme.Font.bodyMedium).lineLimit(1).truncationMode(.middle)
+            Text(otherLocationExplanation(app.path) ?? app.bundleID ?? String(localized: "Identity unavailable"))
+              .font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary)
               .lineLimit(1).truncationMode(.middle)
-            if let reason = otherLocationExplanation(app.path) {
-              Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-                .lineLimit(2)
-            }
-            if store.ownershipPendingPaths.contains(app.path), !store.busy {
-              Text(String(localized: "Some app data could not be matched."))
-                .font(.system(size: 10)).foregroundStyle(LightenStyle.warning).lineLimit(2)
-            }
-            if let reason = store.packageUnavailableReason(app), !store.busy {
-              Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
-                .lineLimit(2)
-            }
           }
           .frame(maxWidth: .infinity, alignment: .leading)
-          Spacer(minLength: 4)
-          VStack(alignment: .trailing, spacing: 2) {
-            Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
-              .font(.system(size: 11, weight: .medium)).monospacedDigit()
-            if !store.measuringPaths.contains(app.path) && app.partial && app.logical.knownLowerBound > 0 {
-              Text(String(localized: "At least"))
-                .font(.system(size: 9)).foregroundStyle(LightenStyle.muted)
-            }
+          if let warning {
+            Image(systemName: "exclamationmark.triangle.fill").font(Theme.Font.iconTiny)
+              .foregroundStyle(Theme.Palette.warning)
+              .help(warning)
+              .accessibilityLabel(warning)
           }
-          .fixedSize(horizontal: true, vertical: false)
+          Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : rowSize(app))
+            .font(Theme.Font.monoSmall).foregroundStyle(Theme.Palette.inkSecondary)
+            .lineLimit(1).fixedSize()
         }
-        .padding(.horizontal, 9).padding(.vertical, 8)
-        .background(
-          selected ? LightenStyle.fileTile.opacity(0.7) : Color.clear,
-          in: RoundedRectangle(cornerRadius: 8)
-        )
+        .padding(.horizontal, Theme.Space.s).padding(.vertical, Theme.Space.xs + 2)
+        .background {
+          if selected {
+            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(Theme.Palette.selection)
+          }
+        }
         .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
@@ -535,76 +534,86 @@ struct AppsView: View {
         "\(app.path), \(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : app.partial ? String(localized: "Partial size") : String(localized: "Measured size"))"
       )
     }
+    .padding(.leading, Theme.Space.xs)
+    .overlay(alignment: .bottomLeading) {
+      if let reason = actions.failure(at: app.path) {
+        Color.clear.help(reason).accessibilityLabel(reason)
+      }
+    }
   }
+
+  private func rowSize(_ app: ApplicationReport) -> String {
+    let size = sizeText(app)
+    return app.partial && app.logical.knownLowerBound > 0 ? "≥ " + size : size
+  }
+
+  // MARK: Detail
 
   private func detail(_ app: ApplicationReport) -> some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        HStack(alignment: .top, spacing: 12) {
-          ApplicationIconView(path: app.path)
-          VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: Theme.Space.l) {
+        HStack(alignment: .center, spacing: Theme.Space.m) {
+          ApplicationIconView(path: app.path, size: Theme.Layout.appIconLarge)
+          VStack(alignment: .leading, spacing: Theme.Space.xxs) {
             Text(store.displayName(app))
-              .font(.system(size: 19, weight: .semibold)).lineLimit(2).truncationMode(.middle)
-            Text(app.path).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-              .lineLimit(2).truncationMode(.middle).help(app.path)
+              .font(Theme.Font.title).lineLimit(2).truncationMode(.middle)
+            PathLabel(path: app.path).textSelection(.enabled)
           }
           .frame(maxWidth: .infinity, alignment: .leading)
+          VStack(alignment: .trailing, spacing: Theme.Space.xxs) {
+            Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
+              .font(Theme.Font.metric).monospacedDigit()
+            Text(
+              app.partial && app.logical.knownLowerBound == 0
+                ? String(localized: "Size unavailable")
+                : app.partial ? String(localized: "At least") : String(localized: "File size")
+            )
+            .font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary)
+          }
         }
-        HStack(alignment: .firstTextBaseline) {
-          Text(store.measuringPaths.contains(app.path) ? String(localized: "Measuring") : sizeText(app))
-            .font(.system(size: 23, weight: .semibold)).monospacedDigit()
-          Text(
-            app.partial && app.logical.knownLowerBound == 0
-              ? String(localized: "Size unavailable")
-              : app.partial ? String(localized: "At least") : String(localized: "File size")
-          )
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          Spacer()
+        if let reason = actions.failure(at: app.path) {
+          NoticeBar(reason)
         }
-        Text(
-          String(
-            localized: "The app and its data are measured separately. Disk space is freed when you empty Trash.")
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        VStack(alignment: .leading, spacing: 5) {
+        FlowChips {
+          if let id = app.bundleID, store.runningIDs.contains(id) {
+            DetailChip(String(localized: "Running"), symbol: "pause.circle") {
+              Text(
+                String(
+                  localized: "App is running. You can close it and remove your selected items in the confirmation."))
+            }
+          }
+          if app.manualUninstallerSuggested {
+            DetailChip(String(localized: "Has a helper"), symbol: "puzzlepiece.extension") {
+              Text(String(localized: "This app contains a system extension or helper. Check the vendor's uninstaller."))
+            }
+          }
+          if app.bundleID == nil {
+            DetailChip(String(localized: "No identifier"), symbol: "info.circle", tone: .neutral) {
+              Text(String(localized: "Some app data could not be matched because this app has no identifier."))
+            }
+          }
+          if let reason = otherLocationExplanation(app.path) {
+            Chip(title: reason, symbol: "folder", tone: .neutral)
+          }
+        }
+        VStack(spacing: 0) {
           metadataRow(String(localized: "App identifier"), app.bundleID ?? String(localized: "Unknown"))
           if let target = app.linkTarget {
+            RowDivider(leading: Theme.Space.m)
             metadataRow(String(localized: "Application"), target)
           }
+          RowDivider(leading: Theme.Space.m)
           metadataRow(String(localized: "Version"), app.version ?? String(localized: "Unknown"))
           if let signer = app.signerTeamID, !signer.isEmpty {
+            RowDivider(leading: Theme.Space.m)
             metadataRow(String(localized: "Signer"), signer)
           }
         }
-        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-        .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
-        if app.bundleID == nil {
-          Label(
-            String(
-              localized:
-                "Some app data could not be matched because this app has no identifier."
-            ),
-            systemImage: "info.circle"
-          ).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        }
-        if let id = app.bundleID, store.runningIDs.contains(id) {
-          Label(
-            String(localized: "App is running. You can close it and remove your selected items in the confirmation."),
-            systemImage: "pause.circle"
-          )
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-        }
-        if app.manualUninstallerSuggested {
-          Label(
-            String(localized: "This app contains a system extension or helper. Check the vendor's uninstaller."),
-            systemImage: "info.circle"
-          )
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-        }
+        .background(Theme.Palette.well, in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
         packageSelection(app)
         relatedSection(app)
       }
-      .padding(14)
+      .padding(Theme.Space.l)
     }
     .modifier(
       RelatedListViewport(
@@ -613,73 +622,58 @@ struct AppsView: View {
   }
 
   private func metadataRow(_ title: String, _ value: String) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: 12) {
-      Text(title).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        .frame(width: 75, alignment: .leading)
-      Text(value).font(.system(size: 11)).textSelection(.enabled)
-        .lineLimit(2).truncationMode(.middle).help(value)
+    HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
+      Text(title).font(Theme.Font.callout).foregroundStyle(Theme.Palette.inkSecondary)
+      Spacer(minLength: Theme.Space.m)
+      Text(value).font(Theme.Font.callout).textSelection(.enabled)
+        .lineLimit(1).truncationMode(.middle).help(value)
     }
+    .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
   }
 
   private func packageSelection(_ app: ApplicationReport) -> some View {
     let reason = store.packageUnavailableReason(app)
-    return VStack(alignment: .leading, spacing: 7) {
-      HStack(alignment: .top, spacing: 8) {
-        if reason == nil {
-          Button {
-            store.togglePackage(actions: actions)
-          } label: {
-            Image(systemName: store.packageSelected ? "checkmark.square.fill" : "square")
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel(String(localized: "Move the whole app to Trash"))
-        } else {
-          Image(systemName: "info.circle.fill").foregroundStyle(LightenStyle.warning)
-            .accessibilityHidden(true)
+    return HStack(alignment: .top, spacing: Theme.Space.m) {
+      if reason == nil {
+        Button {
+          store.togglePackage(actions: actions)
+        } label: {
+          CheckSymbol(isOn: store.packageSelected)
         }
-        VStack(alignment: .leading, spacing: 3) {
-          Text(String(localized: "Move the whole app to Trash"))
-            .font(.system(size: 13, weight: .medium))
-          Text(
-            reason
-              ?? String(localized: "The app moves as one package. Its data below stays unless you select it too.")
-          )
-          .font(.system(size: 11)).foregroundStyle(reason == nil ? LightenStyle.muted : LightenStyle.warning)
-          .fixedSize(horizontal: false, vertical: true)
-        }
-        Spacer(minLength: 0)
+        .buttonStyle(.plain)
+        .accessibilityLabel(String(localized: "Move the whole app to Trash"))
+      } else {
+        Image(systemName: "info.circle.fill").foregroundStyle(Theme.Palette.warning)
+          .accessibilityHidden(true)
       }
-      if app.linkTarget != nil {
+      VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+        Text(String(localized: "Move the whole app to Trash")).font(Theme.Font.bodyMedium)
         Text(
-          String(
-            localized:
-              "Only this link is selected. The application it points to stays in place."
-          )
+          reason
+            ?? (app.linkTarget != nil
+              ? String(localized: "Only this link is selected. The application it points to stays in place.")
+              : String(localized: "The app moves as one package. Its data below stays unless you select it too."))
         )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        .font(Theme.Font.caption).foregroundStyle(reason == nil ? Theme.Palette.inkSecondary : Theme.Palette.warning)
+        .fixedSize(horizontal: false, vertical: true)
       }
+      Spacer(minLength: 0)
       if reason != nil {
-        Button(String(localized: "Show in Finder")) {
-          NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: app.path)])
-        }
-        .font(.system(size: 11))
+        ShowInFinderButton(path: app.path, compact: true).buttonStyle(.borderless)
       }
     }
-    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-    .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
+    .padding(Theme.Space.m)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(Theme.Palette.well, in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
   }
 
   private func relatedSection(_ app: ApplicationReport) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text(String(localized: "App data"))
-        .font(.system(size: 15, weight: .semibold))
-      Text(
-        String(
-          localized:
-            "Choose which app data to remove along with the app.")
-      )
-      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-      .fixedSize(horizontal: false, vertical: true)
+    VStack(alignment: .leading, spacing: Theme.Space.s) {
+      SectionHeader(String(localized: "App data")) {
+        InfoButton(
+          text: String(localized: "Choose which app data to remove along with the app.") + " "
+            + String(localized: "Data shared with other apps is never selected automatically."))
+      }
       if app.related.isEmpty {
         Text(
           store.needsRescan
@@ -690,186 +684,180 @@ struct AppsView: View {
                 ? String(localized: "App data is being reviewed")
                 : String(localized: "No app data found in the locations checked")
         )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        .font(Theme.Font.callout).foregroundStyle(Theme.Palette.inkSecondary)
         .anchorPreference(key: RelatedRowPreferenceKey.self, value: .bounds) {
           store.selectedShallowComplete ? [RelatedListViewportSnapshot.emptyResultID: $0] : [:]
         }
       }
       if let note = store.lateSelectedDataNote {
-        Label(note, systemImage: "info.circle")
-          .font(.caption).foregroundStyle(LightenStyle.muted)
+        NoticeBar(note, symbol: "info.circle", tone: .neutral)
           .accessibilityIdentifier("apps.late-selected-data")
       }
       if let progress = store.selectedMeasurementProgress {
-        Text(
-          String.localizedStringWithFormat(
-            String(localized: "Measuring app data: %lld / %lld"), Int64(progress.completed), Int64(progress.total))
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        ScanStatusRow(
+          status: String.localizedStringWithFormat(
+            String(localized: "Measuring app data: %lld / %lld"), Int64(progress.completed), Int64(progress.total)))
       }
       if store.selectedEvidencePending || store.ownershipPendingPaths.contains(app.path) {
-        Label(
+        NoticeBar(
           store.selectedEvidencePending
             ? String(localized: "Checking app data. You can review your selection now.")
             : String(localized: "Some app data could not be matched. You can still choose items yourself."),
-          systemImage: store.selectedEvidencePending ? "clock" : "info.circle"
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+          symbol: store.selectedEvidencePending ? "clock" : "info.circle", tone: .neutral)
       }
-      ForEach(
-        app.related.filter { $0.classification != .unprovenNameOnly && $0.provenance?.kind != .configuredDirectory }
-      ) { candidate in
-        relatedRow(candidate, app: app)
+      let main = app.related.filter {
+        $0.classification != .unprovenNameOnly && $0.provenance?.kind != .configuredDirectory
+      }
+      if !main.isEmpty {
+        VStack(spacing: 0) {
+          ForEach(Array(main.enumerated()), id: \.element.id) { index, candidate in
+            if index > 0 { RowDivider(leading: Theme.Layout.rowTextInset) }
+            relatedRow(candidate, app: app)
+          }
+        }
+        .background(Theme.Palette.well, in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
       }
       let documents = app.related.filter { $0.provenance?.kind == .configuredDirectory }
       if !documents.isEmpty {
-        VStack(alignment: .leading, spacing: 8) {
-          Text(String(localized: "App’s documents folders")).font(.system(size: 12, weight: .semibold))
-          Text(String(localized: "These folders may contain your documents and are never selected automatically."))
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-          ForEach(documents) { candidate in relatedRow(candidate, app: app) }
-        }
+        relatedGroup(
+          title: String(localized: "App’s documents folders"),
+          note: String(localized: "These folders may contain your documents and are never selected automatically."),
+          candidates: documents, app: app)
       }
       let unproven = app.related.filter { $0.classification == .unprovenNameOnly }
-      if !unproven.isEmpty { unprovenSection(unproven, app: app) }
-      Label(
-        String(localized: "Data shared with other apps is never selected automatically."),
-        systemImage: "lock.shield"
-      )
-      .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-    }
-    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-    .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 9))
-  }
-
-  private func unprovenSection(_ candidates: [RelatedDataCandidate], app: ApplicationReport) -> some View {
-    let name = URL(fileURLWithPath: app.path).deletingPathExtension().lastPathComponent
-    return VStack(alignment: .leading, spacing: 8) {
-      Text(
-        String.localizedStringWithFormat(
-          String(localized: "These names resemble %@. Choose only items you recognize."), name)
-      )
-      .font(.system(size: 12, weight: .semibold))
-      .fixedSize(horizontal: false, vertical: true)
-      Text(String(localized: "These items are not selected automatically. Check them before choosing to remove them."))
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        .fixedSize(horizontal: false, vertical: true)
-      ForEach(candidates) { candidate in
-        relatedRow(candidate, app: app)
+      if !unproven.isEmpty {
+        relatedGroup(
+          title: String.localizedStringWithFormat(
+            String(localized: "These names resemble %@. Choose only items you recognize."),
+            URL(fileURLWithPath: app.path).deletingPathExtension().lastPathComponent),
+          note: String(
+            localized: "These items are not selected automatically. Check them before choosing to remove them."),
+          candidates: unproven, app: app)
       }
     }
-    .padding(10)
-    .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 7))
+  }
+
+  private func relatedGroup(
+    title: String, note: String, candidates: [RelatedDataCandidate], app: ApplicationReport
+  ) -> some View {
+    VStack(alignment: .leading, spacing: Theme.Space.s) {
+      HStack(alignment: .firstTextBaseline) {
+        Text(title).font(Theme.Font.headline).fixedSize(horizontal: false, vertical: true)
+        Spacer(minLength: Theme.Space.s)
+        DetailChip(String(localized: "Why"), symbol: "info.circle") { Text(note) }
+      }
+      .padding(.top, Theme.Space.s)
+      VStack(spacing: 0) {
+        ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
+          if index > 0 { RowDivider(leading: Theme.Layout.rowTextInset) }
+          relatedRow(candidate, app: app)
+        }
+      }
+      .background(Theme.Palette.well, in: RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
+    }
     .accessibilityElement(children: .contain)
   }
 
   private func relatedRow(_ candidate: RelatedDataCandidate, app: ApplicationReport) -> some View {
     let eligible = canSelect(candidate, app: app)
     let selected = store.selectedDataPaths.contains(candidate.path)
-    return HStack(alignment: .top, spacing: 8) {
+    let automatic = store.isAutomaticallySelected(candidate, app: app)
+    let note = automatic ? nil : selected ? nil : automaticSelectionNote(candidate, app: app)
+    let otherPaths = store.otherInstallationPaths(candidate: candidate, app: app)
+    let mozilla = selected && (candidate.provenance?.kind == .mozilla || candidate.evidenceKinds.contains(.mozilla))
+    let summary =
+      candidate.provenance.map { AppsSurfaceText.provenance($0.kind) }
+      ?? (candidate.reason == .installed && candidate.refusalEvidence.isEmpty
+        ? AppsSurfaceText.associatedData(candidate) : FailureText.candidate(candidate).primaryReason)
+    return HStack(alignment: .center, spacing: Theme.Space.m) {
       if eligible {
         Button {
           store.toggleData(candidate.path, actions: actions)
         } label: {
-          Image(systemName: selected ? "checkmark.square.fill" : "square")
+          CheckSymbol(isOn: selected)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(
           "\(selected ? String(localized: "Deselect") : String(localized: "Select")) \(URL(fileURLWithPath: candidate.path).lastPathComponent)"
         )
       } else {
-        Image(systemName: "info.circle.fill").foregroundStyle(LightenStyle.warning)
+        Image(systemName: "lock.fill").font(Theme.Font.iconSmall).foregroundStyle(Theme.Palette.inkTertiary)
+          .frame(width: Theme.Space.l)
           .accessibilityHidden(true)
       }
-      VStack(alignment: .leading, spacing: 2) {
+      VStack(alignment: .leading, spacing: Theme.Space.xxs) {
         Text(URL(fileURLWithPath: candidate.path).lastPathComponent)
-          .font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.middle)
-        Text(candidate.path).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-          .lineLimit(1).truncationMode(.middle).help(candidate.path)
-        if let reason = actions.failure(at: candidate.path) {
-          Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        if let provenance = candidate.provenance {
-          Text(AppsSurfaceText.provenance(provenance.kind))
-            .font(.system(size: 10, weight: .medium)).foregroundStyle(LightenStyle.muted)
-          if let source = provenance.sourcePath {
-            Text(source).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-              .lineLimit(2).truncationMode(.middle).help(source)
-          }
-        }
-        if candidate.reason == .installed && candidate.refusalEvidence.isEmpty {
-          Text(AppsSurfaceText.associatedData(candidate))
-            .font(.caption).foregroundStyle(LightenStyle.muted)
-            .fixedSize(horizontal: false, vertical: true)
-        } else {
-          FailureReasonView(presentation: FailureText.candidate(candidate))
-        }
-        if selected, candidate.provenance?.kind == .mozilla || candidate.evidenceKinds.contains(.mozilla) {
-          Text(
-            String(localized: "Profiles may contain mail, browsing history, and personal data. Review before removal.")
-          )
-          .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
-          .fixedSize(horizontal: false, vertical: true)
-        }
-        if store.isAutomaticallySelected(candidate, app: app) {
-          Text(String(localized: "Selected automatically as app data."))
-            .font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-        } else if !selected, let reason = automaticSelectionNote(candidate, app: app) {
-          Text(reason).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        let otherPaths = store.otherInstallationPaths(candidate: candidate, app: app)
-        if !otherPaths.isEmpty {
-          Text(
-            String(
-              localized:
-                "This data is also used by another installation. Removing it may affect that installation."
-            )
-          )
-          .font(.system(size: 10)).foregroundStyle(LightenStyle.warning)
-          ForEach(otherPaths, id: \.self) { path in
-            Button {
-              Task {
-                await store.openOtherInstallation(
-                  path, candidate: candidate, app: app, actions: actions)
-              }
-            } label: {
-              Label(path, systemImage: "arrow.up.forward.app")
-                .font(.system(size: 10)).lineLimit(2).truncationMode(.middle)
+          .font(Theme.Font.callout).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
+        Text(automatic ? String(localized: "Selected automatically as app data.") : summary)
+          .font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary).lineLimit(1)
+      }
+      .help(candidate.path)
+      Spacer(minLength: Theme.Space.s)
+      if !otherPaths.isEmpty || mozilla || actions.failure(at: candidate.path) != nil {
+        DetailChip(String(localized: "Review"), symbol: "exclamationmark.triangle.fill") {
+          VStack(alignment: .leading, spacing: Theme.Space.s) {
+            if let reason = actions.failure(at: candidate.path) { Text(reason) }
+            if mozilla {
+              Text(
+                String(
+                  localized: "Profiles may contain mail, browsing history, and personal data. Review before removal."))
             }
-            .buttonStyle(.plain)
-            .help(String(localized: "Review this installation in Apps"))
-            .accessibilityLabel("\(String(localized: "Review this installation in Apps")): \(path)")
+            if !otherPaths.isEmpty {
+              Text(
+                String(
+                  localized:
+                    "This data is also used by another installation. Removing it may affect that installation."))
+              ForEach(otherPaths, id: \.self) { path in
+                Button {
+                  Task { await store.openOtherInstallation(path, candidate: candidate, app: app, actions: actions) }
+                } label: {
+                  Label(path, systemImage: "arrow.up.forward.app").lineLimit(2).truncationMode(.middle)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.Palette.accent)
+                .help(String(localized: "Review this installation in Apps"))
+                .accessibilityLabel("\(String(localized: "Review this installation in Apps")): \(path)")
+              }
+            }
           }
         }
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      Spacer(minLength: 3)
-      VStack(alignment: .trailing, spacing: 5) {
+      DetailChip(String(localized: "Why"), symbol: "info.circle", tone: .neutral) {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+          PathLabel(path: candidate.path, lines: 3).textSelection(.enabled)
+          if let provenance = candidate.provenance {
+            Text(AppsSurfaceText.provenance(provenance.kind)).font(Theme.Font.bodyMedium)
+            if let source = provenance.sourcePath { PathLabel(path: source, lines: 2) }
+          }
+          if candidate.reason == .installed && candidate.refusalEvidence.isEmpty {
+            Text(AppsSurfaceText.associatedData(candidate))
+          } else {
+            FailureReasonView(presentation: FailureText.candidate(candidate))
+          }
+          if automatic {
+            Text(String(localized: "Selected automatically as app data."))
+          } else if let note {
+            Text(note).foregroundStyle(Theme.Palette.inkSecondary)
+          }
+          ShowInFinderButton(path: candidate.path).controlSize(.small)
+        }
+      }
+      Group {
         if let observation = candidate.observation {
           if let total = observation.logical.completeTotal {
-            Text(format(total)).font(.system(size: 10)).monospacedDigit()
+            Text(format(total))
           } else {
             Text(
               String.localizedStringWithFormat(
-                String(localized: "At least %@"), format(observation.logical.knownLowerBound))
-            )
-            .font(.system(size: 10)).monospacedDigit()
+                String(localized: "At least %@"), format(observation.logical.knownLowerBound)))
           }
         } else {
-          Text("Size not measured").font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-        }
-        if candidate.classification == .unprovenNameOnly {
-          Button("Show in Finder") {
-            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: candidate.path)])
-          }
-          .buttonStyle(.plain).font(.system(size: 10))
-          .accessibilityLabel(
-            String.localizedStringWithFormat(String(localized: "Show in Finder: %@"), candidate.path))
+          Text(String(localized: "Size not measured")).foregroundStyle(Theme.Palette.inkTertiary)
         }
       }
+      .font(Theme.Font.monoSmall).foregroundStyle(Theme.Palette.inkSecondary).lineLimit(1).fixedSize()
     }
+    .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
     .accessibilityElement(children: .contain)
     .anchorPreference(key: RelatedRowPreferenceKey.self, value: .bounds) { [candidate.path: $0] }
   }

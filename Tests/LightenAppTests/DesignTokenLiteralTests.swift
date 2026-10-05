@@ -16,14 +16,10 @@ struct DesignTokenLiteralTests {
   /// Screens still being moved to tokens.
   static let pending: Set<String> = [
     "Sources/Lighten/Actions/ActionViews.swift",
-    "Sources/Lighten/Apps/AppsBasketView.swift",
-    "Sources/Lighten/Apps/AppsView.swift",
-    "Sources/Lighten/Apps/ApplicationIconView.swift",
     "Sources/Lighten/Interface/ActionFeedback.swift",
     "Sources/Lighten/Interface/FileAccessViews.swift",
     "Sources/Lighten/Interface/LegacyToolScreen.swift",
     "Sources/Lighten/Overview/LightenSettingsView.swift",
-    "Sources/Lighten/Services/FailureReasonView.swift",
     "Sources/Lighten/Space/SpaceStore.swift",
     "Sources/Lighten/Actions/ActionStore.swift",
   ]

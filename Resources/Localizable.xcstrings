@@ -317,6 +317,23 @@
         }
       }
     },
+    "%lld hidden": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld hidden"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld gizli"
+          }
+        }
+      }
+    },
     "%lld identical copies": {
       "extractionState": "manual",
       "localizations": {
@@ -1044,6 +1061,23 @@
         }
       }
     },
+    "App data: %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App data: %lld"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama verisi: %lld"
+          }
+        }
+      }
+    },
     "App identifier": {
       "localizations": {
         "en": {
@@ -1430,22 +1464,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Geri"
-          }
-        }
-      }
-    },
-    "Basket": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Basket"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sepet"
           }
         }
       }
@@ -3225,6 +3243,23 @@
         }
       }
     },
+    "Has a helper": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Has a helper"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardımcısı var"
+          }
+        }
+      }
+    },
     "Helpers inside another application": {
       "extractionState": "manual",
       "localizations": {
@@ -3479,6 +3514,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bulutta"
+          }
+        }
+      }
+    },
+    "Incomplete list": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incomplete list"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eksik liste"
           }
         }
       }
@@ -3753,22 +3805,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Son tarama"
-          }
-        }
-      }
-    },
-    "Last scan:": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Last scan:"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Son tarama:"
           }
         }
       }
@@ -4673,6 +4709,23 @@
         }
       }
     },
+    "No identifier": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No identifier"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kimlik yok"
+          }
+        }
+      }
+    },
     "No installed app with this identifier was found. Review before moving to Trash.": {
       "localizations": {
         "en": {
@@ -5348,6 +5401,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Diğer uygulama kurulumları tam denetlenemediği için ortak sahiplik doğrulanamadı. Olası sahipleri Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Other disks not included": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other disks not included"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diğer diskler dahil değil"
           }
         }
       }
@@ -6397,6 +6467,23 @@
         }
       }
     },
+    "Review": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İncele"
+          }
+        }
+      }
+    },
     "Review Trash": {
       "localizations": {
         "en": {
@@ -6633,6 +6720,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu kurulumu Apps’te incele"
+          }
+        }
+      }
+    },
+    "Running": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çalışıyor"
           }
         }
       }
@@ -7424,22 +7528,6 @@
         }
       }
     },
-    "Show in Finder: %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show in Finder: %@"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Finder’da göster: %@"
-          }
-        }
-      }
-    },
     "Show in Trash": {
       "extractionState": "manual",
       "localizations": {
@@ -7889,6 +7977,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bazı açık dosyalar kontrol edilemedi. Seçimleriniz hâlâ kullanılabilir."
+          }
+        }
+      }
+    },
+    "Some open files not checked": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some open files not checked"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı açık dosyalar denetlenmedi"
           }
         }
       }

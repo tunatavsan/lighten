@@ -1,89 +1,112 @@
 import LightenKit
 import SwiftUI
 
+/// The floating basket for Apps: the chosen apps, the data that comes with them, and the review action.
 struct AppsBasketView: View {
   let store: AppsStore
   let actions: ActionStore
-  @State private var showingAutomaticData = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 10) {
-        Image(systemName: "basket").foregroundStyle(LightenStyle.accent)
-        Text("\(String(localized: "Basket")): \(store.selectedAppPaths.count)")
-          .font(.system(size: 13, weight: .semibold))
-        Text("\(String(localized: "App data")): \(store.basketDataCount)")
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        Spacer()
-        Text(sizeLabel).font(.system(size: 12)).monospacedDigit()
-      }
-      ScrollView(.horizontal) {
-        HStack(spacing: 5) {
-          ForEach(store.basketApplications.sorted { $0.path < $1.path }) { app in
-            HStack(spacing: 5) {
-              ApplicationIconView(path: app.path).scaleEffect(0.6).frame(width: 20, height: 20)
-              Text(store.displayName(app)).lineLimit(1)
-              Button {
-                store.removeAppFromBasket(app.path, actions: actions)
-              } label: {
-                Image(systemName: "xmark.circle.fill")
-              }
-              .buttonStyle(.plain)
-              .accessibilityLabel("\(String(localized: "Remove from basket")): \(store.displayName(app))")
-              .disabled(actions.busy)
-            }
-            .font(.system(size: 11)).padding(.horizontal, 8).padding(.vertical, 5)
-            .background(LightenStyle.surface, in: Capsule())
+    FloatingBar {
+      if !store.selectedAppPaths.isEmpty {
+        HStack(spacing: -Theme.Space.s) {
+          ForEach(store.basketApplications.sorted { $0.path < $1.path }.prefix(Theme.Layout.basketIconLimit)) { app in
+            ApplicationIconView(path: app.path, size: Theme.Layout.basketIcon)
           }
         }
+        .accessibilityHidden(true)
+        SelectionSummary(
+          symbol: "basket",
+          title: String.localizedStringWithFormat(
+            String(localized: "Basket: %lld"), Int64(store.selectedAppPaths.count)),
+          value: MetricValue.aggregate(store.basketLogical))
+        basketChip
       }
-      .scrollIndicators(.hidden)
-      automaticDataDetails
-      HStack(spacing: 12) {
-        Text(store.reviewExplanation(actions: actions))
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-        Spacer()
+      if !store.selectedOrphanPaths.isEmpty {
+        Chip(
+          title: String.localizedStringWithFormat(
+            String(localized: "%lld selected"), Int64(store.selectedOrphanPaths.count)),
+          symbol: "folder", tone: .accent)
+      }
+    } actions: {
+      if store.preparing || actions.busy { ProgressView().controlSize(.small) }
+      if !store.selectedAppPaths.isEmpty {
         Button(String(localized: "Clear basket")) { store.clearBasket(actions: actions) }
+          .buttonStyle(.glass)
           .disabled(actions.busy)
+        Button(String(localized: "Review removal")) { Task { await store.prepareBasket(actions: actions) } }
+          .buttonStyle(.glassProminent)
+          .disabled(!store.canReviewBasket(actions: actions))
+          .help(store.reviewExplanation(actions: actions))
+          .accessibilityIdentifier("apps.review-removal")
+      }
+      if !store.selectedOrphanPaths.isEmpty {
+        if store.selectedAppPaths.isEmpty {
+          orphanReview.buttonStyle(.glassProminent)
+        } else {
+          orphanReview.buttonStyle(.glass)
+        }
       }
     }
-    .padding(.top, 10)
   }
 
-  @ViewBuilder private var automaticDataDetails: some View {
+  private var orphanReview: some View {
+    Button(String(localized: "Review selected app data")) { Task { await store.prepareOrphans(actions: actions) } }
+      .disabled(store.preparing || store.needsRescan || actions.busy)
+  }
+
+  /// What the basket holds, app by app, with each automatically chosen item and its evidence.
+  private var basketChip: some View {
     let applications = store.basketApplications.sorted { $0.path < $1.path }
-    let count = applications.reduce(0) { total, app in
+    let automatic = applications.reduce(0) { total, app in
       total + app.related.filter { store.isAutomaticallySelected($0, app: app) }.count
     }
-    if count > 0 {
-      DisclosureGroup(isExpanded: $showingAutomaticData) {
+    return DetailChip(
+      String.localizedStringWithFormat(String(localized: "App data: %lld"), Int64(store.basketDataCount)),
+      symbol: "doc.on.doc", tone: .neutral
+    ) {
+      VStack(alignment: .leading, spacing: Theme.Space.s) {
         ForEach(applications) { app in
-          ForEach(app.related.filter { store.isAutomaticallySelected($0, app: app) }) { candidate in
-            VStack(alignment: .leading, spacing: 2) {
-              Text("\(store.displayName(app)): \(candidate.path)")
-                .font(.system(size: 10)).lineLimit(2).truncationMode(.middle).help(candidate.path)
-              let kinds =
-                candidate.evidenceKinds.isEmpty ? candidate.provenance.map { [$0.kind] } ?? [] : candidate.evidenceKinds
-              ForEach(Array(Set(kinds)).sorted { $0.rawValue < $1.rawValue }, id: \.self) { kind in
-                Text(AppsSurfaceText.provenance(kind)).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
-              }
+          HStack(spacing: Theme.Space.s) {
+            ApplicationIconView(path: app.path, size: Theme.Layout.basketIcon)
+            Text(store.displayName(app)).font(Theme.Font.bodyMedium)
+            Spacer()
+            Button {
+              store.removeAppFromBasket(app.path, actions: actions)
+            } label: {
+              Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.Palette.inkSecondary)
             }
-            .padding(.vertical, 3)
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(String(localized: "Remove from basket")): \(store.displayName(app))")
+            .disabled(actions.busy)
           }
         }
-      } label: {
-        Text(
-          String.localizedStringWithFormat(
-            String(localized: "%lld app data items selected automatically"), Int64(count))
-        )
-        .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+        if automatic > 0 {
+          RowDivider()
+          Text(
+            String.localizedStringWithFormat(
+              String(localized: "%lld app data items selected automatically"), Int64(automatic))
+          )
+          .font(Theme.Font.bodyMedium)
+          ForEach(applications) { app in
+            ForEach(app.related.filter { store.isAutomaticallySelected($0, app: app) }) { candidate in
+              VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text("\(store.displayName(app)): \(URL(fileURLWithPath: candidate.path).lastPathComponent)")
+                  .lineLimit(1).truncationMode(.middle).help(candidate.path)
+                let kinds =
+                  candidate.evidenceKinds.isEmpty
+                  ? candidate.provenance.map { [$0.kind] } ?? [] : candidate.evidenceKinds
+                ForEach(Array(Set(kinds)).sorted { $0.rawValue < $1.rawValue }, id: \.self) { kind in
+                  Text(AppsSurfaceText.provenance(kind)).font(Theme.Font.caption)
+                    .foregroundStyle(Theme.Palette.inkSecondary)
+                }
+              }
+            }
+          }
+        }
+        Text(store.reviewExplanation(actions: actions)).font(Theme.Font.caption)
+          .foregroundStyle(Theme.Palette.inkSecondary)
       }
     }
-  }
-
-  private var sizeLabel: String {
-    let size = store.basketLogical
-    let value = ByteCountFormatter.string(fromByteCount: size.completeTotal ?? size.knownLowerBound, countStyle: .file)
-    return size.completeTotal == nil ? "\(String(localized: "At least")) \(value)" : value
   }
 }

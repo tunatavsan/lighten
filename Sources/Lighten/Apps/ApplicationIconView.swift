@@ -4,6 +4,7 @@ import SwiftUI
 struct ApplicationIconView: View {
   let path: String
   var isVisible = true
+  var size: CGFloat = Theme.Layout.appIcon
   @State private var image: NSImage?
   @State private var loadedPath: String?
 
@@ -17,10 +18,11 @@ struct ApplicationIconView: View {
       if let image, loadedPath == path {
         Image(nsImage: image).resizable().scaledToFit()
       } else {
-        Image(systemName: "app.fill").font(.system(size: 22)).foregroundStyle(LightenStyle.muted)
+        Image(systemName: "app.dashed").resizable().scaledToFit().padding(size * 0.12)
+          .foregroundStyle(Theme.Palette.inkTertiary)
       }
     }
-    .frame(width: 32, height: 32)
+    .frame(width: size, height: size)
     .preference(
       key: ApplicationRowPreferenceKey.self, value: [path: .init(iconReady: image != nil && loadedPath == path)]
     )
