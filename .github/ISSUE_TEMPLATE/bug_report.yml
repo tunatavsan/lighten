@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in Lighten does not work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. If the problem could make Lighten remove the wrong data,
+        please report it privately as described in SECURITY.md instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe what you saw. Screenshots help, but please hide personal file names.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Space and scan …
+        2. Select …
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: macOS 26.1 (25B78)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Lighten version or commit
+      placeholder: 0.0.1 or a commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: full-disk-access
+    attributes:
+      label: Full Disk Access
+      options:
+        - Granted
+        - Not granted
+        - Not sure
+    validations:
+      required: true
