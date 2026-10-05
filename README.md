@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Resources/Assets.xcassets/AppIcon.appiconset/Lighten-256.png" width="128" height="128" alt="Lighten app icon">
+  <img src="docs/images/icon.png" width="128" height="128" alt="Lighten app icon">
 </p>
 
 <h1 align="center">Lighten</h1>

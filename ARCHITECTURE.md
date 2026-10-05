@@ -11,7 +11,7 @@ Lighten is a Swift Package Manager project for macOS 26 and later. It has no Xco
 
 The executable depends on `LightenKit` and `CLightenPlatform`. `LightenKit` depends only on `CLightenPlatform` and has no external package dependencies.
 
-The repository-level `Resources/` directory contains application-bundle inputs. `scripts/package_app.sh` copies the property list, privacy manifest, and SwiftPM resource bundle, compiles `Localizable.xcstrings` into language-specific strings files, and assembles them in the application bundle. SwiftUI localization resolves those compiled strings through `Bundle.main` at runtime. A packaged app loads its Clean manifest only from `Contents/Resources/Lighten_LightenKit.bundle`; missing resources fail closed.
+The repository-level `Resources/` directory contains application-bundle inputs. `scripts/package_app.sh` copies the property list, privacy manifest, and SwiftPM resource bundle, compiles `Localizable.xcstrings` into language-specific strings files and the Icon Composer document `Resources/AppIcon.icon` into the Liquid Glass app icon, and assembles them in the application bundle. SwiftUI localization resolves those compiled strings through `Bundle.main` at runtime. A packaged app loads its Clean manifest only from `Contents/Resources/Lighten_LightenKit.bundle`; missing resources fail closed.
 
 ## Contracts
 
