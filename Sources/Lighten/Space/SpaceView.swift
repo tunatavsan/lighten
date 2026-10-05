@@ -55,7 +55,7 @@ struct SpaceView: View {
   }
 
   var body: some View {
-    ToolScreen(String(localized: "Space")) {
+    LegacyToolScreen(String(localized: "Space")) {
       VStack(spacing: 0) {
         header
         Divider()
@@ -448,12 +448,7 @@ struct SpaceView: View {
     return LightenStyle.SizeBucket.forBytes(item.bytes(store.metric).knownLowerBound).textColor
   }
 
-  private func hatchColor(for item: SpaceItem?) -> Color {
-    guard let item else { return LightenStyle.separator }
-    let bucket = LightenStyle.SizeBucket.forBytes(item.bytes(store.metric).knownLowerBound)
-    let text = colorScheme == .dark ? bucket.darkTextHex : bucket.lightTextHex
-    return text == 0 ? .white : .black
-  }
+  private func hatchColor(for item: SpaceItem?) -> Color { tileTextColor(for: item) }
 
   private var sidePane: some View {
     VStack(spacing: 0) {

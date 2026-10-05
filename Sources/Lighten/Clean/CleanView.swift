@@ -24,7 +24,7 @@ struct CleanView: View {
   }
 
   var body: some View {
-    ToolScreen(String(localized: "Clean")) {
+    LegacyToolScreen(String(localized: "Clean")) {
       VStack(alignment: .leading, spacing: 12) {
         Text(String(localized: "Review caches and temporary files apps can recreate, plus data left by removed apps."))
           .foregroundStyle(LightenStyle.muted)

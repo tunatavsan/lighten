@@ -9,17 +9,37 @@ import Testing
 struct SpaceUITests {
   @MainActor @Test("SI byte buckets are fixed at every boundary")
   func buckets() {
-    #expect(LightenStyle.SizeBucket.forBytes(99_999_999) == .under100MB)
-    #expect(LightenStyle.SizeBucket.forBytes(100_000_000) == .under1GB)
-    #expect(LightenStyle.SizeBucket.forBytes(1_000_000_000) == .under5GB)
-    #expect(LightenStyle.SizeBucket.forBytes(5_000_000_000) == .under20GB)
-    #expect(LightenStyle.SizeBucket.forBytes(20_000_000_000) == .under60GB)
-    #expect(LightenStyle.SizeBucket.forBytes(60_000_000_000) == .atLeast60GB)
-    #expect(LightenStyle.SizeBucket.forBytes(142_000_000_000) != LightenStyle.SizeBucket.forBytes(5_000_000_000))
-    #expect(
-      LightenStyle.SizeBucket.allCases.map(\.lightHex) == [0xE7F0F8, 0xC4DAF2, 0xB0B5EE, 0xB97FC6, 0xC34E54, 0x9A4312])
-    #expect(
-      LightenStyle.SizeBucket.allCases.map(\.darkHex) == [0x2F3F4F, 0x375479, 0x635EA5, 0xAC63B1, 0xF17871, 0xFEB354])
+    #expect(SizeBucket.forBytes(99_999_999) == .under100MB)
+    #expect(SizeBucket.forBytes(100_000_000) == .under1GB)
+    #expect(SizeBucket.forBytes(1_000_000_000) == .under5GB)
+    #expect(SizeBucket.forBytes(5_000_000_000) == .under20GB)
+    #expect(SizeBucket.forBytes(20_000_000_000) == .under60GB)
+    #expect(SizeBucket.forBytes(60_000_000_000) == .atLeast60GB)
+    #expect(SizeBucket.forBytes(142_000_000_000) != SizeBucket.forBytes(5_000_000_000))
+  }
+
+  @MainActor @Test("Size swatches grow more prominent with size and keep their labels readable")
+  func sizeRampContrast() {
+    func luminance(_ hex: UInt32) -> Double {
+      func channel(_ shift: UInt32) -> Double {
+        let value = Double((hex >> shift) & 0xFF) / 255
+        return value <= 0.03928 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+      }
+      return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+    }
+    func contrast(_ a: UInt32, _ b: UInt32) -> Double {
+      let (high, low) = (max(luminance(a), luminance(b)), min(luminance(a), luminance(b)))
+      return (high + 0.05) / (low + 0.05)
+    }
+    let buckets = SizeBucket.allCases
+    for dark in [false, true] {
+      let fills = buckets.map { $0.token.hex(dark: dark) }
+      for (bucket, fill) in zip(buckets, fills) {
+        #expect(contrast(fill, bucket.inkToken.hex(dark: dark)) >= 4.5, "\(bucket) dark: \(dark)")
+      }
+      let steps = zip(fills, fills.dropFirst()).map { luminance($1) - luminance($0) }
+      #expect(steps.allSatisfy { dark ? $0 > 0 : $0 < 0 }, "dark: \(dark)")
+    }
   }
 
   @MainActor @Test("Both warning languages avoid claiming a sole copy")

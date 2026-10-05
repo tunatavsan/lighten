@@ -156,12 +156,11 @@ import Testing
   #expect(feedback.message.contains(String(localized: "This action cannot be undone.")))
 }
 
-@Test("Sidebar and grid share one catalog containing only current screens")
+@Test("Sidebar and Overview share one catalog containing only current screens")
 @MainActor func toolCatalogHasCurrentScreensOnly() {
   #expect(Set(ToolCatalog.entries.map(\.id)) == Set(LightenSection.allCases))
-  #expect(ToolCatalog.entries.count == 7)
-  #expect(ToolCatalog.gridEntries.count == 6)
-  #expect(!ToolCatalog.gridEntries.contains { $0.id == .tools })
+  #expect(ToolCatalog.entries.count == LightenSection.allCases.count)
+  #expect(!ToolCatalog.toolEntries.contains { $0.id == .overview })
   let summary = ToolSummary(count: 3, logicalBytes: 1000, observedAt: Date(), partial: true)
   let presentation = ToolPresentation(phase: .partial, summary: summary)
   #expect(presentation.resultText.hasPrefix(String(localized: "At least")))

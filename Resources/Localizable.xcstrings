@@ -202,22 +202,6 @@
         }
       }
     },
-    "%lld duplicate copies": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld duplicate copies"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld ikiz kopya"
-          }
-        }
-      }
-    },
     "%lld files compared": {
       "localizations": {
         "en": {
@@ -294,22 +278,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "%lld öğenin sonucu doğrulanamadı. Geçmiş’i ve Finder’ı kontrol edin."
-          }
-        }
-      }
-    },
-    "%lld items": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld items"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld öğe"
           }
         }
       }
@@ -1685,22 +1653,6 @@
         }
       }
     },
-    "Choose a tool for your Mac": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose a tool for your Mac"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mac’iniz için bir araç seçin"
-          }
-        }
-      }
-    },
     "Choose an area to check access again. Previous results are not proof of newly granted access.": {
       "localizations": {
         "en": {
@@ -3014,22 +2966,6 @@
         }
       }
     },
-    "General": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "General"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Genel"
-          }
-        }
-      }
-    },
     "Helpers inside another application": {
       "extractionState": "manual",
       "localizations": {
@@ -4196,6 +4132,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Diğer kategoriler"
+          }
+        }
+      }
+    },
+    "More information": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More information"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Daha fazla bilgi"
           }
         }
       }
@@ -7122,6 +7075,23 @@
         }
       }
     },
+    "Shows details": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shows details"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ayrıntıları gösterir"
+          }
+        }
+      }
+    },
     "Signer": {
       "localizations": {
         "en": {
@@ -9141,22 +9111,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu sembolik bağlantı bu işlemle taşınamaz. İçinde bulunduğu klasörü seçin."
-          }
-        }
-      }
-    },
-    "Tools": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tools"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Araçlar"
           }
         }
       }

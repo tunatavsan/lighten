@@ -5,8 +5,7 @@ import SwiftUI
 
 @main
 struct LightenApp: App {
-  @State private var access = FullDiskAccessMonitor()
-  private let onboarding = OnboardingPreferences()
+  @State private var model: LightenModel
 
   init() {
     guard Bundle.main.bundleIdentifier == LightenIdentity.bundleIdentifier else {
@@ -15,148 +14,134 @@ struct LightenApp: App {
       Darwin.exit(2)
     }
     MainThreadWatchdog.startIfEnabled()
+    _model = State(initialValue: LightenModel())
   }
 
   var body: some Scene {
-    WindowGroup {
-      LightenRootView(access: access, onboarding: onboarding)
-        .environment(\.fullDiskAccessMonitor, access)
+    WindowGroup(id: LightenRootView.windowID) {
+      LightenRootView(model: model)
+        .environment(\.fullDiskAccessMonitor, model.access)
     }
-    .defaultSize(width: 1220, height: 800)
+    .defaultSize(Theme.Layout.windowDefault)
     .windowResizability(.contentMinSize)
     .windowToolbarStyle(.unified)
-    Settings { LightenSettingsView(access: access) }
+    Settings { LightenSettingsView(access: model.access) }
   }
 }
 
-private struct LightenRootView: View {
+struct LightenRootView: View {
+  static let windowID = "main"
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  let access: FullDiskAccessMonitor
-  let onboarding: OnboardingPreferences
-  @State private var section: LightenSection? = .overview
-  @State private var overview = OverviewStore()
-  @State private var space = SpaceStore()
-  @State private var actions = ActionStore()
-  @State private var clean = CleanStore()
-  @State private var duplicates = DuplicateStore()
-  @State private var apps = AppsStore()
-  @State private var feedback = ActionFeedbackState()
-  @State private var showingWelcome = false
-  @State private var previousSummaries: [LightenSection: ToolSummary] = [:]
-
-  private var presentations: [LightenSection: ToolPresentation] {
-    var spacePhase: ToolPhase {
-      switch space.phase {
-      case .idle: .idle
-      case .scanning: .scanning
-      case .cancelled, .partial: .partial
-      case .complete: .ready
-      case .error: .failed
-      }
-    }
-    let spaceSummary = ToolSummary(
-      count: Int(clamping: space.rootSummary?.itemCount ?? 0),
-      logicalBytes: space.rootSummary?.logical.knownLowerBound ?? 0,
-      observedAt: space.cachedAt ?? space.tree?.startedAt,
-      partial: space.rootSummary?.partial == true || spacePhase == .partial)
-    return [
-      .space: ToolPresentation(phase: spacePhase, summary: spaceSummary),
-      .clean: ToolPresentation(
-        phase: clean.phase, summary: clean.toolSummary, previousSummary: previousSummaries[.clean]),
-      .duplicates: ToolPresentation(
-        phase: duplicates.phase, summary: duplicates.toolSummary,
-        previousSummary: previousSummaries[.duplicates]),
-      .apps: ToolPresentation(phase: apps.phase, summary: apps.toolSummary, previousSummary: previousSummaries[.apps]),
-    ]
-  }
+  @Bindable var model: LightenModel
 
   var body: some View {
     NavigationSplitView {
-      List(selection: $section) {
-        ForEach(ToolGroup.allCases) { group in
-          Section(group.title) {
-            ForEach(ToolCatalog.entries.filter { $0.group == group }) { entry in
-              ToolSidebarRow(entry: entry, presentation: presentations[entry.id])
-                .tag(entry.id)
-            }
-          }
+      LightenSidebar(selection: $model.section, presentations: model.presentations)
+    } detail: {
+      detail
+    }
+    .frame(minWidth: Theme.Layout.windowMinimum.width, minHeight: Theme.Layout.windowMinimum.height)
+    .tint(Theme.Palette.accent)
+    .overlay(alignment: .bottom) {
+      if let presentation = model.feedback.presentation {
+        ActionFeedbackToast(feedback: presentation, actions: model.actions, dismiss: model.feedback.dismiss)
+          .transition(Theme.Motion.transition(Theme.Motion.rise, reduceMotion: reduceMotion))
+      }
+    }
+    .animation(
+      Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion), value: model.feedback.presentation?.id
+    )
+    .task(id: model.feedback.presentation?.id) {
+      if let id = model.feedback.presentation?.id { await model.feedback.expire(id) }
+    }
+    .onChange(of: model.actions.result?.planID) { _, _ in model.showActionFeedback() }
+    .onChange(of: reduceMotion, initial: true) { _, value in
+      model.actions.reduceMotion = value
+      model.space.reduceMotion = value
+    }
+    .sheet(isPresented: $model.showingWelcome) {
+      FileAccessWelcome(access: model.access, preferences: model.onboarding)
+    }
+    .task { await model.prepare() }
+    .task { await model.loadPreviousSummaries() }
+  }
+
+  @ViewBuilder private var detail: some View {
+    switch model.section ?? .overview {
+    case .overview:
+      OverviewView(
+        store: model.overview, space: model.space, actions: model.actions,
+        showSpace: { model.show(.space) }, showHistory: { model.show(.history) })
+    case .space:
+      SpaceView(store: model.space, actions: model.actions, showHistory: { model.show(.history) })
+    case .clean:
+      CleanView(store: model.clean, actions: model.actions)
+    case .duplicates:
+      DuplicateView(store: model.duplicates, actions: model.actions)
+    case .apps:
+      AppsView(store: model.apps, actions: model.actions)
+    case .history:
+      HistoryView(actions: model.actions)
+    }
+  }
+}
+
+/// The sidebar: tools grouped as in System Settings, each with its tile and latest result.
+struct LightenSidebar: View {
+  @Binding var selection: LightenSection?
+  let presentations: [LightenSection: ToolPresentation]
+
+  var body: some View {
+    List(selection: $selection) {
+      ForEach(ToolGroup.allCases) { group in
+        let entries = ToolCatalog.entries.filter { $0.group == group }
+        if let title = group.title {
+          Section(title) { rows(entries) }
+        } else {
+          Section { rows(entries) }
         }
       }
-      .listStyle(.sidebar)
-      .navigationSplitViewColumnWidth(min: 170, ideal: 210, max: 260)
-    } detail: {
-      switch section ?? .overview {
-      case .overview:
-        OverviewView(
-          store: overview, space: space, actions: actions,
-          showSpace: { section = .space }, showHistory: { section = .history })
-      case .tools:
-        ToolsGridView(presentations: presentations) { section = $0 }
-      case .space:
-        SpaceView(store: space, actions: actions, showHistory: { section = .history })
-      case .clean:
-        CleanView(store: clean, actions: actions)
-      case .duplicates:
-        DuplicateView(store: duplicates, actions: actions)
-      case .apps:
-        AppsView(store: apps, actions: actions)
-      case .history:
-        HistoryView(actions: actions)
+    }
+    .listStyle(.sidebar)
+    .navigationSplitViewColumnWidth(
+      min: Theme.Layout.sidebarMinimum, ideal: Theme.Layout.sidebarIdeal, max: Theme.Layout.sidebarMaximum)
+  }
+
+  private func rows(_ entries: [ToolCatalogEntry]) -> some View {
+    ForEach(entries) { entry in
+      SidebarRow(entry: entry, presentation: presentations[entry.id]).tag(entry.id)
+    }
+  }
+}
+
+private struct SidebarRow: View {
+  let entry: ToolCatalogEntry
+  let presentation: ToolPresentation?
+
+  var body: some View {
+    HStack(spacing: Theme.Space.s) {
+      Label {
+        Text(entry.title).lineLimit(1)
+      } icon: {
+        ToolGlyph(symbol: entry.symbol, color: entry.tint, size: Theme.Layout.sidebarGlyph)
+      }
+      Spacer(minLength: Theme.Space.xs)
+      if presentation?.isWorking == true {
+        ProgressView().controlSize(.mini)
+          .accessibilityLabel(String(localized: "Working in the background"))
+      } else if let value = presentation?.sidebarValue(for: entry.id) {
+        Text(value).font(Theme.Font.monoSmall).foregroundStyle(Theme.Palette.inkSecondary).lineLimit(1)
       }
     }
-    .frame(minWidth: 820, minHeight: 560)
-    .tint(LightenStyle.accent)
-    .overlay(alignment: .bottom) {
-      if let presentation = feedback.presentation {
-        ActionFeedbackToast(feedback: presentation, actions: actions, dismiss: feedback.dismiss)
-          .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-      }
-    }
-    .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: feedback.presentation?.id)
-    .task(id: feedback.presentation?.id) {
-      if let id = feedback.presentation?.id { await feedback.expire(id) }
-    }
-    .onChange(of: actions.result?.planID) { _, _ in showActionFeedback() }
-    .onChange(of: reduceMotion, initial: true) { _, value in
-      actions.reduceMotion = value
-      space.reduceMotion = value
-    }
-    .sheet(isPresented: $showingWelcome) { FileAccessWelcome(access: access, preferences: onboarding) }
-    .task { await prepareShell() }
-    .task { await loadPreviousSummaries() }
+    .help(help)
+    .accessibilityElement(children: .combine)
   }
 
-  private func showActionFeedback() {
-    guard let result = actions.result, let kind = actions.resultKind,
-      let message = actions.completedSummary
-    else { return }
-    feedback.show(
-      planID: result.planID, kind: kind,
-      appliedCount: result.items.filter { $0.outcome == .applied }.count, message: message)
-  }
-
-  private func loadPreviousSummaries() async {
-    let loaded = await ToolCatalog.previousSummaries(from: ResultPictureStore())
-    guard !Task.isCancelled else { return }
-    previousSummaries = loaded
-  }
-
-  private func prepareShell() async {
-    actions.onDisplayChange = { [weak space, weak clean, weak apps, weak duplicates] change in
-      space?.applyDisplayChange(change)
-      clean?.applyDisplayChange(change)
-      apps?.applyDisplayChange(change)
-      duplicates?.applyDisplayChange(change)
+  private var help: String {
+    guard let presentation, presentation.summary.observedAt != nil || presentation.isWorking else {
+      return entry.description
     }
-    actions.onDisplayDiscrepancy = { [weak space, weak clean, weak apps, weak duplicates, weak actions] _ in
-      guard let actions else { return }
-      if space?.tree != nil { space?.startScan() }
-      if clean?.scannedAt != nil { clean?.startScan(actions: actions) }
-      if apps?.scannedAt != nil { apps?.startScan(actions: actions) }
-      if let folder = duplicates?.folderPath { duplicates?.startScan(folder: folder, actions: actions) }
-    }
-    await actions.reloadHistory()
-    await access.refresh()
-    showingWelcome = onboarding.shouldPresent(for: access.state)
+    let result = presentation.resultText(for: entry.id)
+    return presentation.isPreviousResult ? result + " · " + String(localized: "Previous result") : result
   }
 }

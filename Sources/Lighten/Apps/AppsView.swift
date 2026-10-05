@@ -31,7 +31,7 @@ struct AppsView: View {
 
   var body: some View {
     let scanBusy = store.busy
-    ToolScreen(String(localized: "Apps")) {
+    LegacyToolScreen(String(localized: "Apps")) {
       GeometryReader { geometry in
         let compact = geometry.size.width < 800
         VStack(alignment: .leading, spacing: 0) {

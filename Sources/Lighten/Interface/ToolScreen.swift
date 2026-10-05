@@ -1,73 +1,55 @@
 import SwiftUI
 
-/// Gives every tool the same content alignment and native toolbar placement.
-struct ToolScreen<Content: View, Actions: View>: View {
+/// Every tool shares one frame: the title and a short status in the window toolbar, actions in
+/// the toolbar, content on the canvas below.
+struct ToolScreen<Content: View, Toolbar: ToolbarContent>: View {
   let title: String
+  var subtitle: String?
   private let content: Content
-  private let actions: Actions
+  private let toolbar: Toolbar
 
   init(
-    _ title: String, @ViewBuilder content: () -> Content,
-    @ViewBuilder toolbar: () -> Actions
+    _ title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content,
+    @ToolbarContentBuilder toolbar: () -> Toolbar
   ) {
     self.title = title
+    self.subtitle = subtitle
     self.content = content()
-    self.actions = toolbar()
+    self.toolbar = toolbar()
   }
 
   var body: some View {
-    GeometryReader { geometry in
-      content
-        .frame(width: min(1120, max(0, geometry.size.width - 48)), height: geometry.size.height, alignment: .topLeading)
-        .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
-    }
-    .background(LightenStyle.canvas)
-    .navigationTitle(title)
-    .toolbar { ToolbarItemGroup(placement: .automatic) { actions } }
+    content
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      .background(Theme.Palette.canvas)
+      .navigationTitle(title)
+      .navigationSubtitle(subtitle ?? "")
+      .toolbar { toolbar }
   }
 }
 
-struct ToolScanProgress: View {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  let status: String
-  let count: Int
-  var bytes: Int64? = nil
+/// The top of a tool: its hero metric on the left, secondary metrics and status on the right.
+struct ToolHeader<Trailing: View, Status: View>: View {
+  let hero: HeroMetric
+  private let trailing: Trailing
+  private let status: Status
 
-  var body: some View {
-    HStack(spacing: 10) {
-      ProgressView().controlSize(.small)
-      VStack(alignment: .leading, spacing: 3) {
-        Text(status).font(.callout)
-        HStack(spacing: 12) {
-          Text(String.localizedStringWithFormat(String(localized: "%lld items checked"), count))
-          if let bytes {
-            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
-          }
-        }
-        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-        .contentTransition(reduceMotion ? .identity : .numericText())
-        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: count)
-        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: bytes)
-      }
-      Spacer(minLength: 0)
-    }
-    .accessibilityElement(children: .combine)
+  init(hero: HeroMetric, @ViewBuilder trailing: () -> Trailing, @ViewBuilder status: () -> Status = { EmptyView() }) {
+    self.hero = hero
+    self.trailing = trailing()
+    self.status = status()
   }
-}
-
-struct PartialResultNotice: View {
-  @Environment(\.fullDiskAccessMonitor) private var access
-  let reason: String
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Label(reason, systemImage: "exclamationmark.triangle")
-        .font(.callout).foregroundStyle(LightenStyle.warning)
-        .fixedSize(horizontal: false, vertical: true)
-      if access?.state == .notGranted {
-        Button(String(localized: "Open Full Disk Access settings")) { access?.openSettings() }
+    VStack(alignment: .leading, spacing: Theme.Space.m) {
+      HStack(alignment: .bottom, spacing: Theme.Space.xl) {
+        hero
+        Spacer(minLength: Theme.Space.l)
+        trailing
       }
+      status
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.top, Theme.Space.xl)
+    .padding(.bottom, Theme.Space.l)
   }
 }

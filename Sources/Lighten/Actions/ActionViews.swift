@@ -274,7 +274,7 @@ struct HistoryView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    ToolScreen(String(localized: "History")) {
+    LegacyToolScreen(String(localized: "History")) {
       GeometryReader { geometry in
         VStack(alignment: .leading, spacing: 0) {
           Text(String(localized: "History shows actions taken in Lighten."))

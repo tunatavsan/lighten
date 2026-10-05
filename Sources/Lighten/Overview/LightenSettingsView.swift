@@ -13,7 +13,7 @@ struct LightenSettingsView: View {
   var retryApps: (() -> Void)?
 
   var body: some View {
-    ToolScreen(String(localized: "Settings")) {
+    LegacyToolScreen(String(localized: "Settings")) {
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
           Group {

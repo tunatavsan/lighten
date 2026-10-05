@@ -9,7 +9,7 @@ struct OverviewView: View {
   let showHistory: () -> Void
 
   var body: some View {
-    ToolScreen(String(localized: "Overview")) {
+    LegacyToolScreen(String(localized: "Overview")) {
       ScrollView {
         VStack(alignment: .leading, spacing: 22) {
           HStack(alignment: .firstTextBaseline) {

@@ -31,7 +31,7 @@ struct DuplicateView: View {
   }
 
   var body: some View {
-    ToolScreen(String(localized: "Duplicates")) {
+    LegacyToolScreen(String(localized: "Duplicates")) {
       VStack(alignment: .leading, spacing: 12) {
         Text(String(localized: "Exact local file copies in a folder you choose"))
           .foregroundStyle(LightenStyle.muted)
