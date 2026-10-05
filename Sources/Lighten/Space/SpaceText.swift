@@ -92,6 +92,25 @@ enum SpaceText {
     }
   }
 
+  /// A one- or two-word name for `state(_:)`, for chips.
+  static func stateTitle(_ item: SpaceItem) -> String? {
+    switch item.state {
+    case .complete: nil
+    case .measuring: String(localized: "Measuring")
+    case .protectedMetadataOnly: String(localized: "Not opened")
+    case .partial(let reason):
+      switch reason {
+      case .unreadable: String(localized: "Unreadable")
+      case .mountBoundary: String(localized: "Other volume")
+      case .cloudNotMeasured: String(localized: "In the cloud")
+      case .protectedNotTraversed: String(localized: "Protected")
+      case .entryError, .descendant: String(localized: "Minimum size")
+      case .changedDuringScan: String(localized: "Changed")
+      case .cancelled: String(localized: "Cancelled")
+      }
+    }
+  }
+
   /// Why an item cannot enter the basket, or nil when it can.
   static func unselectable(_ item: SpaceItem) -> String? {
     if item.canSelect { return nil }

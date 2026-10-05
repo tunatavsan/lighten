@@ -1297,6 +1297,23 @@
         }
       }
     },
+    "Basket: %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Basket: %lld"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sepet: %lld"
+          }
+        }
+      }
+    },
     "Build and development artifacts": {
       "extractionState": "manual",
       "localizations": {
@@ -1422,6 +1439,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Henüz geri yüklenemiyor. Yukarıdaki nedeni giderip Geçmiş’i yenileyin."
+          }
+        }
+      }
+    },
+    "Changed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changed"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Değişti"
           }
         }
       }
@@ -2872,22 +2906,6 @@
         }
       }
     },
-    "Folder size": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Folder size"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Klasör boyutu"
-          }
-        }
-      }
-    },
     "Folders": {
       "localizations": {
         "en": {
@@ -3238,6 +3256,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Yalnızca iCloud’da; tarama için indirilmedi"
+          }
+        }
+      }
+    },
+    "In the cloud": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In the cloud"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bulutta"
           }
         }
       }
@@ -4156,6 +4191,23 @@
         }
       }
     },
+    "Minimum size": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minimum size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En az boyut"
+          }
+        }
+      }
+    },
     "Modified:": {
       "localizations": {
         "en": {
@@ -4618,6 +4670,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Denenmedi"
+          }
+        }
+      }
+    },
+    "Not opened": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not opened"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Açılmadı"
           }
         }
       }
@@ -5102,6 +5171,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Seçilen diğer öğeler"
+          }
+        }
+      }
+    },
+    "Other volume": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other volume"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka birim"
           }
         }
       }
@@ -5664,6 +5750,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Profiller e-posta, tarayıcı geçmişi ve kişisel veriler içerebilir. Kaldırmadan önce inceleyin."
+          }
+        }
+      }
+    },
+    "Protected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protected"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Korumalı"
           }
         }
       }
@@ -6433,6 +6536,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tarama önbelleği"
+          }
+        }
+      }
+    },
+    "Scan cancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan cancelled"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tarama iptal edildi"
           }
         }
       }
@@ -7542,6 +7662,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Seçilen bazı öğelere erişilemiyor. Temizlemeden önce yeniden tarayın."
+          }
+        }
+      }
+    },
+    "Some sizes are incomplete": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some sizes are incomplete"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bazı boyutlar eksik"
           }
         }
       }
@@ -9309,6 +9446,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bilinmiyor"
+          }
+        }
+      }
+    },
+    "Unreadable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unreadable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Okunamadı"
           }
         }
       }
