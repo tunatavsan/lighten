@@ -26,7 +26,9 @@ struct OverviewView: View {
           VStack(alignment: .leading, spacing: Theme.Space.m) {
             SectionHeader(String(localized: "Tools"))
             LazyVGrid(
-              columns: [GridItem(.adaptive(minimum: Theme.Layout.toolCardMinimum), spacing: Theme.Space.m)],
+              columns: Array(
+                repeating: GridItem(.flexible(minimum: Theme.Layout.toolCardMinimum), spacing: Theme.Space.m),
+                count: ToolCatalog.toolEntries.count),
               spacing: Theme.Space.m
             ) {
               ForEach(ToolCatalog.toolEntries) { entry in
@@ -71,17 +73,12 @@ private struct DiskCard: View {
       }
       HeroMetric(value: .bytes(store.volume?.freeBytes), caption: freeCaption)
       CapacityBar(segments: segments)
-      HStack(spacing: Theme.Space.l) {
-        legend(String(localized: "Used on volume"), store.volume?.usedBytes, color: Theme.Palette.indigo)
-        Button {
-          show(.history)
-        } label: {
-          legend(String(localized: "Pending Trash"), actions.pendingTrashLogicalBytes, color: Theme.Palette.hero)
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: Theme.Space.l) {
+          legends
+          Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
-        .help(String(localized: "Trash items have not freed disk space."))
-        legend(String(localized: "Free on volume"), store.volume?.freeBytes, color: Theme.Palette.well)
-        Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: Theme.Space.xs) { legends }
       }
       RowDivider()
       HStack(alignment: .center, spacing: Theme.Space.l) {
@@ -97,6 +94,18 @@ private struct DiskCard: View {
     }
     .frame(maxHeight: .infinity, alignment: .top)
     .cardSurface(padding: Theme.Space.xl, radius: Theme.Radius.panel)
+  }
+
+  @ViewBuilder private var legends: some View {
+    legend(String(localized: "Used on volume"), store.volume?.usedBytes, color: Theme.Palette.indigo)
+    Button {
+      show(.history)
+    } label: {
+      legend(String(localized: "Pending Trash"), actions.pendingTrashLogicalBytes, color: Theme.Palette.hero)
+    }
+    .buttonStyle(.plain)
+    .help(String(localized: "Trash items have not freed disk space."))
+    legend(String(localized: "Free on volume"), store.volume?.freeBytes, color: Theme.Palette.well)
   }
 
   private var volumeName: String {
@@ -258,13 +267,16 @@ private struct ToolCard: View {
           if presentation?.isWorking == true {
             ProgressView().controlSize(.small)
           } else if presentation?.isPreviousResult == true {
-            Chip(title: String(localized: "Previous result"), symbol: "clock")
+            Image(systemName: "clock.arrow.circlepath").font(Theme.Font.iconSmall)
+              .foregroundStyle(Theme.Palette.inkTertiary)
+              .help(String(localized: "Previous result"))
+              .accessibilityLabel(String(localized: "Previous result"))
           }
         }
         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
           Text(entry.title).font(Theme.Font.headline).foregroundStyle(Theme.Palette.ink)
           Text(value).font(Theme.Font.metricSmall).monospacedDigit().foregroundStyle(Theme.Palette.ink)
-            .lineLimit(1)
+            .lineLimit(1).minimumScaleFactor(0.75)
           Text(caption).font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary).lineLimit(1)
         }
       }
@@ -278,7 +290,7 @@ private struct ToolCard: View {
     }
     .buttonStyle(.plain)
     .onHover { hovering = $0 }
-    .help(entry.description)
+    .help(help)
     .accessibilityElement(children: .combine)
     .accessibilityHint(entry.description)
   }
@@ -288,13 +300,8 @@ private struct ToolCard: View {
       return ByteCountFormatter.string(fromByteCount: actions.pendingTrashLogicalBytes, countStyle: .file)
     }
     guard let presentation else { return String(localized: "Not scanned") }
-    if entry.id == .duplicates, presentation.summary.observedAt != nil, !presentation.isWorking,
-      presentation.phase != .failed
-    {
-      let size = ByteCountFormatter.string(fromByteCount: presentation.summary.logicalBytes, countStyle: .file)
-      return presentation.summary.partial ? String(localized: "At least") + " " + size : size
-    }
-    return presentation.resultText(for: entry.id)
+    if entry.id == .apps { return presentation.resultText(for: .apps) }
+    return presentation.sidebarValue(for: entry.id) ?? presentation.resultText
   }
 
   private var caption: String {
@@ -302,13 +309,17 @@ private struct ToolCard: View {
     guard let presentation, let date = presentation.summary.observedAt, !presentation.isWorking else {
       return entry.description
     }
-    var parts: [String] = []
-    if entry.id == .duplicates {
-      parts.append(String(localized: "Copy file size"))
-    } else if entry.id != .apps {
+    return date.formatted(.relative(presentation: .named))
+  }
+
+  private var help: String {
+    guard let presentation, presentation.summary.observedAt != nil, entry.id != .history else {
+      return entry.description
+    }
+    var parts = [presentation.resultText(for: entry.id)]
+    if entry.id == .space || entry.id == .clean {
       parts.append(String.localizedStringWithFormat(String(localized: "%lld items"), Int64(presentation.summary.count)))
     }
-    parts.append(date.formatted(.relative(presentation: .named)))
     return parts.joined(separator: " · ")
   }
 }

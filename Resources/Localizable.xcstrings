@@ -1942,23 +1942,6 @@
         }
       }
     },
-    "Copy file size": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Copy file size"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kopya dosya boyutu"
-          }
-        }
-      }
-    },
     "Copy file size: %@": {
       "localizations": {
         "en": {
@@ -2067,6 +2050,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Şu anda bu uygulama tarafından kullanılıyor"
+          }
+        }
+      }
+    },
+    "Dark": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dark"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Koyu"
           }
         }
       }
@@ -3511,6 +3511,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Son tarama:"
+          }
+        }
+      }
+    },
+    "Light": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Light"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Açık"
           }
         }
       }
@@ -7637,6 +7654,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kullanılan takas alanı"
+          }
+        }
+      }
+    },
+    "System": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem"
           }
         }
       }

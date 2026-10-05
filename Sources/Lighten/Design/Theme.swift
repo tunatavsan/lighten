@@ -20,15 +20,21 @@ struct ThemeColor: Sendable {
   let highContrastLight: UInt32
   let highContrastDark: UInt32
   let alpha: CGFloat
+  let darkAlpha: CGFloat
+  /// Translucent at normal contrast, solid under Increase Contrast.
+  let opaqueInHighContrast: Bool
 
   init(
-    light: UInt32, dark: UInt32, highContrastLight: UInt32? = nil, highContrastDark: UInt32? = nil, alpha: CGFloat = 1
+    light: UInt32, dark: UInt32, highContrastLight: UInt32? = nil, highContrastDark: UInt32? = nil, alpha: CGFloat = 1,
+    darkAlpha: CGFloat? = nil, opaqueInHighContrast: Bool = false
   ) {
+    self.opaqueInHighContrast = opaqueInHighContrast
     self.light = light
     self.dark = dark
     self.highContrastLight = highContrastLight ?? light
     self.highContrastDark = highContrastDark ?? dark
     self.alpha = alpha
+    self.darkAlpha = darkAlpha ?? alpha
   }
 
   func hex(dark isDark: Bool, highContrast: Bool = false) -> UInt32 {
@@ -45,7 +51,8 @@ struct ThemeColor: Sendable {
     return NSColor(name: nil) { appearance in
       let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
       let contrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-      return Self.rgb(token.hex(dark: isDark, highContrast: contrast), alpha: token.alpha)
+      let alpha = contrast && token.opaqueInHighContrast ? 1 : isDark ? token.darkAlpha : token.alpha
+      return Self.rgb(token.hex(dark: isDark, highContrast: contrast), alpha: alpha)
     }
   }
 
@@ -86,8 +93,12 @@ extension Theme {
       light: 0xF6F6FA, dark: 0x1C1C21, highContrastLight: 0xFFFFFF, highContrastDark: 0x121215
     )
     .color
-    /// Cards and grouped rows on the canvas.
-    static let surface = ThemeColor(light: 0xFFFFFF, dark: 0x26262D, highContrastDark: 0x1E1E24).color
+    /// Modules on the glass pane: cards and grouped rows. Translucent so the pane's glass reads
+    /// through, as the sidebar's rows do; Increase Contrast makes them opaque.
+    static let surface = ThemeColor(
+      light: 0xFFFFFF, dark: 0xFFFFFF, highContrastLight: 0xFFFFFF, highContrastDark: 0x1E1E24, alpha: 0.62,
+      darkAlpha: 0.055, opaqueInHighContrast: true
+    ).color
     /// A recessed well inside a card: tracks, empty treemap tiles, code-like values.
     static let well = ThemeColor(light: 0xEFEEF6, dark: 0x1F1F26, highContrastLight: 0xE4E3EE).color
     /// Selected and hovered rows.
@@ -123,12 +134,12 @@ extension Theme {
 
     /// Treemap and size swatches, smallest to largest: one family from lavender to deep orchid.
     static let sizeRamp: [ThemeColor] = [
-      ThemeColor(light: 0xECEBFA, dark: 0x2C2B40),
-      ThemeColor(light: 0xD5D1F6, dark: 0x38355E),
-      ThemeColor(light: 0xB6AEF0, dark: 0x4B4588),
-      ThemeColor(light: 0x7462D6, dark: 0x6554C4),
-      ThemeColor(light: 0x9550C6, dark: 0x9459CA),
-      ThemeColor(light: 0x7A3DAC, dark: 0xC683EA),
+      ThemeColor(light: 0xE9E7FA, dark: 0x2E2C48),
+      ThemeColor(light: 0xD2CDF6, dark: 0x38345E),
+      ThemeColor(light: 0xB3AAEF, dark: 0x443D7C),
+      ThemeColor(light: 0x7462D6, dark: 0x5546A2),
+      ThemeColor(light: 0x8F55C8, dark: 0x6A4BBA),
+      ThemeColor(light: 0x7239A8, dark: 0x8152CC),
     ]
     /// Text on each `sizeRamp` step.
     static let sizeRampInk: [ThemeColor] = [
@@ -137,8 +148,10 @@ extension Theme {
       ThemeColor(light: 0x1E1844, dark: 0xFFFFFF),
       ThemeColor(light: 0xFFFFFF, dark: 0xFFFFFF),
       ThemeColor(light: 0xFFFFFF, dark: 0xFFFFFF),
-      ThemeColor(light: 0xFFFFFF, dark: 0x22103A),
+      ThemeColor(light: 0xFFFFFF, dark: 0xFFFFFF),
     ]
+    /// A faint inner edge that keeps neighbouring tiles of one colour apart.
+    static let tileEdge = ThemeColor(light: 0xFFFFFF, dark: 0xFFFFFF, alpha: 0.35, darkAlpha: 0.08).color
     /// Protected and system blocks in the treemap.
     static let protectedTile = ThemeColor(light: 0xE4E3EC, dark: 0x2A2A31).color
     static let hatch = ThemeColor(light: 0x000000, dark: 0xFFFFFF, alpha: 0.16).color
@@ -196,11 +209,13 @@ extension Theme {
 
   /// Concentric radii: an inner radius is the outer one minus its inset.
   enum Radius {
-    static let tile: CGFloat = 4
+    static let tile: CGFloat = 6
     static let chip: CGFloat = 6
     static let control: CGFloat = 8
     static let card: CGFloat = 14
     static let panel: CGFloat = 20
+    /// The content pane, matching the floating sidebar's corner.
+    static let pane: CGFloat = 18
   }
 
   enum Stroke {
@@ -214,6 +229,8 @@ extension Theme {
     static let sidebarMinimum: CGFloat = 200
     static let sidebarIdeal: CGFloat = 220
     static let sidebarMaximum: CGFloat = 280
+    /// The gap between the window edge and the floating sidebar, repeated around the content pane.
+    static let paneInset: CGFloat = 8
     /// Horizontal inset of screen content from the window edge.
     static let gutter: CGFloat = 28
     static let readableWidth: CGFloat = 1080
@@ -240,12 +257,14 @@ extension Theme {
     static let welcomeWidth: CGFloat = 560
     static let settingsWidth: CGFloat = 520
     static let menuBarWidth: CGFloat = 300
-    static let memoryCardWidth: CGFloat = 300
-    static let toolCardMinimum: CGFloat = 172
+    static let memoryCardWidth: CGFloat = 272
+    static let toolCardMinimum: CGFloat = 112
     static let popoverWidth: CGFloat = 320
     static let emptyStateWidth: CGFloat = 380
     static let popoverMaximumHeight: CGFloat = 420
-    static let treemapGap: CGFloat = 2
+    static let treemapGap: CGFloat = 3
+    /// The tallest an inline action result grows before it scrolls.
+    static let inlineResultMaximum: CGFloat = 140
     static let treemapLabelMinimumWidth: CGFloat = 92
     static let treemapLabelMinimumHeight: CGFloat = 44
     static let treemapIconMinimum: CGFloat = 26

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Every tool shares one frame: the title and a short status in the window toolbar, actions in
-/// the toolbar, content on the canvas below.
+/// the toolbar, content on the glass pane below.
 struct ToolScreen<Content: View, Toolbar: ToolbarContent>: View {
   let title: String
   var subtitle: String?
@@ -21,7 +21,6 @@ struct ToolScreen<Content: View, Toolbar: ToolbarContent>: View {
   var body: some View {
     content
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      .background(Theme.Palette.canvas)
       .navigationTitle(title)
       .navigationSubtitle(subtitle ?? "")
       .toolbar { toolbar }

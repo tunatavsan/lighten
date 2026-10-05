@@ -38,8 +38,11 @@ struct LightenRootView: View {
     NavigationSplitView {
       LightenSidebar(selection: $model.section, presentations: model.presentations)
     } detail: {
-      detail
+      detail.contentPane()
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
     }
+    .windowTray()
+    .appliesAppearancePreference()
     .frame(minWidth: Theme.Layout.windowMinimum.width, minHeight: Theme.Layout.windowMinimum.height)
     .tint(Theme.Palette.accent)
     .overlay(alignment: .bottom) {

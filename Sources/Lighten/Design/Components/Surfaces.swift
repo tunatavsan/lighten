@@ -45,10 +45,31 @@ private struct CardSurface: ViewModifier {
   }
 }
 
+private struct ModuleEdge: ViewModifier {
+  let radius: CGFloat
+  @Environment(\.colorSchemeContrast) private var contrast
+
+  func body(content: Content) -> some View {
+    content.overlay {
+      RoundedRectangle(cornerRadius: radius, style: .continuous)
+        .strokeBorder(
+          contrast == .increased ? Theme.Palette.hairlineStrong : Theme.Palette.hairline,
+          lineWidth: Theme.Stroke.hairline)
+    }
+  }
+}
+
 extension View {
-  /// An opaque content card: surface fill, hairline edge, concentric radius.
+  /// A content card: surface fill, hairline edge, concentric radius.
   func cardSurface(padding: CGFloat = Theme.Space.l, radius: CGFloat = Theme.Radius.card) -> some View {
     modifier(CardSurface(padding: padding, radius: radius))
+  }
+
+  /// A module on the glass pane with no padding of its own: content that reaches its edges, such as a list.
+  func moduleSurface(radius: CGFloat = Theme.Radius.card) -> some View {
+    background(Theme.Palette.surface, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+      .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+      .modifier(ModuleEdge(radius: radius))
   }
 
   /// The screen gutter and readable width used by every scrolling screen.
