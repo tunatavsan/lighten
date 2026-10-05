@@ -144,6 +144,7 @@ final class ParallelWalker: Sendable {
   let fileSink: FileSink?
   let sinkRootAllowed: Bool
   let directEntries: (@Sendable (RawEntry) -> Void)?
+  let directoryFilter: (@Sendable (String) -> Bool)?
   private let hardLinks = Mutex(Set<HardLinkKey>())
   private let remainingWorkers: Atomic<Int>
   private let onFinish: @Sendable () -> Void
@@ -151,6 +152,7 @@ final class ParallelWalker: Sendable {
   init(
     tree: ScanTree, counters: ScanCounters, automaton: ProtectionAutomaton, boundaryDevice: UInt64,
     homeDirectory: String, firmlinks: Set<String>?, workers: Int, fileSink: FileSink? = nil,
+    directoryFilter: (@Sendable (String) -> Bool)? = nil,
     sinkRootAllowed: Bool = true, directEntries: (@Sendable (RawEntry) -> Void)? = nil,
     onFinish: @escaping @Sendable () -> Void
   ) {
@@ -158,6 +160,7 @@ final class ParallelWalker: Sendable {
     self.fileSink = fileSink
     self.sinkRootAllowed = sinkRootAllowed
     self.directEntries = directEntries
+    self.directoryFilter = directoryFilter
     self.tree = tree
     self.counters = counters
     self.automaton = automaton
@@ -207,6 +210,11 @@ final class ParallelWalker: Sendable {
   }
 
   func process(_ job: WalkJob, reader: DirectoryReader) -> [WalkJob] {
+    if directoryFilter?(visiblePath(job.path)) == false {
+      counters.skippedDirectories.add(1, ordering: .relaxed)
+      tree.fail(job, reason: .entryError)
+      return []
+    }
     var childDirectories: [Child] = []
     var interiorJobs: [WalkJob] = []
     var files: [ScanTree.FileRecord] = []
@@ -236,7 +244,10 @@ final class ParallelWalker: Sendable {
           allocated &+= entry.allocated
           let childPath = job.path == "/" ? "/" + entry.name : job.path + "/" + entry.name
           if job.mode == .interior {
-            if entry.device != job.device || entry.flags & UInt32(SF_DATALESS) != 0 {
+            if directoryFilter?(visiblePath(childPath)) == false {
+              counters.skippedDirectories.add(1, ordering: .relaxed)
+              entryErrors = true
+            } else if entry.device != job.device || entry.flags & UInt32(SF_DATALESS) != 0 {
               // Another volume or cloud-only contents: the owner's total is a lower bound.
               entryErrors = true
             } else {
@@ -399,6 +410,13 @@ final class ParallelWalker: Sendable {
       name: entry.name, device: entry.device, inode: entry.inode,
       kind: PackageNames.isPackage(entry.name) ? .package : .directory,
       reason: nil, protectedRule: nil, traverse: true, protection: nil)
+    let childPath = parent.path == "/" ? "/" + entry.name : parent.path + "/" + entry.name
+    if directoryFilter?(visiblePath(childPath)) == false {
+      child.reason = .entryError
+      child.traverse = false
+      counters.skippedDirectories.add(1, ordering: .relaxed)
+      return child
+    }
     if entry.device != boundaryDevice {
       child.reason = .mountBoundary
       child.traverse = false
@@ -435,5 +453,12 @@ final class ParallelWalker: Sendable {
       child.protection = automaton.isInert(next) ? nil : next
     }
     return child
+  }
+
+  private func visiblePath(_ path: String) -> String {
+    guard let firmlinks, path.hasPrefix("/System/Volumes/Data/") else { return path }
+    let relative = String(path.dropFirst("/System/Volumes/Data/".count))
+    guard let first = relative.split(separator: "/").first, firmlinks.contains(String(first)) else { return path }
+    return "/" + relative
   }
 }

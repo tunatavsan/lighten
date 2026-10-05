@@ -8,15 +8,19 @@ public struct ScanConfiguration: Sendable {
   public var homeDirectory: String
   public var publishInterval: Duration
   public var fileSink: FileSink?
+  /// Optional discovery pruning. False retains a partial lower bound for that directory.
+  public var directoryFilter: (@Sendable (String) -> Bool)?
 
   public init(
     workers: Int = ScanConfiguration.defaultWorkers, homeDirectory: String = NSHomeDirectory(),
-    publishInterval: Duration = .milliseconds(125), fileSink: FileSink? = nil
+    publishInterval: Duration = .milliseconds(125), fileSink: FileSink? = nil,
+    directoryFilter: (@Sendable (String) -> Bool)? = nil
   ) {
     self.workers = workers
     self.homeDirectory = homeDirectory
     self.publishInterval = publishInterval
     self.fileSink = fileSink
+    self.directoryFilter = directoryFilter
   }
 
   /// Knee of the measured worker sweep on this class of hardware.
@@ -147,6 +151,7 @@ public struct ScanEngine: Sendable {
       tree: tree, counters: counters, automaton: automaton, boundaryDevice: device,
       homeDirectory: configuration.homeDirectory, firmlinks: firmlinks, workers: configuration.workers,
       fileSink: configuration.fileSink,
+      directoryFilter: configuration.directoryFilter,
       sinkRootAllowed: details.st_flags & UInt32(SF_DATALESS | UF_DATAVAULT) == 0
         && ProtectionPolicy.rule(for: root, homeDirectory: configuration.homeDirectory) == nil
         && !root.split(separator: "/").contains(where: { PackageNames.isPackage(String($0)) }),

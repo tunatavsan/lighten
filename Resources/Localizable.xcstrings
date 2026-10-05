@@ -154,6 +154,22 @@
         }
       }
     },
+    "%lld groups · %lld copies · %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld groups · %lld copies · %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld grup · %lld kopya · %@"
+          }
+        }
+      }
+    },
     "%lld item outcomes could not be verified. Check History and Finder.": {
       "localizations": {
         "en": {
@@ -166,6 +182,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "%lld öğenin sonucu doğrulanamadı. Geçmiş’i ve Finder’ı kontrol edin."
+          }
+        }
+      }
+    },
+    "%lld previous files could not be included. Details": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld previous files could not be included. Details"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki %lld dosya dahil edilemedi. Ayrıntılar"
           }
         }
       }
@@ -1400,6 +1432,22 @@
         }
       }
     },
+    "Clear selection": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear selection"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçimi temizle"
+          }
+        }
+      }
+    },
     "Close and move to Trash": {
       "localizations": {
         "en": {
@@ -1460,6 +1508,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Karşılaştırma tamamlandı"
+          }
+        }
+      }
+    },
+    "Compression differs": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compression differs"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sıkıştırma farklı"
+          }
+        }
+      }
+    },
+    "Copy path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy path"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yolu kopyala"
           }
         }
       }
@@ -1560,6 +1640,22 @@
         }
       }
     },
+    "Desktop": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desktop"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masaüstü"
+          }
+        }
+      }
+    },
     "Details": {
       "localizations": {
         "en": {
@@ -1656,6 +1752,22 @@
         }
       }
     },
+    "Documents": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Documents"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Belgeler"
+          }
+        }
+      }
+    },
     "Done": {
       "localizations": {
         "en": {
@@ -1668,6 +1780,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bitti"
+          }
+        }
+      }
+    },
+    "Download quarantine differs": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download quarantine differs"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İndirme karantinası farklı"
+          }
+        }
+      }
+    },
+    "Download source differs": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download source differs"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İndirme kaynağı farklı"
+          }
+        }
+      }
+    },
+    "Downloads": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloads"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İndirilenler"
           }
         }
       }
@@ -1733,6 +1893,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Diskte yer açmak için Çöp’ü boşaltın."
+          }
+        }
+      }
+    },
+    "Enter a size greater than zero. Changes apply to the next duplicate scan.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a size greater than zero. Changes apply to the next duplicate scan."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sıfırdan büyük bir boyut girin. Değişiklikler bir sonraki kopya taramasında uygulanır."
           }
         }
       }
@@ -1961,6 +2137,102 @@
         }
       }
     },
+    "File changed during verification": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File changed during verification"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya doğrulama sırasında değişti"
+          }
+        }
+      }
+    },
+    "File could not be read": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File could not be read"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya okunamadı"
+          }
+        }
+      }
+    },
+    "File information differs": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File information differs"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya bilgileri farklı"
+          }
+        }
+      }
+    },
+    "File is no longer a regular file": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File is no longer a regular file"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya artık normal bir dosya değil"
+          }
+        }
+      }
+    },
+    "File is outside the current scan scope": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File is outside the current scan scope"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya geçerli tarama kapsamı dışında"
+          }
+        }
+      }
+    },
+    "File or volume is unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File or volume is unavailable"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosyaya veya diske erişilemiyor"
+          }
+        }
+      }
+    },
     "Files": {
       "localizations": {
         "en": {
@@ -1977,18 +2249,18 @@
         }
       }
     },
-    "Files changed or could not be verified. Scan again.": {
+    "Files changed or could not be verified. Review the copies and try again.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Files changed or could not be verified. Scan again."
+            "value": "Files changed or could not be verified. Review the copies and try again."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dosyalar değişti veya doğrulanamadı. Yeniden tarayın."
+            "value": "Dosyalar değişti veya doğrulanamadı. Kopyaları inceleyip tekrar deneyin."
           }
         }
       }
@@ -2006,6 +2278,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulama listesi tamamlanıyor"
+          }
+        }
+      }
+    },
+    "Finder tags differ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finder tags differ"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finder etiketleri farklı"
           }
         }
       }
@@ -2123,6 +2411,38 @@
         }
       }
     },
+    "Hidden folders, app packages, caches, and build outputs are excluded.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hidden folders, app packages, caches, and build outputs are excluded."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gizli klasörler, uygulama paketleri, önbellekler ve derleme çıktıları kapsam dışında."
+          }
+        }
+      }
+    },
+    "Hidden folders, developer folders, caches, and package contents are skipped. Home scans also skip Library.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hidden folders, developer folders, caches, and package contents are skipped. Home scans also skip Library."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gizli klasörler, geliştirici klasörleri, önbellekler ve paket içerikleri atlanır. Ev klasörü taramaları Library klasörünü de atlar."
+          }
+        }
+      }
+    },
     "History": {
       "localizations": {
         "en": {
@@ -2167,6 +2487,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Geçmiş onarıldı. Çöp’teki öğeler geri yüklenebilir."
+          }
+        }
+      }
+    },
+    "Home": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Home"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ana klasör"
           }
         }
       }
@@ -2348,6 +2684,54 @@
         }
       }
     },
+    "Keep": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Koru"
+          }
+        }
+      }
+    },
+    "Keep newest": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep newest"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En yeniyi koru"
+          }
+        }
+      }
+    },
+    "Keep oldest": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep oldest"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En eskiyi koru"
+          }
+        }
+      }
+    },
     "Keep this copy": {
       "localizations": {
         "en": {
@@ -2360,6 +2744,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu kopyayı koru"
+          }
+        }
+      }
+    },
+    "Keep: Newest": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep: Newest"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Koru: En yeni"
+          }
+        }
+      }
+    },
+    "Keep: Oldest": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep: Oldest"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Koru: En eski"
+          }
+        }
+      }
+    },
+    "Keep: Smart": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep: Smart"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Koru: Akıllı"
           }
         }
       }
@@ -2828,6 +3260,22 @@
         }
       }
     },
+    "MB": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MB"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MB"
+          }
+        }
+      }
+    },
     "Map": {
       "localizations": {
         "en": {
@@ -2989,22 +3437,6 @@
         }
       }
     },
-    "Metadata equal": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Metadata equal"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Metadata eşit"
-          }
-        }
-      }
-    },
     "Metadata unknown · review before choosing": {
       "localizations": {
         "en": {
@@ -3017,6 +3449,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Üst veriler bilinmiyor · seçmeden önce inceleyin"
+          }
+        }
+      }
+    },
+    "Minimum duplicate file size (MB)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minimum duplicate file size (MB)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En küçük kopya dosya boyutu (MB)"
+          }
+        }
+      }
+    },
+    "Minimum size": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minimum size"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En küçük boyut"
           }
         }
       }
@@ -3181,6 +3645,22 @@
         }
       }
     },
+    "Next file": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next file"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonraki dosya"
+          }
+        }
+      }
+    },
     "No applications found": {
       "localizations": {
         "en": {
@@ -3310,6 +3790,22 @@
         }
       }
     },
+    "No matching byte-identical copy remains": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching byte-identical copy remains"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Baytları aynı olan eşleşen bir kopya kalmadı"
+          }
+        }
+      }
+    },
     "No matching groups": {
       "localizations": {
         "en": {
@@ -3370,6 +3866,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Takas alanı ayrılmamış; yüzde gösterilemiyor."
+          }
+        }
+      }
+    },
+    "No verified duplicate copies are available for this selection.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No verified duplicate copies are available for this selection."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu seçim için doğrulanmış yinelenen kopya bulunamadı."
           }
         }
       }
@@ -4058,6 +4570,22 @@
         }
       }
     },
+    "Permissions differ": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permissions differ"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İzinler farklı"
+          }
+        }
+      }
+    },
     "Physical application": {
       "localizations": {
         "en": {
@@ -4070,6 +4598,102 @@
           "stringUnit": {
             "state": "translated",
             "value": "Fiziksel uygulama"
+          }
+        }
+      }
+    },
+    "Pictures": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pictures"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resimler"
+          }
+        }
+      }
+    },
+    "Prefer a folder…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prefer a folder…"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir klasörü tercih et…"
+          }
+        }
+      }
+    },
+    "Prefer folder:": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prefer folder:"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tercih edilen klasör:"
+          }
+        }
+      }
+    },
+    "Prefer this folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prefer this folder"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu klasörü tercih et"
+          }
+        }
+      }
+    },
+    "Previous copies could not be verified. Review the files or scan again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous copies could not be verified. Review the files or scan again."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki kopyalar doğrulanamadı. Dosyaları inceleyin veya yeniden tarayın."
+          }
+        }
+      }
+    },
+    "Previous file": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous file"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki dosya"
           }
         }
       }
@@ -4122,18 +4746,18 @@
         }
       }
     },
-    "Previous result. Scan again before selecting copies.": {
+    "Previous result. Selecting copies verifies these files again.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Previous result. Scan again before selecting copies."
+            "value": "Previous result. Selecting copies verifies these files again."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Önceki sonuç. Kopyaları seçmeden önce yeniden tarayın."
+            "value": "Önceki sonuç. Kopyaları seçmek bu dosyaları yeniden doğrular."
           }
         }
       }
@@ -4150,6 +4774,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Önceki tarama görüntüleri Space’in hızlı açılmasını sağlar. Bunları temizlemek dosyalarınızı kaldırmaz."
+          }
+        }
+      }
+    },
+    "Previously verified copy": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previously verified copy"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceden doğrulanmış kopya"
           }
         }
       }
@@ -4251,6 +4891,22 @@
         }
       }
     },
+    "Quick Look": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quick Look"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hızlı Bakış"
+          }
+        }
+      }
+    },
     "RSS": {
       "localizations": {
         "en": {
@@ -4311,6 +4967,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Yakın zamanda değişen öğeler korunur. Finder’da inceleyin."
+          }
+        }
+      }
+    },
+    "Reduce all to one": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reduce all to one"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tümünü tek kopyaya indir"
           }
         }
       }
@@ -4958,6 +5630,22 @@
         }
       }
     },
+    "Scan location": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scan location"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tarama konumu"
+          }
+        }
+      }
+    },
     "Scan to inspect candidate areas": {
       "localizations": {
         "en": {
@@ -5211,22 +5899,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Uygulamaya özel doğrulanmış kanıtla otomatik seçildi."
-          }
-        }
-      }
-    },
-    "Selected copy": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Selected copy"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Seçilen kopya"
           }
         }
       }
@@ -5565,6 +6237,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Küçük dosyalar özetlenir. Bunun yerine klasörlerini seçin."
+          }
+        }
+      }
+    },
+    "Smart": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Smart"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akıllı"
           }
         }
       }
@@ -7163,6 +7851,22 @@
         }
       }
     },
+    "Trash": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trash"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çöp"
+          }
+        }
+      }
+    },
     "Trash items have not freed disk space.": {
       "localizations": {
         "en": {
@@ -7271,6 +7975,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Birimin kullanılan alanı"
+          }
+        }
+      }
+    },
+    "Verified copy": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verified copy"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Doğrulanmış kopya"
+          }
+        }
+      }
+    },
+    "Verifying previous copies": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifying previous copies"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki kopyalar doğrulanıyor"
           }
         }
       }

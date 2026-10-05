@@ -3,7 +3,7 @@ import Foundation
 import LightenKit
 
 extension Bench {
-  static func duplicates(root: String, timeout: Double) async -> [String: Any] {
+  static func duplicates(root: String, timeout: Double, dryPlan: Bool = false) async -> [String: Any] {
     let before = ProcessSample.now()
     let consumer = Task { () throws -> DuplicateReport in
       for try await event in DuplicateService().events(rootPath: root) {
@@ -15,7 +15,8 @@ extension Bench {
     defer { timer.cancel() }
     do {
       let report = try await consumer.value
-      var result = common(engine: "duplicates", root: root, before: before, after: ProcessSample.now())
+      let scanFinished = ProcessSample.now()
+      var result = common(engine: "duplicates", root: root, before: before, after: scanFinished)
       result["completed"] = true
       result["partial"] = report.partial
       result["groups"] = report.groups.count
@@ -25,16 +26,88 @@ extension Bench {
       var bytes: Int64 = 0
       var compatibleBytes: Int64 = 0
       var unknownMembers = 0
+      var reportOnlyGroups = 0
       for group in report.groups {
         bytes += group.logicalBytes * Int64(max(0, group.members.count - 1))
         let compatible = Dictionary(grouping: group.members.compactMap(\.compatibilityID), by: { $0 })
+        if !compatible.values.contains(where: { $0.count >= 2 }) { reportOnlyGroups += 1 }
         compatibleBytes += compatible.values.reduce(0) { $0 + group.logicalBytes * Int64(max(0, $1.count - 1)) }
         unknownMembers += group.members.filter { $0.eligibility == .metadataUnknown }.count
       }
       result["duplicateLogicalBytes"] = bytes
       result["metadataCompatibleLogicalBytes"] = compatibleBytes
       result["metadataUnknownMembers"] = unknownMembers
+      result["reportOnlyGroupCount"] = reportOnlyGroups
+      result["actionableCompatibleLogicalBytes"] = compatibleBytes
+      result["groupRows"] = report.groups.map { group in
+        [
+          "logicalBytes": group.logicalBytes,
+          "members": group.members.map { member -> [String: Any] in
+            [
+              "path": member.entry.path, "eligibility": member.eligibility.rawValue,
+              "compatibilityID": member.compatibilityID?.uuidString as Any? ?? NSNull(),
+              "warnings": member.metadataWarnings.map(\.rawValue),
+            ]
+          },
+        ] as [String: Any]
+      }
       result["actionPlanBuilt"] = false
+      guard dryPlan else { return result }
+      let planningStarted = ProcessSample.now()
+      let service = DuplicateService()
+      var dryPlanReportOnlyGroups = 0
+      var plannedLogicalBytes: Int64 = 0
+      var plannedTargets = 0
+      var planFailures: [[String: Any]] = []
+      var dryPlanGroups: [[String: Any]] = []
+      for group in report.groups {
+        let eligible = group.members.filter { $0.eligibility == .eligible && $0.compatibilityID != nil }
+        let subsets = Dictionary(grouping: eligible, by: \.compatibilityID).values
+          .filter { $0.count > 1 }
+          .sorted { ($0.map { $0.entry.path }.min() ?? "") < ($1.map { $0.entry.path }.min() ?? "") }
+        var groupTargets = 0
+        var refusalReasons: [String] = []
+        if subsets.isEmpty {
+          refusalReasons = Array(Set(group.members.map { $0.eligibility.rawValue })).sorted()
+        }
+        for subset in subsets {
+          let ordered = subset.sorted { $0.entry.path < $1.entry.path }
+          let keeper = ordered[0]
+          let targets = Array(ordered.dropFirst())
+          do {
+            let plan = try await service.makePlan(
+              report: report, groupID: group.id, keeperID: keeper.id, targetIDs: Set(targets.map(\.id)))
+            let identities = plan.items.compactMap { $0.inventory.first?.identity }
+            guard identities.count == plan.items.count else { throw DuplicateFailure.unavailable }
+            groupTargets += plan.items.count
+            plannedTargets += plan.items.count
+            plannedLogicalBytes += identities.reduce(Int64(0)) { $0 + $1.logicalBytes }
+          } catch is CancellationError { throw CancellationError() } catch {
+            let reason = String(describing: error)
+            refusalReasons.append(reason)
+            planFailures.append([
+              "keeperPath": keeper.entry.path, "targetPaths": targets.map { $0.entry.path },
+              "reason": reason,
+            ])
+          }
+        }
+        if groupTargets == 0 { dryPlanReportOnlyGroups += 1 }
+        dryPlanGroups.append([
+          "memberPaths": group.members.map { $0.entry.path },
+          "attemptedSubsetCount": subsets.count, "plannedTargetCount": groupTargets,
+          "reportOnly": groupTargets == 0, "refusalReasons": Array(Set(refusalReasons)).sorted(),
+        ])
+      }
+      result["dryPlanReportOnlyGroupCount"] = dryPlanReportOnlyGroups
+      result["dryPlanReportOnlyGroupRatio"] =
+        report.groups.isEmpty ? 0.0 : Double(dryPlanReportOnlyGroups) / Double(report.groups.count)
+      result["plannedLogicalBytes"] = plannedLogicalBytes
+      result["plannedTargetCount"] = plannedTargets
+      result["dryPlanFailures"] = planFailures
+      result["dryPlanGroups"] = dryPlanGroups
+      result["dryPlanSeconds"] = seconds(from: planningStarted.wall, to: ProcessSample.now().wall)
+      result["dryPlanCompleted"] = true
+      result["actionPlanBuilt"] = plannedTargets > 0
       return result
     } catch {
       var result = common(engine: "duplicates", root: root, before: before, after: ProcessSample.now())

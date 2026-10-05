@@ -605,7 +605,9 @@ func relatedMetadataAndReceiptSymlinksStayUncertain() async throws {
   try FileManager.default.createSymbolicLink(
     atPath: contents + "/Info.plist",
     withDestinationPath: external)
-  let service = RelatedDataService(homeDirectory: fixture.home, applicationRoots: [appRoot])
+  let service = RelatedDataService(
+    homeDirectory: fixture.home, applicationRoots: [appRoot],
+    packageActivity: { _ in ApplicationActivity(state: .clearObservedProcesses) })
   #expect(!service.inventory().complete)
   let unsafeMetadata = try #require((await service.discover()).first { $0.path == related })
   #expect(unsafeMetadata.classification == .uncertain && !unsafeMetadata.canSelect)

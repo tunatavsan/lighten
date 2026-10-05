@@ -9,7 +9,7 @@ struct DescriptorScan {
   let homeDirectory: String
 
   func run(
-    rootPath: String, immediateChild: String?, progress: (@Sendable (Int, String) -> Void)?
+    rootPath: String, immediateChild: String?, metadataOnly: Bool = false, progress: (@Sendable (Int, String) -> Void)?
   ) throws -> ScanSnapshot {
     let rootIdentity = try DescriptorFileSystem.identity(at: rootPath)
     guard rootIdentity.kind == .directory else { throw ScanFailure.rootNotDirectory }
@@ -42,7 +42,8 @@ struct DescriptorScan {
       // The automaton matches the same rules case-folded, a superset of ProtectionPolicy.
       let protected = automaton.scanMatch(state, path: path, homeDirectory: homeDirectory) != nil
       let genericallyProtected = automaton.match(state) != nil
-      let found = issues(path: path, identity: identity, readable: readable, protected: genericallyProtected)
+      var found = issues(path: path, identity: identity, readable: readable, protected: genericallyProtected)
+      if metadataOnly, parentID != nil, identity.kind == .directory { found.append(.notTraversed) }
       let id = UUID()
       entries.append(
         ScanEntry(id: id, parentID: parentID, path: path, identity: identity, issues: found, readable: readable))

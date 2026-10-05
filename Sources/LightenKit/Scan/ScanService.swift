@@ -26,11 +26,13 @@ public struct ScanService: Sendable {
     }
   }
 
-  public func scanImmediateChild(parentPath: String, name: String) async throws -> ScanSnapshot {
+  public func scanImmediateChild(parentPath: String, name: String, metadataOnly: Bool = false) async throws
+    -> ScanSnapshot
+  {
     guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\0")
     else { throw FileSystemFailure.invalidPath }
     let task = Task.detached {
-      try await performScan(rootPath: parentPath, immediateChild: name, progress: nil)
+      try await performScan(rootPath: parentPath, immediateChild: name, metadataOnly: metadataOnly, progress: nil)
     }
     return try await withTaskCancellationHandler {
       try await task.value
@@ -57,12 +59,12 @@ public struct ScanService: Sendable {
   }
 
   private func performScan(
-    rootPath: String, immediateChild: String?,
+    rootPath: String, immediateChild: String?, metadataOnly: Bool = false,
     progress: (@Sendable (Int, String) -> Void)?
   ) async throws -> ScanSnapshot {
     if attributes is DescriptorAttributeSource {
       return try DescriptorScan(homeDirectory: homeDirectory).run(
-        rootPath: rootPath, immediateChild: immediateChild, progress: progress)
+        rootPath: rootPath, immediateChild: immediateChild, metadataOnly: metadataOnly, progress: progress)
     }
     let rootIdentity = try await attributes.inspect(at: rootPath).identity
     guard rootIdentity.kind == .directory else { throw ScanFailure.rootNotDirectory }
@@ -88,6 +90,7 @@ public struct ScanService: Sendable {
         if identity.kind == .other { issues.append(.unknownMetadata) }
         if identity.flags & UInt32(SF_DATALESS | UF_DATAVAULT) != 0 { issues.append(.dataless) }
         if Self.isPackage(path) || Self.isInsidePackage(path) { issues.append(.packageBoundary) }
+        if metadataOnly, parentID != nil, identity.kind == .directory { issues.append(.notTraversed) }
       }
       let id = UUID()
       indexByID[id] = entries.count

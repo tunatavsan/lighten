@@ -61,14 +61,15 @@ private actor PlanGate {
     try Data("same".utf8).write(to: URL(fileURLWithPath: root + "/" + name))
   }
   var report: DuplicateReport?
-  for try await event in DuplicateService().events(rootPath: root) {
+  let service = DuplicateService(scope: DuplicateScanScope(minimumBytes: 1, homeDirectory: root))
+  for try await event in service.events(rootPath: root) {
     if case .completed(let value) = event { report = value }
   }
   let found = try #require(report)
   let group = try #require(found.groups.first)
   let keeper = try #require(group.members.first)
   let target = try #require(group.members.first { $0.id != keeper.id })
-  let validPlan = try await DuplicateService().makePlan(
+  let validPlan = try await service.makePlan(
     report: found, groupID: group.id, keeperID: keeper.id, targetIDs: [target.id])
   let gate = PlanGate()
   let domain = "LightenQA." + UUID().uuidString
@@ -76,6 +77,7 @@ private actor PlanGate {
   defer { defaults.removePersistentDomain(forName: domain) }
   let store = DuplicateStore(
     planBuilder: { _, _ in try await gate.next() }, preferences: RemovalPreferences(defaults: defaults),
+    duplicatePreferences: DuplicatePreferences(defaults: defaults, persistentDomainName: domain),
     pictures: ResultPictureStore(directory: root + "/results", maximumBytes: 0))
   let trashDirectory = root + "/trash"
   try FileManager.default.createDirectory(atPath: trashDirectory, withIntermediateDirectories: true)
@@ -86,7 +88,6 @@ private actor PlanGate {
   store.report = found
   store.tool.phase = .ready
   store.chooseKeeper(keeper.id, for: group, actions: actions)
-  store.toggleTarget(target.id, in: group, actions: actions)
 
   let staleResult = Task { await store.prepare(actions: actions) }
   await gate.waitForRequest(1)
@@ -132,6 +133,7 @@ private actor PlanGate {
   let domain: String
   let defaults: UserDefaults
   let preferences: RemovalPreferences
+  let duplicatePreferences: DuplicatePreferences
   var pictures: ResultPictureStore { ResultPictureStore(directory: root + "/results") }
 
   init() throws {
@@ -142,6 +144,7 @@ private actor PlanGate {
     domain = "LightenQA." + UUID().uuidString
     defaults = try #require(UserDefaults(suiteName: domain))
     preferences = RemovalPreferences(defaults: defaults)
+    duplicatePreferences = DuplicatePreferences(defaults: defaults, persistentDomainName: domain)
   }
 
   func remove() {
@@ -262,7 +265,8 @@ private final class DuplicatePictureIOGate: Sendable {
     planBuilder: { _, _ in
       planCalls.withLock { $0 += 1 }
       throw GateFailure.injected
-    }, preferences: fixture.preferences, pictures: fixture.pictures, events: { scans.next($0) })
+    }, preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures,
+    events: { scans.next($0) })
   store.open()
   await store.waitForPicture()
   store.open()
@@ -288,7 +292,7 @@ private final class DuplicatePictureIOGate: Sendable {
   let old = ResultPicture(
     observedAt: Date(timeIntervalSince1970: 1_700_000_000), content: DuplicatePicture(fixture.report()))
   let store = DuplicateStore(
-    preferences: fixture.preferences, pictures: fixture.pictures,
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures,
     loadPicture: {
       io.block()
       return old
@@ -310,7 +314,7 @@ private final class DuplicatePictureIOGate: Sendable {
   let group = try #require(fresh.groups.first)
   let keeper = try #require(group.members.first)
   store.chooseKeeper(keeper.id, for: group, actions: fixture.actions())
-  #expect(store.keepers[group.id] == keeper.id)
+  #expect(store.keepers.isEmpty)
 }
 
 @Test("Ordered duplicate saves retain the newest scan when an older write stalls")
@@ -323,7 +327,7 @@ private final class DuplicatePictureIOGate: Sendable {
   let calls = Mutex(0)
   let pictures = fixture.pictures
   let store = DuplicateStore(
-    preferences: fixture.preferences, pictures: pictures,
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: pictures,
     savePicture: { picture in
       let first = calls.withLock {
         $0 += 1
@@ -357,7 +361,9 @@ private final class DuplicatePictureIOGate: Sendable {
     observedAt: Date(timeIntervalSince1970: 1_700_000_000), content: DuplicatePicture(fixture.report()))
   try fixture.pictures.save(old, named: "duplicates")
   let scans = DuplicateEventGate()
-  let store = DuplicateStore(preferences: fixture.preferences, pictures: fixture.pictures, events: { scans.next($0) })
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures,
+    events: { scans.next($0) })
   store.startScan(folder: fixture.root)
   await scans.waitForRequest(1)
   if failed {
@@ -378,7 +384,9 @@ private final class DuplicatePictureIOGate: Sendable {
   let fixture = try DuplicatePictureFixture()
   defer { fixture.remove() }
   let scans = DuplicateEventGate()
-  let store = DuplicateStore(preferences: fixture.preferences, pictures: fixture.pictures, events: { scans.next($0) })
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures,
+    events: { scans.next($0) })
   store.startScan(folder: fixture.root)
   await scans.waitForRequest(1)
   store.startScan(folder: fixture.root)
@@ -400,14 +408,17 @@ private final class DuplicatePictureIOGate: Sendable {
     ResultPicture(observedAt: Date(timeIntervalSince1970: 1_700_000_000), content: DuplicatePicture(fixture.report())),
     named: "duplicates")
   let scans = DuplicateEventGate()
-  let store = DuplicateStore(preferences: fixture.preferences, pictures: fixture.pictures, events: { scans.next($0) })
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures,
+    events: { scans.next($0) })
   store.startScan(folder: fixture.root)
   await scans.waitForRequest(1)
   scans.complete(0, report: fixture.report(names: []))
   await store.waitForScan()
   await store.waitForPictureSaves()
   let reopened = DuplicateStore(
-    preferences: fixture.preferences, pictures: fixture.pictures, events: { scans.next($0) })
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures,
+    events: { scans.next($0) })
   reopened.open()
   await reopened.waitForPicture()
   #expect(reopened.picture?.content.groups.isEmpty == true && reopened.picture?.observedAt == store.scannedAt)
@@ -421,7 +432,8 @@ private final class DuplicatePictureIOGate: Sendable {
   let old = ResultPicture(
     observedAt: Date(timeIntervalSince1970: 1_700_000_000), content: DuplicatePicture(fixture.report()))
   try fixture.pictures.save(old, named: "duplicates")
-  let store = DuplicateStore(preferences: fixture.preferences, pictures: fixture.pictures)
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
   store.open()
   await store.waitForPicture()
   let item = ActionDisplayItem(
@@ -435,7 +447,8 @@ private final class DuplicatePictureIOGate: Sendable {
   store.applyDisplayChange(ActionDisplayChange(kind: .restored, items: [item]))
   await store.waitForPictureSaves()
   #expect(store.picture?.content == old.content && store.report == nil)
-  let reopened = DuplicateStore(preferences: fixture.preferences, pictures: fixture.pictures)
+  let reopened = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
   reopened.open()
   await reopened.waitForPicture()
   #expect(reopened.picture?.content == old.content && reopened.report == nil && reopened.targets.isEmpty)
@@ -452,7 +465,7 @@ private final class DuplicatePictureIOGate: Sendable {
   defer { io.release() }
   let scans = DuplicateEventGate()
   let store = DuplicateStore(
-    preferences: fixture.preferences, pictures: fixture.pictures,
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures,
     loadPicture: {
       io.block()
       return old
@@ -477,9 +490,10 @@ private final class DuplicatePictureIOGate: Sendable {
   let fixture = try DuplicatePictureFixture()
   defer { fixture.remove() }
   for name in ["a", "b"] {
-    try Data("same".utf8).write(to: URL(fileURLWithPath: fixture.root + "/" + name))
+    try Data(repeating: 7, count: 2 * 1024 * 1024).write(to: URL(fileURLWithPath: fixture.root + "/" + name))
   }
-  let store = DuplicateStore(preferences: fixture.preferences, pictures: fixture.pictures)
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
   store.startScan(folder: fixture.root, actions: fixture.actions())
   await store.waitForScan()
   await store.waitForPictureSaves()
@@ -487,8 +501,265 @@ private final class DuplicatePictureIOGate: Sendable {
   #expect(report.groups.count == 1 && store.tool.phase == .ready && store.picture == nil)
   let saved = try #require(fixture.pictures.load(DuplicatePicture.self, named: "duplicates"))
   #expect(saved.content == DuplicatePicture(report) && saved.observedAt == store.scannedAt)
-  let reopened = DuplicateStore(preferences: fixture.preferences, pictures: fixture.pictures)
+  let reopened = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
   reopened.open()
   await reopened.waitForPicture()
   #expect(reopened.picture?.content == saved.content && reopened.report == nil && !reopened.tool.allowsPreparation)
+}
+
+private actor DuplicateObservationGate {
+  private var request: CheckedContinuation<DuplicateReport, Error>?
+  private var arrival: CheckedContinuation<Void, Never>?
+  private var received = false
+
+  func observe(_ picture: DuplicatePicture) async throws -> DuplicateReport {
+    try await withCheckedThrowingContinuation { continuation in
+      request = continuation
+      received = true
+      arrival?.resume()
+      arrival = nil
+    }
+  }
+
+  func waitForArrival() async {
+    if received { return }
+    await withCheckedContinuation { arrival = $0 }
+  }
+
+  func finish(_ report: DuplicateReport) {
+    request?.resume(returning: report)
+    request = nil
+  }
+}
+
+@MainActor private func selectionReport(
+  fixture: DuplicatePictureFixture, groupCount: Int = 1, mixedSubsets: Bool = false
+) -> DuplicateReport {
+  let groups = (0..<groupCount).map { index in
+    let firstSubset = UUID()
+    let secondSubset = UUID()
+    let members = (0..<(mixedSubsets ? 5 : 3)).map { member in
+      DuplicateMember(
+        entry: ScanEntry(
+          parentID: nil, path: fixture.root + "/group-\(index)/\(member)",
+          identity: FileIdentity(
+            device: 1, inode: UInt64(index * 10 + member + 1), changeSeconds: 1, changeNanoseconds: 0,
+            logicalBytes: 2_000_000, allocatedBytes: 2_000_000, linkCount: 1, flags: 0, kind: .regular,
+            modificationSeconds: Int64(member), modificationNanoseconds: 0),
+          issues: [], readable: true),
+        eligibility: mixedSubsets && member == 4 ? .metadataUnknown : .eligible,
+        compatibilityID: mixedSubsets && member == 4 ? nil : member < 2 ? firstSubset : secondSubset)
+    }
+    return DuplicateGroup(logicalBytes: 2_000_000, members: members)
+  }
+  return DuplicateReport(
+    snapshot: ScanSnapshot(
+      rootPath: fixture.root, volumeDevice: 1, entries: groups.flatMap { $0.members.map(\.entry) }, nodes: []),
+    groups: groups, skippedCount: 0, partial: false, comparisonCount: groups.count)
+}
+
+@Test("One explicit action selects one hundred groups while discovery leaves every copy unselected")
+@MainActor func duplicateStoreBulkSelectionIsExplicit() async throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  let scans = DuplicateEventGate()
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences,
+    pictures: fixture.pictures, events: { scans.next($0) })
+  let report = selectionReport(fixture: fixture, groupCount: 100, mixedSubsets: true)
+  store.startScan(folder: fixture.root)
+  await scans.waitForRequest(1)
+  scans.complete(0, report: report)
+  await store.waitForScan()
+  #expect(store.targets.isEmpty && store.keepers.isEmpty)
+  let actions = fixture.actions()
+  store.reduceToOne(actions: actions)
+  #expect(store.selectedGroupCount == 100 && store.selectedCopyCount == 200)
+  #expect(store.selectedLogicalBytes == 400_000_000)
+  #expect(store.keepers.count == 200 && Set(store.keepers.values).isDisjoint(with: store.targets))
+  store.clearSelection(actions: actions)
+  #expect(store.targets.isEmpty && store.groupSelections.isEmpty)
+  store.selectAll(actions: actions)
+  #expect(store.selectedCopyCount == 200 && scans.count == 1)
+  await store.waitForPictureSaves()
+}
+
+@Test("Changing a keeper preserves the independent keeper and targets of another compatible subset")
+@MainActor func duplicateStoreKeeperIsSubsetSpecific() throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  let report = selectionReport(fixture: fixture, mixedSubsets: true)
+  let group = try #require(report.groups.first)
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
+  store.report = report
+  store.tool.phase = .ready
+  let actions = fixture.actions()
+  store.reduceToOne(actions: actions)
+  let secondSubset = try #require(group.members[2].compatibilityID)
+  let secondKeeper = try #require(store.keepers[secondSubset])
+  let secondTargets = store.targets.intersection(Set(group.members[2...3].map(\.id)))
+  store.chooseKeeper(group.members[0].id, for: group, actions: actions)
+  #expect(store.keepers[secondSubset] == secondKeeper)
+  #expect(store.targets.intersection(Set(group.members[2...3].map(\.id))) == secondTargets)
+  #expect(store.targets.contains(group.members[1].id) && !store.targets.contains(group.members[0].id))
+  #expect(store.groupSelections.count == 2 && store.selectedGroupCount == 1)
+  store.chooseKeeper(group.members[4].id, for: group, actions: actions)
+  #expect(store.keepers.count == 2 && !store.targets.contains(group.members[4].id))
+}
+
+@Test("Clearing a selection invalidates a held preparation even when its plan completes later")
+@MainActor func duplicateClearInvalidatesHeldPreparation() async throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  let gate = PlanGate()
+  let report = selectionReport(fixture: fixture, mixedSubsets: true)
+  let store = DuplicateStore(
+    planBuilder: { _, _ in try await gate.next() }, preferences: fixture.preferences,
+    duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
+  store.report = report
+  store.tool.phase = .ready
+  let actions = fixture.actions()
+  store.reduceToOne(actions: actions)
+  let preparation = Task { await store.prepare(actions: actions) }
+  await gate.waitForRequest(1)
+  store.clearSelection(actions: actions)
+  await gate.finish(.failure(GateFailure.injected))
+  await preparation.value
+  #expect(!store.preparing && store.targets.isEmpty && store.keepers.isEmpty)
+  #expect(actions.pending == nil && store.message == nil)
+}
+
+@Test("Late cold verification cannot restore authority after cancellation or a newer scan", arguments: [false, true])
+@MainActor func duplicateColdVerificationIsGenerationGuarded(newScan: Bool) async throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  let original = selectionReport(fixture: fixture, mixedSubsets: true)
+  let picture = ResultPicture(observedAt: Date(timeIntervalSince1970: 100), content: DuplicatePicture(original))
+  try fixture.pictures.save(picture, named: "duplicates")
+  let observation = DuplicateObservationGate()
+  let scans = DuplicateEventGate()
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures,
+    events: { scans.next($0) }, observePicture: { try await observation.observe($0) })
+  store.open()
+  await store.waitForPicture()
+  let actions = fixture.actions()
+  store.reduceToOne(actions: actions)
+  let verification = Task { await store.waitForScan() }
+  await observation.waitForArrival()
+  #expect(store.checkingPreviousResult && store.report == nil && store.targets.isEmpty)
+  if newScan {
+    store.startScan(folder: fixture.root, actions: actions)
+    await scans.waitForRequest(1)
+    let fresh = fixture.report(names: [])
+    scans.complete(0, report: fresh)
+    await store.waitForScan()
+    #expect(store.report?.snapshot.runID == fresh.snapshot.runID)
+  } else {
+    store.cancelScan()
+    #expect(store.picture?.content == picture.content && store.report == nil)
+  }
+  await observation.finish(original)
+  await verification.value
+  await store.waitForPictureSaves()
+  #expect(!store.checkingPreviousResult && store.targets.isEmpty && store.keepers.isEmpty)
+  #expect(store.report?.snapshot.runID != original.snapshot.runID)
+  #expect(actions.pending == nil)
+}
+
+@Test("A completed operation retains other groups and supports another explicit selection without scanning")
+@MainActor func duplicateRemainingGroupsStaySelectable() async throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  let report = selectionReport(fixture: fixture, groupCount: 2, mixedSubsets: true)
+  let store = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
+  store.report = report
+  store.tool.phase = .ready
+  let group = report.groups[0]
+  let removed = group.members.prefix(4)
+  let items = removed.map { member in
+    ActionDisplayItem(
+      planID: UUID(), itemID: member.id, path: member.entry.path, identity: member.entry.identity,
+      size: ObservedPlanSize(
+        logical: ByteAggregate(knownLowerBound: 2_000_000, completeTotal: 2_000_000), allocated: nil),
+      label: "copy", returnedTrashPath: nil)
+  }
+  store.applyDisplayChange(ActionDisplayChange(kind: .applied, items: items))
+  #expect(store.report?.groups.count == 1 && !store.needsRescan)
+  store.reduceToOne(actions: fixture.actions())
+  #expect(store.selectedGroupCount == 1 && store.selectedCopyCount == 2)
+  #expect(store.groupSelections.allSatisfy { $0.groupID == report.groups[1].id })
+  store.applyDisplayChange(ActionDisplayChange(kind: .restored, items: items))
+  #expect(store.report?.groups.count == 2)
+  await store.waitForPictureSaves()
+}
+
+@Test(
+  "Previous display data becomes selectable only after fresh native evidence, without a root scan",
+  arguments: [Int64(1), DuplicateScanScope.defaultMinimumBytes])
+@MainActor func duplicateColdRecheckProducesFreshProof(minimumBytes: Int64) async throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  fixture.duplicatePreferences.minimumBytes = minimumBytes
+  let payloadCount = minimumBytes == 1 ? 4 : 2 * 1024 * 1024
+  for name in ["a", "b", "c"] {
+    try Data(repeating: 7, count: payloadCount).write(to: URL(fileURLWithPath: fixture.root + "/" + name))
+  }
+  let original = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
+  original.startScan(folder: fixture.root)
+  await original.waitForScan()
+  await original.waitForPictureSaves()
+  let oldReport = try #require(original.report)
+  let scans = DuplicateEventGate()
+  let reopened = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures,
+    events: { scans.next($0) })
+  reopened.open()
+  await reopened.waitForPicture()
+  let actions = fixture.actions()
+  #expect(reopened.report == nil && reopened.targets.isEmpty)
+  reopened.reduceToOne(actions: actions)
+  await reopened.waitForScan()
+  #expect(reopened.picture == nil && reopened.report?.snapshot.runID != oldReport.snapshot.runID)
+  #expect(reopened.selectedGroupCount == 1 && reopened.selectedCopyCount == 2)
+  #expect(reopened.report?.refusals.isEmpty == true)
+  #expect(reopened.scannedAt == original.scannedAt && scans.count == 0)
+  await reopened.prepare(actions: actions)
+  let plan = try #require(actions.pending?.plan)
+  #expect(plan.items.count == 2 && plan.items.allSatisfy { $0.duplicateProof != nil })
+  #expect(Set(plan.items.map(\.sourcePath)).count == 2)
+  await reopened.waitForPictureSaves()
+}
+
+@Test("A changed previous copy cannot turn cached display into a removal plan")
+@MainActor func duplicateChangedColdCopiesStayUnselected() async throws {
+  let fixture = try DuplicatePictureFixture()
+  defer { fixture.remove() }
+  for name in ["a", "b"] {
+    try Data(repeating: 7, count: 2 * 1024 * 1024).write(to: URL(fileURLWithPath: fixture.root + "/" + name))
+  }
+  let original = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
+  original.startScan(folder: fixture.root)
+  await original.waitForScan()
+  await original.waitForPictureSaves()
+  try Data(repeating: 8, count: 2 * 1024 * 1024).write(to: URL(fileURLWithPath: fixture.root + "/b"))
+  let reopened = DuplicateStore(
+    preferences: fixture.preferences, duplicatePreferences: fixture.duplicatePreferences, pictures: fixture.pictures)
+  reopened.open()
+  await reopened.waitForPicture()
+  let actions = fixture.actions()
+  reopened.reduceToOne(actions: actions)
+  await reopened.waitForScan()
+  #expect(reopened.report?.groups.isEmpty == true)
+  #expect(Set(reopened.report?.refusals.map(\.path) ?? []) == [fixture.root + "/a", fixture.root + "/b"])
+  #expect(reopened.report?.refusals.allSatisfy { $0.reason == .noLongerDuplicate } == true)
+  #expect(reopened.targets.isEmpty && reopened.groupSelections.isEmpty)
+  await reopened.prepare(actions: actions)
+  #expect(actions.pending == nil)
+  await reopened.waitForPictureSaves()
 }

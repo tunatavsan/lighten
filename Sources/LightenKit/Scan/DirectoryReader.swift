@@ -14,6 +14,7 @@ public final class ScanCounters: Sendable {
   let sinkMetadataUnavailable = Atomic<Int>(0)
   /// Unavailable records that could not be emitted, a subset of the above.
   let sinkOmittedFiles = Atomic<Int>(0)
+  let skippedDirectories = Atomic<Int>(0)
 
   public init() {}
 
@@ -24,6 +25,7 @@ public final class ScanCounters: Sendable {
       "directories": directories.load(ordering: .relaxed), "entries": entries.load(ordering: .relaxed),
       "sinkMetadataUnavailable": sinkMetadataUnavailable.load(ordering: .relaxed),
       "sinkOmittedFiles": sinkOmittedFiles.load(ordering: .relaxed),
+      "skippedDirectories": skippedDirectories.load(ordering: .relaxed),
     ]
   }
 }

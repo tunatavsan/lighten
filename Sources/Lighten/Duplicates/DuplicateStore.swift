@@ -8,9 +8,9 @@ import Synchronization
 final class DuplicateStore: ToolSummaryProviding {
   typealias Events = @Sendable (String) -> AsyncThrowingStream<DuplicateEvent, Error>
   @ObservationIgnored private let userPlanner: PlanService
-  @ObservationIgnored private let preferences: RemovalPreferences
-  @ObservationIgnored private let usesInjectedPlanner: Bool
-  @ObservationIgnored private let events: Events
+  @ObservationIgnored let duplicatePreferences: DuplicatePreferences
+  @ObservationIgnored private let events: Events?
+  @ObservationIgnored private let observePicture: (@Sendable (DuplicatePicture) async throws -> DuplicateReport)?
   @ObservationIgnored private let planBuilder:
     @Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> ActionPlan
   @ObservationIgnored private var scanTask: Task<Void, Never>?
@@ -32,6 +32,7 @@ final class DuplicateStore: ToolSummaryProviding {
   let tool = ToolStore()
   private(set) var picture: ResultPicture<DuplicatePicture>?
   private(set) var scannedAt: Date?
+  private(set) var checkingPreviousResult = false
   @ObservationIgnored private var displayGroups: [UUID: DuplicateGroup] = [:]
   @ObservationIgnored private var removedMembers: [UUID: Set<UUID>] = [:]
   private(set) var displayRevision = 0
@@ -39,15 +40,17 @@ final class DuplicateStore: ToolSummaryProviding {
   init(
     planBuilder: (@Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> ActionPlan)? = nil,
     userPlanner: PlanService = PlanService(), preferences: RemovalPreferences = .shared,
+    duplicatePreferences: DuplicatePreferences = .shared,
     pictures: ResultPictureStore = ResultPictureStore(),
     loadPicture: (@Sendable () -> ResultPicture<DuplicatePicture>?)? = nil,
     savePicture: (@Sendable (ResultPicture<DuplicatePicture>) throws -> Void)? = nil,
-    events: @escaping Events = { DuplicateService().events(rootPath: $0) }
+    events: Events? = nil,
+    observePicture: (@Sendable (DuplicatePicture) async throws -> DuplicateReport)? = nil
   ) {
     self.planBuilder = planBuilder ?? { try await DuplicateService().makePlan(report: $0, selections: $1) }
     self.userPlanner = userPlanner
-    self.preferences = preferences
-    self.usesInjectedPlanner = planBuilder != nil
+    self.duplicatePreferences = duplicatePreferences
+    self.observePicture = observePicture
     self.events = events
     self.loadPicture = loadPicture ?? { pictures.load(DuplicatePicture.self, named: "duplicates") }
     self.savePicture = savePicture ?? { try pictures.save($0, named: "duplicates") }
@@ -68,10 +71,119 @@ final class DuplicateStore: ToolSummaryProviding {
   var presentedPlanID: UUID?
   var needsRescan = false
 
+  var homeDirectory: String { userPlanner.homeDirectory }
+
+  var groupSelections: [DuplicateGroupSelection] {
+    guard picture == nil, let report else { return [] }
+    return report.groups.flatMap { group -> [DuplicateGroupSelection] in
+      let subsetIDs = Set(group.members.compactMap(\.compatibilityID))
+      return subsetIDs.sorted { $0.uuidString < $1.uuidString }.compactMap { subset in
+        guard let keeperID = keepers[subset],
+          group.members.contains(where: {
+            $0.id == keeperID && $0.compatibilityID == subset && $0.eligibility == .eligible
+          })
+        else { return nil }
+        let chosen = Set(
+          group.members.filter {
+            $0.eligibility == .eligible && $0.compatibilityID == subset && targets.contains($0.id)
+              && group.canTarget($0.id, keeperID: keeperID)
+          }.map(\.id))
+        guard !chosen.isEmpty else { return nil }
+        return DuplicateGroupSelection(groupID: group.id, keeperID: keeperID, targetIDs: chosen)
+      }
+    }
+  }
+
+  var selectedGroupCount: Int { Set(groupSelections.map(\.groupID)).count }
+  var selectedCopyCount: Int { groupSelections.reduce(0) { $0 + $1.targetIDs.count } }
+
+  func keeperID(for member: DuplicateMember) -> UUID? {
+    member.compatibilityID.flatMap { keepers[$0] }
+  }
+
+  func clearSelection(actions: ActionStore) {
+    clearPreparation(actions: actions)
+    keepers = [:]
+    targets = []
+  }
+
+  func selectAll(rule: DuplicateSelectionRule = .smart, actions: ActionStore) {
+    reduceToOne(rule: rule, actions: actions)
+  }
+
+  func reduceToOne(rule: DuplicateSelectionRule = .smart, actions: ActionStore) {
+    guard !busy, !actions.busy, !needsRescan else { return }
+    lastActions = actions
+    clearPreparation(actions: actions)
+    if let picture {
+      verifyPreviousResult(picture, rule: rule)
+    } else if tool.phase == .ready, let report {
+      apply(rule: rule, report: report)
+    }
+  }
+
+  private func apply(rule: DuplicateSelectionRule, report: DuplicateReport) {
+    let selections = rule.selections(groups: report.groups, homeDirectory: homeDirectory)
+    keepers = [:]
+    targets = []
+    for selection in selections {
+      if let subset = report.groups.first(where: { $0.id == selection.groupID })?.members.first(where: {
+        $0.id == selection.keeperID
+      })?.compatibilityID {
+        keepers[subset] = selection.keeperID
+        targets.formUnion(selection.targetIDs)
+      }
+    }
+    if selections.isEmpty {
+      message = String(localized: "No verified duplicate copies are available for this selection.")
+    }
+  }
+
+  private func verifyPreviousResult(_ previous: ResultPicture<DuplicatePicture>, rule: DuplicateSelectionRule) {
+    let generation = UUID()
+    scanGeneration = generation
+    pictureWriteGeneration.replace(with: generation)
+    keepers = [:]
+    targets = []
+    cancelled = false
+    checkingPreviousResult = true
+    tool.phase = .scanning
+    let scope = duplicatePreferences.scope(homeDirectory: homeDirectory)
+    let observe: @Sendable (DuplicatePicture) async throws -> DuplicateReport =
+      observePicture ?? {
+        try await DuplicateService(scope: scope).observePicture($0)
+      }
+    scanTask = Task {
+      do {
+        let fresh = try await observe(previous.content)
+        guard scanGeneration == generation, !Task.isCancelled else { return }
+        picture = nil
+        originalPicture = nil
+        hiddenPicturePaths = [:]
+        report = fresh
+        displayGroups = [:]
+        removedMembers = [:]
+        scanned = fresh.snapshot.entries.count
+        compared = fresh.comparisonCount
+        scannedAt = previous.observedAt
+        checkingPreviousResult = false
+        tool.phase = .ready
+        apply(rule: rule, report: fresh)
+        persistPicture()
+      } catch {
+        guard scanGeneration == generation, !Task.isCancelled else { return }
+        checkingPreviousResult = false
+        tool.phase = .idle
+        message = String(localized: "Previous copies could not be verified. Review the files or scan again.")
+      }
+    }
+  }
+
   var selectedLogicalBytes: Int64 {
     guard let report else { return 0 }
+    let selectedIDs = groupSelections.reduce(into: Set<UUID>()) { $0.formUnion($1.targetIDs) }
     return report.groups.reduce(0) { sum, group in
-      let count = group.members.filter { targets.contains($0.id) }.count
+      let count = group.members.filter { selectedIDs.contains($0.id) }.count
       let (bytes, productOverflow) = group.logicalBytes.multipliedReportingOverflow(by: Int64(count))
       let (value, sumOverflow) = sum.addingReportingOverflow(bytes)
       return productOverflow || sumOverflow ? Int64.max : value
@@ -182,14 +294,18 @@ final class DuplicateStore: ToolSummaryProviding {
     keepers = [:]
     targets = []
     needsRescan = false
+    checkingPreviousResult = false
     scanned = 0
     compared = 0
     message = nil
     cancelled = false
     tool.phase = .scanning
+    let stream =
+      events?(folder)
+      ?? DuplicateService(scope: duplicatePreferences.scope(homeDirectory: homeDirectory)).events(rootPath: folder)
     scanTask = Task {
       do {
-        for try await event in events(folder) {
+        for try await event in stream {
           guard scanGeneration == generation else { return }
           switch event {
           case .progress(let scannedCount, let comparedCount):
@@ -231,7 +347,8 @@ final class DuplicateStore: ToolSummaryProviding {
     pictureWriteGeneration.replace(with: scanGeneration)
     if busy {
       cancelled = true
-      tool.phase = .partial
+      tool.phase = checkingPreviousResult ? .idle : .partial
+      checkingPreviousResult = false
       keepers = [:]
       targets = []
       clearPreparation(actions: lastActions)
@@ -272,7 +389,7 @@ final class DuplicateStore: ToolSummaryProviding {
     }
     self.report = DuplicateReport(
       snapshot: report.snapshot, groups: groups, skippedCount: report.skippedCount,
-      partial: report.partial, comparisonCount: report.comparisonCount)
+      partial: report.partial, comparisonCount: report.comparisonCount, refusals: report.refusals)
     targets.subtract(hidden)
     displayRevision += 1
     if change.kind == .applied, !hidden.isEmpty { needsRescan = false }
@@ -334,19 +451,25 @@ final class DuplicateStore: ToolSummaryProviding {
 
   func chooseKeeper(_ id: UUID, for group: DuplicateGroup, actions: ActionStore) {
     guard picture == nil, tool.phase == .ready, !needsRescan, !actions.busy,
-      let group = report?.groups.first(where: { $0.id == group.id }),
-      group.members.contains(where: { $0.id == id })
+      let current = report?.groups.first(where: { $0.id == group.id }),
+      let keeper = current.members.first(where: { $0.id == id && $0.eligibility == .eligible }),
+      let subset = keeper.compatibilityID,
+      current.members.contains(where: { $0.id != id && $0.eligibility == .eligible && $0.compatibilityID == subset })
     else { return }
     lastActions = actions
     clearPreparation(actions: actions)
-    keepers[group.id] = id
-    targets.subtract(group.members.map(\.id))
+    keepers[subset] = id
+    let members = current.members.filter { $0.compatibilityID == subset }
+    targets.subtract(members.map(\.id))
+    targets.formUnion(
+      members.filter { $0.eligibility == .eligible && current.canTarget($0.id, keeperID: id) }.map(\.id))
   }
 
   func toggleTarget(_ id: UUID, in group: DuplicateGroup, actions: ActionStore) {
     guard picture == nil, tool.phase == .ready, !needsRescan, !actions.busy,
-      let group = report?.groups.first(where: { $0.id == group.id }),
-      let keeperID = keepers[group.id], keeperID != id, group.members.contains(where: { $0.id == id })
+      let current = report?.groups.first(where: { $0.id == group.id }),
+      let member = current.members.first(where: { $0.id == id && $0.eligibility == .eligible }),
+      let keeperID = keeperID(for: member), current.canTarget(id, keeperID: keeperID)
     else { return }
     lastActions = actions
     clearPreparation(actions: actions)
@@ -357,65 +480,22 @@ final class DuplicateStore: ToolSummaryProviding {
     lastActions = actions
     guard picture == nil, let report, tool.allowsPreparation, !actions.busy, !needsRescan, !targets.isEmpty
     else { return }
-    if !usesInjectedPlanner {
-      guard let generation = tool.preparation.begin() else { return }
-      defer { tool.preparation.finish(generation) }
-      let chosen = report.groups.flatMap(\.members).filter { targets.contains($0.id) }
-      let selected = targets
-      let outcome = await userPlanner.makeAvailableUserSelectionPlan(
-        selections: chosen.map { member in
-          UserSelection(
-            path: member.entry.path, expectedIdentity: member.entry.identity,
-            observedSize: member.entry.identity.map {
-              ObservedPlanSize(
-                logical: ByteAggregate(knownLowerBound: $0.logicalBytes, completeTotal: $0.logicalBytes),
-                allocated: ByteAggregate(knownLowerBound: $0.allocatedBytes, completeTotal: $0.allocatedBytes))
-            },
-            applicationPackagePaths: ActionStore.observedApplicationPackagePaths(
-              in: report.snapshot.entries.map(\.path), under: member.entry.path))
-        }, kind: preferences.deletionDefault.kind, runID: report.snapshot.runID)
-      guard tool.preparation.accepts(generation), targets == selected,
-        self.report?.snapshot.runID == report.snapshot.runID
-      else { return }
-      guard let plan = outcome.plan else {
-        message = outcome.rejections.map(SpaceText.rejection).joined(separator: "\n")
-        return
-      }
-      let running = await actions.containsRunningApplications(plan)
-      guard tool.preparation.accepts(generation), targets == selected,
-        self.report?.snapshot.runID == report.snapshot.runID
-      else { return }
-      actions.present(
-        plan: plan,
-        items: plan.items.map { item in
-          ActionItemSummary(
-            id: item.id, label: URL(fileURLWithPath: item.sourcePath).lastPathComponent,
-            path: item.sourcePath, reason: String(localized: "Selected copy"),
-            logicalBytes: nil, allocatedBytes: nil, observedSize: item.observedSize)
-        }, rejectedItems: outcome.rejections, hasRunningApplications: running)
-      presentedPlanID = plan.id
-      return
-    }
     guard let generation = tool.preparation.begin() else { return }
     defer {
       if tool.preparation.accepts(generation) { preparationTask = nil }
       tool.preparation.finish(generation)
     }
     do {
-      let selections = report.groups.compactMap { group -> DuplicateGroupSelection? in
-        guard let keeperID = keepers[group.id] else { return nil }
-        let memberIDs = Set(group.members.map(\.id))
-        let chosen = targets.intersection(memberIDs)
-        guard !chosen.isEmpty else { return nil }
-        return DuplicateGroupSelection(groupID: group.id, keeperID: keeperID, targetIDs: chosen)
-      }
+      let selections = groupSelections
+      guard !selections.isEmpty else { return }
+      let selected = targets
       let task = Task { @concurrent in
         try await planBuilder(report, selections)
       }
       preparationTask = task
       let plan = try await task.value
       guard tool.preparation.accepts(generation),
-        self.report?.snapshot.runID == report.snapshot.runID,
+        self.report?.snapshot.runID == report.snapshot.runID, targets == selected,
         !task.isCancelled
       else { return }
       let entries = Dictionary(uniqueKeysWithValues: report.snapshot.entries.map { ($0.id, $0) })
@@ -431,7 +511,7 @@ final class DuplicateStore: ToolSummaryProviding {
       message = nil
     } catch {
       if tool.preparation.accepts(generation) {
-        message = String(localized: "Files changed or could not be verified. Scan again.")
+        message = String(localized: "Files changed or could not be verified. Review the copies and try again.")
       }
     }
   }

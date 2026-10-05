@@ -20,7 +20,8 @@ private func sinkWrite(_ path: String, bytes: Int) throws {
 }
 
 private func sinkScan(
-  _ root: String, home: String? = nil, min: Int64 = 0, olderThan: Date? = nil
+  _ root: String, home: String? = nil, min: Int64 = 0, olderThan: Date? = nil,
+  directoryFilter: (@Sendable (String) -> Bool)? = nil
 ) async throws -> (ScanRun, [FileFact]) {
   let facts = Mutex<[FileFact]>([])
   let run = try ScanEngine(
@@ -28,10 +29,31 @@ private func sinkScan(
       workers: 4, homeDirectory: home ?? NSHomeDirectory(),
       fileSink: FileSink(minLogicalBytes: min, olderThan: olderThan) { fact in
         facts.withLock { $0.append(fact) }
-      })
+      }, directoryFilter: directoryFilter)
   ).start(root: root)
   await run.waitUntilFinished()
   return (run, facts.withLock { $0 })
+}
+
+@Test func directoryFilterPrunesBothNodeAndPackageInteriorAndRetainsHonestLowerBounds() async throws {
+  let root = try sinkFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try sinkWrite(root + "/kept", bytes: 1)
+  try sinkWrite(root + "/skip/data", bytes: 1000)
+  try sinkWrite(root + "/Tool.bundle/keep", bytes: 200)
+  try sinkWrite(root + "/Tool.bundle/skip/data", bytes: 3000)
+  let (run, facts) = try await sinkScan(root, directoryFilter: { ($0 as NSString).lastPathComponent != "skip" })
+  #expect(facts.map(\.path) == [root + "/kept"])
+  #expect(run.counters.snapshot["skippedDirectories"] == 2)
+  #expect(run.counters.snapshot["directories"] == 2)
+  let measured = try #require(run.tree.item(run.tree.rootID))
+  #expect(measured.partial)
+  #expect(measured.logical.knownLowerBound == 201)
+  #expect(measured.logical.completeTotal == nil)
+  let snapshot = try await ScanService().scanImmediateChild(parentPath: root + "/skip", name: "data")
+  let target = try #require(snapshot.entries.first { $0.path == root + "/skip/data" })
+  let plan = try PlanService().makePlan(snapshot: snapshot, selectedIDs: [target.id])
+  #expect(plan.items.map(\.sourcePath) == [root + "/skip/data"])
 }
 
 private func addedTimestamp(_ path: String) -> FileTimestamp? {

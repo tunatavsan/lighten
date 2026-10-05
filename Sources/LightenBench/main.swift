@@ -8,7 +8,7 @@ import LightenKit
 //   lighten-bench scan --engine old|new --root PATH [--timeout SECONDS] [--workers N] [--sink min=1MB]
 //   lighten-bench apps [--app PATH]
 //   lighten-bench cancel --engine old|new --root PATH [--trials N] [--workers N]
-//   lighten-bench dup --root PATH [--timeout SECONDS]
+//   lighten-bench dup --root PATH [--timeout SECONDS] [--dry-plan]
 //   lighten-bench clean [--home PATH] [--row ID] [--timeout SECONDS]
 //   lighten-bench cache-load|space-open --root PATH [--timeout SECONDS]
 //   lighten-bench fsevents [--root PATH] [--seconds N]
@@ -21,6 +21,10 @@ struct Options {
     var iterator = arguments.makeIterator()
     while let key = iterator.next() {
       guard key.hasPrefix("--") else { continue }
+      if key == "--dry-plan" {
+        values["dry-plan"] = "true"
+        continue
+      }
       values[String(key.dropFirst(2))] = iterator.next() ?? ""
     }
   }
@@ -38,7 +42,7 @@ func usage() -> Never {
              lighten-bench scan --engine old|new --root PATH [--timeout SECONDS] [--workers N] [--sink min=1MB]
              lighten-bench apps [--app PATH]
              lighten-bench cancel --engine old|new --root PATH [--trials N] [--workers N]
-             lighten-bench dup --root PATH [--timeout SECONDS]
+             lighten-bench dup --root PATH [--timeout SECONDS] [--dry-plan]
              lighten-bench clean [--home PATH] [--row ID] [--timeout SECONDS]
              lighten-bench cache-load|space-open --root PATH [--timeout SECONDS] [--workers N]
              lighten-bench fsevents [--root PATH] [--seconds N]
@@ -117,7 +121,9 @@ case "cancel":
   output(result)
 case "dup":
   guard let root = options.string("root") else { usage() }
-  output(await Bench.duplicates(root: root, timeout: options.double("timeout", 600)))
+  output(
+    await Bench.duplicates(
+      root: root, timeout: options.double("timeout", 600), dryPlan: options.string("dry-plan") != nil))
 case "clean":
   output(
     await Bench.clean(

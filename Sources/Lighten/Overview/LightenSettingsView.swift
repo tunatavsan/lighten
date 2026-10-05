@@ -4,6 +4,7 @@ import SwiftUI
 struct LightenSettingsView: View {
   @State private var cacheStore = SpaceStore()
   @State private var removal = RemovalPreferences.shared
+  @State private var duplicates = DuplicatePreferences.shared
   @State private var settingsOpenFailed = false
   @State private var access: FullDiskAccessState?
   var space: SpaceStore?
@@ -40,6 +41,7 @@ struct LightenSettingsView: View {
             .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
           Divider()
         }
+        duplicateSettings
         Label(String(localized: "File access"), systemImage: "hand.raised")
           .font(.system(size: 16, weight: .semibold))
           .foregroundStyle(LightenStyle.accent)
@@ -130,6 +132,35 @@ struct LightenSettingsView: View {
   private func refreshAccess() {
     Task {
       access = await Task.detached { FullDiskAccess.check() }.value
+    }
+  }
+
+  private var duplicateSettings: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(String(localized: "Duplicates")).font(.system(size: 16, weight: .semibold))
+      HStack {
+        Text(String(localized: "Minimum duplicate file size (MB)"))
+        Spacer()
+        TextField(
+          String(localized: "Minimum duplicate file size (MB)"), value: $duplicates.minimumMegabytes,
+          format: .number.precision(.fractionLength(0...6))
+        )
+        .textFieldStyle(.roundedBorder)
+        .frame(width: 110)
+      }
+      Text(
+        String(localized: "Enter a size greater than zero. Changes apply to the next duplicate scan.")
+      )
+      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      Text(
+        String(
+          localized:
+            "Hidden folders, developer folders, caches, and package contents are skipped. Home scans also skip Library."
+        )
+      )
+      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+      .fixedSize(horizontal: false, vertical: true)
+      Divider()
     }
   }
 

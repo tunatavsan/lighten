@@ -9,6 +9,14 @@ private struct CollisionHash: DuplicateHashing {
   func digest(fd: Int32, size: Int64) throws -> Data { Data(repeating: 7, count: 32) }
 }
 
+private final class CountingDuplicateHash: DuplicateHashing {
+  let calls = Mutex(0)
+  func digest(fd: Int32, size: Int64) throws -> Data {
+    calls.withLock { $0 += 1 }
+    return try SHA256DuplicateHashing().digest(fd: fd, size: size)
+  }
+}
+
 private struct ChangingHash: DuplicateHashing {
   let path: String
 
@@ -62,7 +70,9 @@ private func writeDuplicate(_ path: String, bytes: [UInt8] = Array("same fixture
 private func duplicateReport(
   _ root: String, comparator: DuplicateFileComparator = DuplicateFileComparator()
 ) async throws -> DuplicateReport {
-  for try await event in DuplicateService(comparator: comparator).events(rootPath: root) {
+  for try await event in DuplicateService(
+    comparator: comparator, scope: DuplicateScanScope(minimumBytes: 1, homeDirectory: root)
+  ).events(rootPath: root) {
     if case .completed(let report) = event { return report }
   }
   throw DuplicateFailure.unavailable
@@ -75,21 +85,210 @@ private func pair(_ root: String) async throws -> (ScanEntry, ScanEntry, UUID) {
   return (a, b, try #require(snapshot.volumeID))
 }
 
-private func addACL(_ path: String) throws {
+private func addACL(_ path: String, rule: String = "everyone allow read") throws {
   let process = Process()
   process.executableURL = URL(fileURLWithPath: "/bin/chmod")
-  process.arguments = ["+a", "everyone allow read", path]
+  process.arguments = ["+a", rule, path]
   try process.run()
   process.waitUntilExit()
   guard process.terminationStatus == 0 else { throw DuplicateFailure.unavailable }
 }
 
+@Test func duplicateDefaultMinimumUsesDecimalMegabyteAndNeverGroupsEmptyFiles() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  for size in [0, 999_999, 1_000_000] {
+    for name in ["a", "b"] { try writeDuplicate(root + "/\(size)-\(name)", bytes: [UInt8](repeating: 3, count: size)) }
+  }
+  var result: DuplicateReport?
+  for try await event in DuplicateService().events(rootPath: root) {
+    if case .completed(let report) = event { result = report }
+  }
+  let report = try #require(result)
+  #expect(report.groups.count == 1)
+  #expect(report.groups.first?.logicalBytes == DuplicateScanScope.defaultMinimumBytes)
+  #expect(report.snapshot.entries.filter { $0.identity?.kind == .regular }.count == 2)
+  let smallScope = try await duplicateReport(root)
+  #expect(smallScope.groups.count == 2)
+  #expect(smallScope.groups.allSatisfy { $0.logicalBytes > 0 })
+}
+
+@Test func informationalMetadataDifferencesStayEligibleAndHaveWarnings() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try writeDuplicate(root + "/a")
+  try writeDuplicate(root + "/b")
+  for name in [
+    "com.apple.quarantine", "com.apple.metadata:kMDItemWhereFroms", "com.apple.metadata:_kMDItemUserTags",
+    "com.apple.decmpfs",
+  ] {
+    let value = Array("metadata fixture".utf8)
+    #expect(setxattr(root + "/b", name, value, value.count, 0, 0) == 0)
+  }
+  #expect(chmod(root + "/a", 0o644) == 0)
+  #expect(chmod(root + "/b", 0o600) == 0)
+  let report = try await duplicateReport(root)
+  let group = try #require(report.groups.first)
+  #expect(group.members.allSatisfy { $0.eligibility == .eligible })
+  #expect(
+    group.members.allSatisfy {
+      Set($0.metadataWarnings) == [
+        .quarantine, .downloadSource, .finderTags, .permissions, .compression, .fileInformation,
+      ]
+    })
+  let plan = try await DuplicateService().makePlan(
+    report: report, groupID: group.id, keeperID: group.members[0].id, targetIDs: [group.members[1].id])
+  #expect(plan.items.count == 1 && plan.items[0].duplicateProof != nil)
+}
+
+@Test func distinctCompatibilitySubsetsInOneContentGroupProduceOnePlan() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  for name in ["a", "b", "c", "d"] { try writeDuplicate(root + "/" + name) }
+  let value = Array("strict metadata".utf8)
+  for name in ["c", "d"] { #expect(setxattr(root + "/" + name, "com.lighten.strict", value, value.count, 0, 0) == 0) }
+  let report = try await duplicateReport(root)
+  let group = try #require(report.groups.first)
+  let partitions = Dictionary(grouping: group.members, by: \.compatibilityID)
+  #expect(partitions.count == 2)
+  let selections = partitions.values.map {
+    DuplicateGroupSelection(groupID: group.id, keeperID: $0[0].id, targetIDs: [$0[1].id])
+  }
+  let plan = try await DuplicateService().makePlan(report: report, selections: selections)
+  #expect(plan.items.count == 2)
+  #expect(Set(plan.items.map(\.sourcePath)).count == 2)
+}
+
+@Test func repeatedCompatibilitySubsetAndCrossGroupKeeperTargetCyclesAreRejected() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  for name in ["a", "b", "c", "d"] { try writeDuplicate(root + "/" + name) }
+  let report = try await duplicateReport(root)
+  let group = try #require(report.groups.first)
+  let members = group.members
+  await #expect(throws: DuplicateFailure.self) {
+    try await DuplicateService().makePlan(
+      report: report,
+      selections: [
+        DuplicateGroupSelection(groupID: group.id, keeperID: members[0].id, targetIDs: [members[1].id]),
+        DuplicateGroupSelection(groupID: group.id, keeperID: members[2].id, targetIDs: [members[3].id]),
+      ])
+  }
+  let aliasGroup = DuplicateGroup(logicalBytes: group.logicalBytes, members: members)
+  let forgedReport = DuplicateReport(
+    snapshot: report.snapshot, groups: [group, aliasGroup], skippedCount: 0, partial: false, comparisonCount: 0)
+  await #expect(throws: DuplicateFailure.self) {
+    try await DuplicateService().makePlan(
+      report: forgedReport,
+      selections: [
+        DuplicateGroupSelection(groupID: group.id, keeperID: members[0].id, targetIDs: [members[1].id]),
+        DuplicateGroupSelection(groupID: aliasGroup.id, keeperID: members[1].id, targetIDs: [members[0].id]),
+      ])
+  }
+}
+
+@Test func duplicateMembersDecodeLegacyReportsWithoutWarnings() throws {
+  let entry = ScanEntry(parentID: nil, path: "/fixture/a", identity: nil, issues: [], readable: true)
+  let original = DuplicateMember(entry: entry, eligibility: .metadataUnknown)
+  var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+  json.removeValue(forKey: "metadataWarnings")
+  let decoded = try JSONDecoder().decode(DuplicateMember.self, from: JSONSerialization.data(withJSONObject: json))
+  #expect(decoded.metadataWarnings.isEmpty)
+}
+
+@Test func discoveryCacheReusesOnlyFreshIdentitiesAndPublicDigestNeverCaches() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try writeDuplicate(root + "/a")
+  try writeDuplicate(root + "/b")
+  var (a, _, volumeID) = try await pair(root)
+  let hasher = CountingDuplicateHash()
+  let cache = DuplicateDigestCache()
+  let first = DuplicateFileComparator(hasher: hasher, discoveryCache: cache)
+  let second = DuplicateFileComparator(hasher: hasher, discoveryCache: cache)
+  let digest = try first.discoveryDigest(a, volumeID: volumeID)
+  #expect(try second.discoveryDigest(a, volumeID: volumeID) == digest)
+  #expect(hasher.calls.withLock { $0 } == 1)
+  #expect(try second.digest(a, volumeID: volumeID) == digest)
+  #expect(hasher.calls.withLock { $0 } == 2)
+  try writeDuplicate(a.path, bytes: Array("new! fixture".utf8))
+  (a, _, volumeID) = try await pair(root)
+  #expect(try first.discoveryDigest(a, volumeID: volumeID) != digest)
+  #expect(hasher.calls.withLock { $0 } == 3)
+}
+
+@Test func injectedHashersHaveNoImplicitSharedDiscoveryCache() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try writeDuplicate(root + "/a")
+  try writeDuplicate(root + "/b")
+  let (a, _, volumeID) = try await pair(root)
+  let hasher = CountingDuplicateHash()
+  let comparator = DuplicateFileComparator(hasher: hasher)
+  _ = try comparator.discoveryDigest(a, volumeID: volumeID)
+  _ = try comparator.discoveryDigest(a, volumeID: volumeID)
+  #expect(hasher.calls.withLock { $0 } == 2)
+}
+
+@Test func picturedDirectorySubstitutionIsNamedAndNeverTraversesItsChildren() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try writeDuplicate(root + "/a")
+  try writeDuplicate(root + "/b")
+  let picture = DuplicatePicture(try await duplicateReport(root))
+  try FileManager.default.removeItem(atPath: root + "/b")
+  try FileManager.default.createDirectory(atPath: root + "/b", withIntermediateDirectories: true)
+  try writeDuplicate(root + "/b/private-child")
+  let reads = DuplicateProofReads()
+  let service = DuplicateService(
+    scan: ScanService(homeDirectory: root, attributes: reads),
+    scope: DuplicateScanScope(minimumBytes: 1, homeDirectory: root))
+  let observed = try await service.observePicture(picture)
+  #expect(observed.groups.isEmpty)
+  #expect(observed.refusals.contains(DuplicateObservationRefusal(path: root + "/b", reason: .notRegular)))
+  #expect(!reads.inspected.withLock { $0 }.contains(root + "/b/private-child"))
+  let native = try await DuplicateService(scope: DuplicateScanScope(minimumBytes: 1, homeDirectory: root))
+    .observePicture(picture)
+  #expect(native.refusals.contains(DuplicateObservationRefusal(path: root + "/b", reason: .notRegular)))
+  let metadata = try await ScanService().scanImmediateChild(parentPath: root, name: "b", metadataOnly: true)
+  #expect(metadata.entries.map(\.path) == [root, root + "/b"])
+  #expect(metadata.entries.last?.issues.contains(.notTraversed) == true)
+}
+
+@Test func freshPictureIgnoresForgedDisplaySizeEligibilityAndNamesMissingPaths() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try writeDuplicate(root + "/a")
+  try writeDuplicate(root + "/b")
+  let picture = DuplicatePicture(
+    rootPath: root,
+    groups: [
+      DuplicatePicture.Group(
+        logicalBytes: .max,
+        members: [
+          DuplicatePicture.Member(path: root + "/a", eligibility: .metadataUnknown),
+          DuplicatePicture.Member(path: root + "/b", eligibility: .metadataDifferent),
+          DuplicatePicture.Member(path: root + "/missing", eligibility: .eligible),
+        ])
+    ], scannedCount: .max, comparisonCount: .max, skippedCount: .max, partial: false)
+  let service = DuplicateService(scope: DuplicateScanScope(minimumBytes: 1, homeDirectory: root))
+  let report = try await service.observePicture(picture)
+  let group = try #require(report.groups.first)
+  #expect(group.logicalBytes == 12)
+  #expect(group.members.allSatisfy { $0.eligibility == .eligible })
+  #expect(report.partial && report.skippedCount == 1)
+  #expect(report.refusals == [DuplicateObservationRefusal(path: root + "/missing", reason: .unavailable)])
+  let plan = try await service.makePlan(
+    report: report, groupID: group.id, keeperID: group.members[0].id, targetIDs: [group.members[1].id])
+  #expect(plan.items.count == 1)
+}
+
 @Test func sameSizeDifferenceOutsideSampleAndDigestCollisionNeverGroups() async throws {
   let root = try duplicateFixture()
   defer { try? FileManager.default.removeItem(atPath: root) }
-  var a = [UInt8](repeating: 42, count: 32_768)
+  var a = [UInt8](repeating: 42, count: 262_144)
   var b = a
-  b[8_192] = 43
+  b[131_072] = 43
   try writeDuplicate(root + "/a", bytes: a)
   try writeDuplicate(root + "/b", bytes: b)
   let (first, second, volumeID) = try await pair(root)
@@ -98,7 +297,7 @@ private func addACL(_ path: String) throws {
   #expect(try collision.compare(first, second, volumeID: volumeID) == .dataDifferent)
   let report = try await duplicateReport(root, comparator: collision)
   #expect(report.groups.isEmpty)
-  a[8_192] = 43
+  a[131_072] = 43
   try writeDuplicate(root + "/a", bytes: a)
 }
 
@@ -154,7 +353,7 @@ private func addACL(_ path: String) throws {
   #expect(equal.comparisonCount <= 24)
 }
 
-@Test func resourceForkXattrAndModeDifferencesAreReportOnly() async throws {
+@Test func resourceForkAndStrictXattrDifferencesAreReportOnlyWhilePermissionsWarn() async throws {
   let root = try duplicateFixture()
   defer { try? FileManager.default.removeItem(atPath: root) }
   try writeDuplicate(root + "/a")
@@ -185,12 +384,15 @@ private func addACL(_ path: String) throws {
   #expect(try comparator.compare(a, b, volumeID: volumeID) == .metadataDifferent)
   guard removexattr(root + "/b", "com.lighten.test", 0) == 0 else { throw DuplicateFailure.unavailable }
   guard removexattr(root + "/a", "com.lighten.test", 0) == 0 else { throw DuplicateFailure.unavailable }
-  guard chmod(root + "/b", 0o600) == 0 else { throw DuplicateFailure.unavailable }
+  guard chmod(root + "/a", 0o644) == 0, chmod(root + "/b", 0o600) == 0 else { throw DuplicateFailure.unavailable }
   (a, b, volumeID) = try await pair(root)
-  #expect(try comparator.compare(a, b, volumeID: volumeID) == .metadataDifferent)
+  let permissionResult = try comparator.compareWithMetadataWarnings(a, b, volumeID: volumeID)
+  #expect(permissionResult.comparison == .equal)
+  #expect(permissionResult.warnings.contains(.permissions))
+  #expect(Set(permissionResult.warnings).isSubset(of: [.permissions, .fileInformation]))
 }
 
-@Test func aclAndFlagsDifferencesAreReportOnly() async throws {
+@Test func allowACLAndNonprotectiveFlagsAreInformational() async throws {
   let root = try duplicateFixture()
   defer { try? FileManager.default.removeItem(atPath: root) }
   try writeDuplicate(root + "/a")
@@ -198,13 +400,67 @@ private func addACL(_ path: String) throws {
   let comparator = DuplicateFileComparator()
   try addACL(root + "/a")
   var (a, b, volumeID) = try await pair(root)
-  #expect(try comparator.compare(a, b, volumeID: volumeID) == .metadataDifferent)
+  let allowResult = try comparator.compareWithMetadataWarnings(a, b, volumeID: volumeID)
+  #expect(allowResult.comparison == .equal)
+  #expect(allowResult.warnings.contains(.fileInformation))
   try addACL(root + "/b")
   (a, b, volumeID) = try await pair(root)
   #expect(try comparator.compare(a, b, volumeID: volumeID) == .equal)
   guard chflags(root + "/b", UInt32(UF_NODUMP)) == 0 else { throw DuplicateFailure.unavailable }
   (a, b, volumeID) = try await pair(root)
+  let flagsResult = try comparator.compareWithMetadataWarnings(a, b, volumeID: volumeID)
+  #expect(flagsResult.comparison == .equal)
+  #expect(flagsResult.warnings.contains(.fileInformation))
+}
+
+@Test(arguments: [
+  "com.apple.metadata:fixture", "com.apple.lastuseddate#PS", "com.apple.FinderInfo",
+  "com.apple.macl", "com.apple.provenance",
+])
+func approvedFileInformationAttributesRemainEligible(_ name: String) async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try writeDuplicate(root + "/a")
+  try writeDuplicate(root + "/b")
+  let value = [UInt8](repeating: 1, count: 32)
+  #expect(setxattr(root + "/b", name, value, value.count, 0, 0) == 0)
+  let report = try await duplicateReport(root)
+  let group = try #require(report.groups.first)
+  #expect(group.members.allSatisfy { $0.eligibility == .eligible && $0.metadataWarnings.contains(.fileInformation) })
+  let plan = try await DuplicateService().makePlan(
+    report: report, groupID: group.id, keeperID: group.members[0].id, targetIDs: [group.members[1].id])
+  #expect(plan.items.count == 1)
+}
+
+@Test func denyACLRemainsStrictWhileAdditionalAllowEntriesOnlyWarn() async throws {
+  let root = try duplicateFixture()
+  defer { try? FileManager.default.removeItem(atPath: root) }
+  try writeDuplicate(root + "/a")
+  try writeDuplicate(root + "/b")
+  try addACL(root + "/a", rule: "everyone deny write")
+  var (a, b, volumeID) = try await pair(root)
+  let comparator = DuplicateFileComparator()
   #expect(try comparator.compare(a, b, volumeID: volumeID) == .metadataDifferent)
+  try addACL(root + "/b", rule: "everyone deny write")
+  try addACL(root + "/b")
+  (a, b, volumeID) = try await pair(root)
+  let result = try comparator.compareWithMetadataWarnings(a, b, volumeID: volumeID)
+  #expect(result.comparison == .equal)
+  #expect(result.warnings.contains(.fileInformation))
+}
+
+@Test(arguments: [UInt32(UF_IMMUTABLE), UInt32(UF_APPEND)])
+func protectiveUserFlagsRemainStrict(_ flags: UInt32) async throws {
+  let root = try duplicateFixture()
+  defer {
+    _ = chflags(root + "/b", 0)
+    try? FileManager.default.removeItem(atPath: root)
+  }
+  try writeDuplicate(root + "/a")
+  try writeDuplicate(root + "/b")
+  #expect(chflags(root + "/b", flags) == 0)
+  let (a, b, volumeID) = try await pair(root)
+  #expect(try DuplicateFileComparator().compare(a, b, volumeID: volumeID) == .metadataDifferent)
 }
 
 @Test func oversizedXattrAndResourceForkAreMetadataUnknown() async throws {
@@ -367,6 +623,11 @@ private func writeForkLargerThanCap(_ path: String) throws {
   defer { try? FileManager.default.removeItem(atPath: root) }
   try writeDuplicate(root + "/a")
   try writeDuplicate(root + "/b")
+  let metadata = Data("fixture download source".utf8)
+  #expect(
+    metadata.withUnsafeBytes { setxattr(root + "/b", "com.apple.quarantine", $0.baseAddress, $0.count, 0, 0) } == 0)
+  #expect(chmod(root + "/a", 0o644) == 0 && chmod(root + "/b", 0o600) == 0)
+  let beforeContents = try Data(contentsOf: URL(fileURLWithPath: root + "/b"))
   let report = try await duplicateReport(root)
   let group = try #require(report.groups.first)
   let keeper = try #require(group.members.first)
@@ -386,6 +647,16 @@ private func writeForkLargerThanCap(_ path: String) throws {
     .undo(planID: plan.id, itemID: target.id)
   #expect(FileManager.default.fileExists(atPath: target.entry.path))
   #expect(!FileManager.default.fileExists(atPath: trashPath))
+  #expect(try Data(contentsOf: URL(fileURLWithPath: root + "/b")) == beforeContents)
+  var restoredMetadata = Data(count: metadata.count)
+  #expect(
+    restoredMetadata.withUnsafeMutableBytes {
+      getxattr(root + "/b", "com.apple.quarantine", $0.baseAddress, $0.count, 0, 0)
+    } == metadata.count)
+  #expect(restoredMetadata == metadata)
+  var details = stat()
+  #expect(lstat(root + "/b", &details) == 0)
+  #expect(details.st_mode & 0o777 == 0o600)
 }
 
 @Test func changedKeeperSkipsTargetAndForgedCrossKeeperPlanRejectsBeforeIntent() async throws {
@@ -509,7 +780,9 @@ private final class DuplicateProofReads: FileAttributeSource, Sendable {
   try FileManager.default.createDirectory(atPath: unrelated, withIntermediateDirectories: true)
   try writeDuplicate(unrelated + "/noise", bytes: Array("different observation".utf8))
   let reads = DuplicateProofReads()
-  let service = DuplicateService(scan: ScanService(homeDirectory: root, attributes: reads))
+  let service = DuplicateService(
+    scan: ScanService(homeDirectory: root, attributes: reads),
+    scope: DuplicateScanScope(minimumBytes: 1, homeDirectory: root))
   var observed: DuplicateReport?
   for try await event in service.events(rootPath: root) {
     if case .completed(let report) = event { observed = report }
@@ -568,7 +841,9 @@ func duplicateFreshPlanRefusesChangedKeeperOrTarget(_ changed: String) async thr
   }
   try FileManager.default.createSymbolicLink(atPath: root + "/alias", withDestinationPath: root + "/a")
   var result: DuplicateReport?
-  let service = DuplicateService(configuration: ScanConfiguration(homeDirectory: root))
+  let service = DuplicateService(
+    configuration: ScanConfiguration(homeDirectory: root),
+    scope: DuplicateScanScope(minimumBytes: 1, homeDirectory: root))
   for try await event in service.events(rootPath: root) {
     if case .completed(let report) = event { result = report }
   }

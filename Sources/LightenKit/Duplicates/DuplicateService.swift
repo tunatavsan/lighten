@@ -6,15 +6,94 @@ public struct DuplicateService: Sendable {
   private let configuration: ScanConfiguration
   private let comparator: DuplicateFileComparator
   private let planner: PlanService
+  private let scope: DuplicateScanScope
 
   public init(
-    scan: ScanService = ScanService(), comparator: DuplicateFileComparator = DuplicateFileComparator(),
-    planner: PlanService = PlanService(), configuration: ScanConfiguration? = nil
+    scan: ScanService? = nil, comparator: DuplicateFileComparator = DuplicateFileComparator(),
+    planner: PlanService = PlanService(), configuration: ScanConfiguration? = nil,
+    scope: DuplicateScanScope? = nil
   ) {
-    self.scan = scan
-    self.configuration = configuration ?? ScanConfiguration(homeDirectory: scan.homeDirectory)
+    self.scope =
+      scope
+      ?? DuplicateScanScope(homeDirectory: configuration?.homeDirectory ?? scan?.homeDirectory ?? NSHomeDirectory())
+    self.scan = scan ?? ScanService(homeDirectory: self.scope.homeDirectory)
+    self.configuration = configuration ?? ScanConfiguration(homeDirectory: self.scope.homeDirectory)
     self.comparator = comparator
     self.planner = planner
+  }
+
+  /// Previous results contribute paths only. Each file is observed again without
+  /// walking the selected root, and hashes and compatibility are freshly proved.
+  public func observePicture(_ picture: DuplicatePicture) async throws -> DuplicateReport {
+    let task = Task.detached {
+      var entries: [ScanEntry] = []
+      var nodes: [ScanNode] = []
+      var refusals: [DuplicateObservationRefusal] = []
+      var volumeID: UUID?
+      var device: UInt64 = 0
+      let paths = Set(picture.groups.flatMap { $0.members.map(\.path) }).sorted()
+      for path in paths {
+        try Task.checkCancellation()
+        guard scope.exclusionReason(for: path, isDirectory: false, scanRoot: picture.rootPath) == nil else {
+          refusals.append(DuplicateObservationRefusal(path: path, reason: .outOfScope))
+          continue
+        }
+        do {
+          let name = path as NSString
+          let fresh = try await scan.scanImmediateChild(
+            parentPath: name.deletingLastPathComponent, name: name.lastPathComponent, metadataOnly: true)
+          guard let entry = fresh.entries.first(where: { $0.path == path }), let identity = entry.identity else {
+            refusals.append(DuplicateObservationRefusal(path: path, reason: .unavailable))
+            continue
+          }
+          guard identity.kind == .regular else {
+            refusals.append(DuplicateObservationRefusal(path: path, reason: .notRegular))
+            continue
+          }
+          guard entry.readable, entry.issues.isEmpty, identity.hasStableTrashProof,
+            let node = fresh.nodes.first(where: { $0.id == entry.id }), !node.partial,
+            let freshVolume = fresh.volumeID
+          else {
+            refusals.append(DuplicateObservationRefusal(path: path, reason: .unreadable))
+            continue
+          }
+          guard scope.includesFile(path: path, logicalBytes: identity.logicalBytes, scanRoot: picture.rootPath) else {
+            refusals.append(DuplicateObservationRefusal(path: path, reason: .outOfScope))
+            continue
+          }
+          guard volumeID == nil || volumeID == freshVolume else {
+            refusals.append(DuplicateObservationRefusal(path: path, reason: .unavailable))
+            continue
+          }
+          volumeID = freshVolume
+          device = fresh.volumeDevice
+          entries.append(entry)
+          nodes.append(node)
+        } catch is CancellationError { throw CancellationError() } catch {
+          refusals.append(DuplicateObservationRefusal(path: path, reason: .unavailable))
+        }
+      }
+      let snapshot = ScanSnapshot(
+        rootPath: picture.rootPath, volumeDevice: device, volumeID: volumeID,
+        entries: entries, nodes: nodes)
+      let report = try group(snapshot: snapshot, fresh: true, progress: { _ in })
+      let groupedPaths = Set(report.groups.flatMap { $0.members.map { $0.entry.path } })
+      let failedPaths = Set(report.refusals.map(\.path))
+      refusals += report.refusals
+      for entry in entries where !groupedPaths.contains(entry.path) && !failedPaths.contains(entry.path) {
+        refusals.append(DuplicateObservationRefusal(path: entry.path, reason: .noLongerDuplicate))
+      }
+      try Task.checkCancellation()
+      return DuplicateReport(
+        snapshot: snapshot, groups: report.groups,
+        skippedCount: refusals.count, partial: !refusals.isEmpty || report.partial,
+        comparisonCount: report.comparisonCount, refusals: refusals)
+    }
+    return try await withTaskCancellationHandler {
+      try await task.value
+    } onCancel: {
+      task.cancel()
+    }
   }
 
   public func events(rootPath: String) -> AsyncThrowingStream<DuplicateEvent, Error> {
@@ -23,7 +102,18 @@ public struct DuplicateService: Sendable {
         do {
           let facts = Mutex<[FileFact]>([])
           var configuration = self.configuration
-          configuration.fileSink = FileSink { fact in facts.withLock { $0.append(fact) } }
+          configuration.fileSink = FileSink(minLogicalBytes: scope.minimumBytes) { fact in
+            guard scope.includesFile(path: fact.path, logicalBytes: fact.identity.logicalBytes, scanRoot: rootPath)
+            else {
+              return
+            }
+            facts.withLock { $0.append(fact) }
+          }
+          let existingFilter = configuration.directoryFilter
+          configuration.directoryFilter = { path in
+            existingFilter?(path) != false
+              && scope.exclusionReason(for: path, isDirectory: true, scanRoot: rootPath) == nil
+          }
           let run = try ScanEngine(configuration: configuration).start(root: rootPath)
           var scanned = 0
           await withTaskCancellationHandler {
@@ -67,13 +157,32 @@ public struct DuplicateService: Sendable {
       ])
   }
 
+  private func validateSelections(report: DuplicateReport, selections: [DuplicateGroupSelection]) throws {
+    guard !selections.isEmpty else { throw DuplicateFailure.invalidSelection }
+    var members: Set<UUID> = []
+    var paths: Set<String> = []
+    var subsets: [UUID: Set<UUID>] = [:]
+    for selection in selections {
+      guard let group = report.groups.first(where: { $0.id == selection.groupID }),
+        let keeper = group.members.first(where: { $0.id == selection.keeperID }),
+        keeper.eligibility == .eligible, let compatibilityID = keeper.compatibilityID,
+        !selection.targetIDs.isEmpty, !selection.targetIDs.contains(keeper.id),
+        selection.targetIDs.allSatisfy({ group.canTarget($0, keeperID: keeper.id) }),
+        subsets[group.id, default: []].insert(compatibilityID).inserted
+      else { throw DuplicateFailure.invalidSelection }
+      for member in group.members where member.id == keeper.id || selection.targetIDs.contains(member.id) {
+        guard members.insert(member.id).inserted, paths.insert(member.entry.path).inserted else {
+          throw DuplicateFailure.invalidSelection
+        }
+      }
+    }
+  }
+
   public func makePlan(
     report: DuplicateReport, selections: [DuplicateGroupSelection]
   ) async throws -> ActionPlan {
     let task = Task.detached {
-      guard !selections.isEmpty, selections.allSatisfy({ !$0.targetIDs.isEmpty }),
-        Set(selections.map(\.groupID)).count == selections.count
-      else { throw DuplicateFailure.invalidSelection }
+      try validateSelections(report: report, selections: selections)
       var fragments: [ActionPlan] = []
       for selection in selections {
         try Task.checkCancellation()
@@ -222,19 +331,21 @@ public struct DuplicateService: Sendable {
   }
 
   private func group(
-    snapshot: ScanSnapshot, unavailableMetadata: Int = 0, omittedFiles: Int = 0, progress: (Int) -> Void
+    snapshot: ScanSnapshot, unavailableMetadata: Int = 0, omittedFiles: Int = 0,
+    fresh: Bool = false, progress: (Int) -> Void
   ) throws -> DuplicateReport {
     guard let volumeID = snapshot.volumeID else {
       return DuplicateReport(
         snapshot: snapshot, groups: [], skippedCount: snapshot.entries.count + omittedFiles,
-        partial: true, comparisonCount: 0)
+        partial: !snapshot.entries.isEmpty || omittedFiles > 0, comparisonCount: 0)
     }
     var unique: [String: ScanEntry] = [:]
     var skipped = omittedFiles
+    var refusals: [DuplicateObservationRefusal] = []
     for entry in snapshot.entries {
       guard let identity = entry.identity, identity.kind == .regular,
-        identity.logicalBytes >= 0, entry.readable, entry.issues.isEmpty,
-        identity.hasStableTrashProof
+        scope.includesFile(path: entry.path, logicalBytes: identity.logicalBytes, scanRoot: snapshot.rootPath),
+        entry.readable, entry.issues.isEmpty, identity.hasStableTrashProof
       else {
         if entry.identity?.kind == .regular { skipped += 1 }
         continue
@@ -242,66 +353,102 @@ public struct DuplicateService: Sendable {
       let physical = "\(identity.device):\(identity.inode)"
       if unique[physical] == nil { unique[physical] = entry }
     }
+    struct Pair: Hashable {
+      let first: UUID
+      let second: UUID
+    }
     let bySize = Dictionary(grouping: unique.values, by: { $0.identity!.logicalBytes })
     var groups: [DuplicateGroup] = []
     var compared = 0
     var comparisonCount = 0
+    func compare(_ first: ScanEntry, _ second: ScanEntry) throws
+      -> (comparison: DuplicateComparison, warnings: [DuplicateMetadataWarning])
+    {
+      try fresh
+        ? comparator.compareWithMetadataWarnings(first, second, volumeID: volumeID)
+        : comparator.discoveryCompare(first, second, volumeID: volumeID)
+    }
+    func failed(_ entry: ScanEntry) {
+      skipped += 1
+      refusals.append(DuplicateObservationRefusal(path: entry.path, reason: .unavailable))
+    }
     for (_, sameSize) in bySize.sorted(by: { $0.key > $1.key }) where sameSize.count > 1 {
       try Task.checkCancellation()
       var bySample: [Data: [ScanEntry]] = [:]
       let ordered = sameSize.sorted(by: { $0.path < $1.path })
-      let samples = try Self.parallel(ordered) { try comparator.sample($0, volumeID: volumeID) }
+      let samples = try Self.parallel(ordered) {
+        try fresh ? comparator.sample($0, volumeID: volumeID) : comparator.discoverySample($0, volumeID: volumeID)
+      }
       for (entry, sample) in zip(ordered, samples) {
-        if let sample { bySample[sample, default: []].append(entry) } else { skipped += 1 }
+        if let sample { bySample[sample, default: []].append(entry) } else { failed(entry) }
         compared += 1
       }
       progress(compared)
       for candidates in bySample.values where candidates.count > 1 {
         var byDigest: [Data: [ScanEntry]] = [:]
-        let digests = try Self.parallel(candidates) { try comparator.digest($0, volumeID: volumeID) }
+        let digests = try Self.parallel(candidates) {
+          try fresh ? comparator.digest($0, volumeID: volumeID) : comparator.discoveryDigest($0, volumeID: volumeID)
+        }
         for (entry, digest) in zip(candidates, digests) {
-          if let digest { byDigest[digest, default: []].append(entry) } else { skipped += 1 }
+          if let digest { byDigest[digest, default: []].append(entry) } else { failed(entry) }
           compared += 1
         }
         progress(compared)
         for matches in byDigest.values where matches.count > 1 {
           var clusters: [[ScanEntry]] = []
-          for entry in matches {
+          var comparisons: [Pair: (comparison: DuplicateComparison, warnings: [DuplicateMetadataWarning])] = [:]
+          for entry in matches.sorted(by: { $0.path < $1.path }) {
             try Task.checkCancellation()
             var inserted = false
+            var unavailable = false
             for index in clusters.indices {
-              try Task.checkCancellation()
               do {
                 comparisonCount += 1
-                let result = try comparator.compare(clusters[index][0], entry, volumeID: volumeID)
-                if result != .dataDifferent {
+                let representative = clusters[index][0]
+                let result = try compare(representative, entry)
+                comparisons[Pair(first: representative.id, second: entry.id)] = result
+                if result.comparison != .dataDifferent {
                   clusters[index].append(entry)
                   inserted = true
                   break
                 }
-              } catch is CancellationError { throw CancellationError() } catch { skipped += 1 }
+              } catch is CancellationError { throw CancellationError() } catch {
+                failed(entry)
+                unavailable = true
+                break
+              }
             }
-            if !inserted { clusters.append([entry]) }
+            if !inserted && !unavailable { clusters.append([entry]) }
             compared += 1
             progress(compared)
           }
           for cluster in clusters where cluster.count > 1 {
             var partitions: [[ScanEntry]] = []
+            var warnings: [UUID: Set<DuplicateMetadataWarning>] = [:]
             var unknownIDs: Set<UUID> = []
             for entry in cluster {
               try Task.checkCancellation()
               var inserted = false
               for index in partitions.indices {
-                try Task.checkCancellation()
+                let representative = partitions[index][0]
+                let pair = Pair(first: representative.id, second: entry.id)
                 do {
-                  comparisonCount += 1
-                  switch try comparator.compare(partitions[index][0], entry, volumeID: volumeID) {
+                  let result: (comparison: DuplicateComparison, warnings: [DuplicateMetadataWarning])
+                  if let cached = comparisons[pair] {
+                    result = cached
+                  } else {
+                    comparisonCount += 1
+                    result = try compare(representative, entry)
+                    comparisons[pair] = result
+                  }
+                  switch result.comparison {
                   case .equal:
                     partitions[index].append(entry)
+                    warnings[representative.id, default: []].formUnion(result.warnings)
                     inserted = true
                   case .metadataUnknown:
                     unknownIDs.insert(entry.id)
-                    unknownIDs.insert(partitions[index][0].id)
+                    unknownIDs.insert(representative.id)
                   case .metadataDifferent, .dataDifferent: break
                   }
                 } catch is CancellationError { throw CancellationError() } catch { unknownIDs.insert(entry.id) }
@@ -312,28 +459,33 @@ public struct DuplicateService: Sendable {
             var memberByID: [UUID: DuplicateMember] = [:]
             for partition in partitions {
               let compatibilityID = partition.count > 1 ? UUID() : nil
+              let differences = (warnings[partition[0].id] ?? []).sorted { $0.rawValue < $1.rawValue }
               for entry in partition {
                 memberByID[entry.id] = DuplicateMember(
                   entry: entry,
                   eligibility: compatibilityID != nil
                     ? .eligible
                     : unknownIDs.contains(entry.id) ? .metadataUnknown : .metadataDifferent,
-                  compatibilityID: compatibilityID)
+                  compatibilityID: compatibilityID, metadataWarnings: differences)
               }
             }
             groups.append(
               DuplicateGroup(
-                logicalBytes: cluster[0].identity?.logicalBytes ?? 0,
+                logicalBytes: cluster[0].identity!.logicalBytes,
                 members: cluster.compactMap { memberByID[$0.id] }))
           }
         }
       }
     }
-    groups.sort { $0.logicalBytes > $1.logicalBytes }
+    groups.sort {
+      $0.logicalBytes != $1.logicalBytes
+        ? $0.logicalBytes > $1.logicalBytes
+        : ($0.members.first?.entry.path ?? "") < ($1.members.first?.entry.path ?? "")
+    }
     try Task.checkCancellation()
     return DuplicateReport(
       snapshot: snapshot, groups: groups, skippedCount: skipped,
-      partial: unavailableMetadata > 0 || skipped > 0 || snapshot.nodes.first?.partial == true,
-      comparisonCount: comparisonCount)
+      partial: unavailableMetadata > 0 || skipped > 0 || snapshot.nodes.contains(where: \.partial),
+      comparisonCount: comparisonCount, refusals: refusals)
   }
 }
