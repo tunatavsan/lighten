@@ -36,6 +36,11 @@ find_signing_identity() {
     fail "Unable to query code-signing identities."
   fi
 
+  if [[ "${LIGHTEN_SIGN_IDENTITY:-}" == "-" ]]; then
+    printf '%s\n' "-"
+    return
+  fi
+
   if [[ -n "${LIGHTEN_SIGN_IDENTITY:-}" ]]; then
     if ! printf '%s\n' "$identities" | /usr/bin/grep -Fq "\"$LIGHTEN_SIGN_IDENTITY\""; then
       fail "LIGHTEN_SIGN_IDENTITY is not a valid installed code-signing identity."
@@ -56,7 +61,8 @@ find_signing_identity() {
   fi
 
   if [[ -z "$identity" ]]; then
-    fail "No Developer ID Application or Apple Development signing identity was found."
+    printf 'warning: no Developer ID Application or Apple Development identity found; signing ad hoc.\n' >&2
+    identity="-"
   fi
 
   printf '%s\n' "$identity"
@@ -157,7 +163,7 @@ verify_package() {
   signature_details="$(/usr/bin/codesign -dvv "$APP_BUNDLE" 2>&1)" || fail "Cannot inspect app signature."
   signed_id="$(printf '%s\n' "$signature_details" | awk -F= '$1 == "Identifier" { print $2 }')"
   [[ "$signed_id" == "$bundle_id" ]] || fail "Signed identifier differs from Info.plist."
-  [[ "$signature_details" == *"(runtime)"* ]] || fail "Hardened runtime is absent."
+  [[ "$signature_details" =~ flags=0x[0-9a-f]+\([^\)]*runtime ]] || fail "Hardened runtime is absent."
   /usr/bin/codesign -d --entitlements :- "$APP_BUNDLE" >"$entitlement_file" 2>/dev/null ||
     fail "Cannot inspect signed entitlements."
   /usr/bin/python3 - "$expected_entitlements" "$entitlement_file" <<'PY' ||
