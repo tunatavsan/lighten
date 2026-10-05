@@ -371,11 +371,6 @@ final class ActionStore {
       hasRunningApplications: presentation.hasRunningApplications, reviewNotes: presentation.reviewNotes)
   }
 
-  func invalidatePending(expectedPlanID: UUID?) {
-    guard pending?.plan.id == expectedPlanID else { return }
-    pending = nil
-  }
-
   /// Claim synchronously while the confirmation sheet still owns its presentation.
   /// SwiftUI may clear `pending` as soon as the sheet begins dismissing.
   func takeConfirmedPlan(

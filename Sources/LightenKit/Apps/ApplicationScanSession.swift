@@ -4,7 +4,8 @@ import Synchronization
 
 public struct ApplicationRelatedReview: Sendable {
   public enum Phase: Sendable, Equatable {
-    case legacy
+    /// A report produced outside a scan session that already carries its complete review.
+    case precomputed
     case shallow
     case measuring(completed: Int, total: Int)
     case initialComplete
@@ -24,7 +25,7 @@ public struct ApplicationRelatedReview: Sendable {
   public init(
     application: InstalledApplication, candidates: [RelatedDataCandidate], signerTeamID: String? = nil,
     ownershipPending: Bool = true, registrationReport: ApplicationRegistrationReport? = nil,
-    phase: Phase = .legacy, openFilesComplete: Bool? = nil,
+    phase: Phase = .precomputed, openFilesComplete: Bool? = nil,
     globalEvidencePending: Bool = false, globalEvidenceUnavailable: Bool = false
   ) {
     self.application = application

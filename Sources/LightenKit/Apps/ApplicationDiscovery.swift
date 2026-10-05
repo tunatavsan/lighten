@@ -338,12 +338,6 @@ public struct ApplicationDiscovery: Sendable {
     (try? DescriptorFileSystem.identity(at: path + "/Wrapper"))?.kind == .directory
   }
 
-  public func discoverOrphans() async -> [RelatedDataCandidate] {
-    await related.discover().filter {
-      $0.classification == .orphanVerified || $0.classification == .historicallyVerifiedAbsent
-    }
-  }
-
   static let concurrentPackages = 4
 
   /// Complete package size from the parallel engine. Protected interiors are

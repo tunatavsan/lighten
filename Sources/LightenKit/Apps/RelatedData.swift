@@ -204,11 +204,6 @@ public protocol RunningApplicationSource: Sendable {
   func isRunning(bundleID: String) async -> Bool?
 }
 
-public struct UnknownRunningApplicationSource: RunningApplicationSource {
-  public init() {}
-  public func isRunning(bundleID: String) async -> Bool? { nil }
-}
-
 public struct RelatedDataService: Sendable {
   public let homeDirectory: String
   private let applicationRoots: [String]

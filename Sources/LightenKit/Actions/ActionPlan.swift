@@ -209,16 +209,6 @@ public struct PlanService: Sendable {
     self.applicationActivity = applicationActivity
   }
 
-  /// Planning walks the complete snapshot and performs descriptor checks.
-  /// UI callers can use this entry point to keep that work off the main actor.
-  public func makePlanAsync(
-    snapshot: ScanSnapshot, selectedIDs: Set<UUID>, kind: ActionKind = .trash
-  ) async throws -> ActionPlan {
-    try await Task.detached {
-      try makePlan(snapshot: snapshot, selectedIDs: selectedIDs, kind: kind)
-    }.value
-  }
-
   public func makePlan(
     snapshot: ScanSnapshot, selectedIDs: Set<UUID>, kind: ActionKind = .trash
   ) throws -> ActionPlan {

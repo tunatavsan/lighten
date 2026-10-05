@@ -402,14 +402,6 @@ final class AppsStore: ToolSummaryProviding {
     return Double(value.seconds) * 1000 + Double(value.attoseconds) / 1e15
   }
 
-  func rowVisibilityChanged(_ path: String, visible: Bool) {
-    visiblePaths.removeAll { $0 == path }
-    if visible { visiblePaths.append(path) }
-    guard let session else { return }
-    let paths = visiblePaths
-    Task { await session.prioritizeVisibleApplications(paths: paths) }
-  }
-
   var selectedReport: ApplicationReport? { reports.first { $0.path == selectedPath } }
 
   /// Display restoration and fresh discovery run independently. Neither grants action authority.
@@ -1026,7 +1018,7 @@ final class AppsStore: ToolSummaryProviding {
     guard selectedReport?.bundleID != nil else { return }
     let activeSession = session
     let review = selectedReview
-    // Legacy injected streams already carry fully reviewed reports.
+    // Precomputed reports already carry their complete review.
     guard activeSession != nil || review != nil else { return }
     if let state = appReviewStates[path], state.status == .checking {
       selectedReviewToken = state.token
@@ -1186,7 +1178,7 @@ final class AppsStore: ToolSummaryProviding {
     }
     let rank: Int
     switch review.phase {
-    case .legacy: rank = 0
+    case .precomputed: rank = 0
     case .shallow: rank = 0
     case .measuring(let completed, _): rank = min(completed, Int.max - 4) + 1
     case .initialComplete: rank = Int.max - 2
@@ -1196,7 +1188,7 @@ final class AppsStore: ToolSummaryProviding {
       guard rank >= state.rank else { return }
       state.rank = rank
       switch review.phase {
-      case .legacy: state.status = .complete
+      case .precomputed: state.status = .complete
       case .enriched:
         state.status =
           review.globalEvidenceUnavailable ? .unavailable : review.globalEvidencePending ? .checking : .complete
@@ -1211,7 +1203,7 @@ final class AppsStore: ToolSummaryProviding {
     if selectedPath == path {
       selectedReviewPhaseRank = rank
       switch review.phase {
-      case .legacy:
+      case .precomputed:
         selectedEvidencePending = false
         selectedEvidenceFinished = true
       case .shallow:

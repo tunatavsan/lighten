@@ -652,10 +652,6 @@ enum FailureText {
     }
   }
 
-  static func posixDetails(_ number: Int32) -> String {
-    "\(String(cString: strerror(number))) (\(number))"
-  }
-
   static func posixFailure(_ number: Int32, turkish: Bool? = nil) -> String {
     let copy: (String, String) =
       switch number {
