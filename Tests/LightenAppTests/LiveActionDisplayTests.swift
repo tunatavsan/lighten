@@ -174,7 +174,9 @@ func liveAncestorProjectionIsHonest() throws {
   #expect(entries.count == 3)
   let group = DuplicateGroup(
     logicalBytes: 64, members: entries.map { DuplicateMember(entry: $0, eligibility: .eligible) })
-  let store = DuplicateStore()
+  let store = DuplicateStore(
+    preferences: RemovalPreferences(defaults: try #require(UserDefaults(suiteName: "LightenQA." + UUID().uuidString))),
+    pictures: ResultPictureStore(directory: fixture.root + "/results", maximumBytes: 0))
   store.report = DuplicateReport(
     snapshot: snapshot, groups: [group], skippedCount: 0, partial: false, comparisonCount: 3)
   store.targets = Set(entries.map(\.id))

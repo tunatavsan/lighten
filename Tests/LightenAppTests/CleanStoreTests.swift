@@ -598,7 +598,7 @@ private actor ScopedCleanActivity: ProcessActivitySource {
   let store = CleanStore(
     activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: fixture.persistedPictures,
     discoverRelated: { [] }, preferences: try fixture.preferences())
-  store.open()
+  store.open(refresh: false)
   await store.waitForPicture()
   #expect(store.picture?.observedAt == observedAt)
   #expect(store.picture?.content.rows == rows)
@@ -627,7 +627,7 @@ private actor ScopedCleanActivity: ProcessActivitySource {
   let reopened = CleanStore(
     homeDirectory: fixture.home, pictures: fixture.persistedPictures, discoverRelated: { [] },
     preferences: try fixture.preferences())
-  reopened.open()
+  reopened.open(refresh: false)
   await reopened.waitForPicture()
   #expect(reopened.picture?.content == saved?.content)
   #expect(reopened.candidates.isEmpty && reopened.selected.isEmpty && !reopened.tool.allowsPreparation)
@@ -649,12 +649,13 @@ private actor ScopedCleanActivity: ProcessActivitySource {
 
 private final class CleanPictureTestState: Sendable {
   private let state = Mutex((calls: 0, paused: false))
-  func firstSave() -> Bool {
+  func nextCall() -> Int {
     state.withLock {
       $0.calls += 1
-      return $0.calls == 1
+      return $0.calls
     }
   }
+  func firstSave() -> Bool { nextCall() == 1 }
   var scanPaused: Bool { state.withLock { $0.paused } }
   func pauseScan() { state.withLock { $0.paused = true } }
 }
@@ -716,7 +717,6 @@ private final class CleanPictureIOGate: Sendable {
     preferences: try fixture.preferences())
   store.open()
   await gate.waitForArrival()
-  store.startScan()
   await store.waitForScan()
   await store.waitForRelatedDiscovery()
   #expect(store.phase == .ready)
@@ -789,7 +789,7 @@ private final class CleanPictureIOGate: Sendable {
       if shouldPause.scanPaused { await scan.pause() }
       return try await ScanService(homeDirectory: home).scan(rootPath: path)
     }, discoverRelated: { [] }, preferences: try fixture.preferences())
-  store.open()
+  store.open(refresh: false)
   await io.waitForArrival()
   store.startScan()
   await store.waitForScan()
@@ -826,7 +826,7 @@ private final class CleanPictureIOGate: Sendable {
   let store = CleanStore(
     activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: pictures,
     discoverRelated: { [] }, preferences: try fixture.preferences())
-  store.open()
+  store.open(refresh: false)
   await store.waitForPicture()
   #expect(store.picture?.content.rows.count == 1)
   store.startScan()
@@ -854,7 +854,7 @@ private final class CleanPictureIOGate: Sendable {
   let store = CleanStore(
     homeDirectory: fixture.home, pictures: pictures,
     discoverRelated: { [] }, preferences: try fixture.preferences())
-  store.open()
+  store.open(refresh: false)
   await store.waitForPicture()
   let item = ActionDisplayItem(
     planID: UUID(), itemID: UUID(), path: path, identity: nil,
@@ -905,4 +905,91 @@ private final class CleanPictureIOGate: Sendable {
   let saved = try #require(pictures.load(CleanPicture.self, named: "clean"))
   #expect(saved.observedAt == catalogDate)
   #expect(saved.content.relatedRows.map(\.path) == ["/report-only-2"])
+}
+
+@Test("Cold Clean opening keeps its previous picture while automatic native discovery is held")
+@MainActor func cleanColdOpenRefreshKeepsPictureUntilFreshCompletion() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let pictures = fixture.persistedPictures
+  let old = ResultPicture(
+    observedAt: Date(timeIntervalSince1970: 1_700_000_000),
+    content: CleanPicture(rows: [
+      .init(
+        path: fixture.home + "/old-cache", categoryID: fixture.catalog.rows[0].id,
+        logicalBytes: 77, sizeComplete: true)
+    ]))
+  try pictures.save(old, named: "clean")
+  let scan = CleanScanGate()
+  let secondScan = CleanScanGate()
+  let calls = CleanPictureTestState()
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: pictures,
+    scanner: { path, home in
+      let call = calls.nextCall()
+      if call == 1 { await scan.pause() }
+      if call == 2 { await secondScan.pause() }
+      return try await ScanEngine(configuration: ScanConfiguration(homeDirectory: home))
+        .discoverySnapshot(rootPath: path)
+    }, discoverRelated: { [] }, preferences: try fixture.preferences())
+  store.open()
+  store.open()
+  await scan.waitForArrival()
+  await store.waitForPicture()
+  #expect(store.picture?.content == old.content && store.picture?.observedAt == old.observedAt)
+  #expect(store.phase == .scanning && store.candidates.isEmpty && store.selected.isEmpty)
+  let actions = fixture.actions()
+  store.selectAll(actions: actions)
+  await store.prepare(actions: actions)
+  #expect(store.selected.isEmpty && actions.pending == nil)
+  await scan.release()
+  await secondScan.waitForArrival()
+  #expect(store.candidates.count == 1 && store.phase == .scanning)
+  #expect(store.picture?.content == old.content && actions.pending == nil)
+  await secondScan.release()
+  await store.waitForScan()
+  await store.waitForRelatedDiscovery()
+  await store.waitForPictureSaves()
+  #expect(store.phase == .ready && store.picture == nil)
+  #expect(Set(store.candidates.map { $0.entry.path }) == fixture.presentationPaths)
+  let saved = try #require(pictures.load(CleanPicture.self, named: "clean"))
+  #expect(Set(saved.content.rows.map(\.path)) == fixture.presentationPaths)
+  #expect(saved.observedAt == store.scannedAt && saved.observedAt != old.observedAt)
+}
+
+@Test("Cancelling automatic cold Clean discovery preserves the previous picture and stored result")
+@MainActor func cleanCancelledColdRefreshKeepsPreviousFile() async throws {
+  let fixture = try CleanFixture()
+  defer { fixture.remove() }
+  let pictures = fixture.persistedPictures
+  let old = ResultPicture(
+    observedAt: Date(timeIntervalSince1970: 1_700_000_000), content: CleanPicture(rows: [], partial: true))
+  try pictures.save(old, named: "clean")
+  let scan = CleanScanGate()
+  let calls = CleanPictureTestState()
+  let store = CleanStore(
+    activity: ClearCleanActivity(), homeDirectory: fixture.home, pictures: pictures,
+    scanner: { path, home in
+      if calls.firstSave() { await scan.pause() }
+      return try await ScanEngine(configuration: ScanConfiguration(homeDirectory: home))
+        .discoverySnapshot(rootPath: path)
+    }, discoverRelated: { [] }, preferences: try fixture.preferences())
+  store.open()
+  await scan.waitForArrival()
+  await store.waitForPicture()
+  var waiter: Task<Void, Never>?
+  await withCheckedContinuation { started in
+    waiter = Task {
+      started.resume()
+      await store.waitForScan()
+    }
+  }
+  store.cancelScan()
+  await scan.release()
+  await waiter?.value
+  await store.waitForPictureSaves()
+  #expect(store.phase == .partial && store.selected.isEmpty && !store.tool.allowsPreparation)
+  #expect(store.picture?.content == old.content && store.picture?.observedAt == old.observedAt)
+  let saved = try #require(pictures.load(CleanPicture.self, named: "clean"))
+  #expect(saved.content == old.content && saved.observedAt == old.observedAt)
 }

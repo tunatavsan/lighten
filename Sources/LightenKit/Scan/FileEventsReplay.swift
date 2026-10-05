@@ -122,41 +122,89 @@ private let replayCallback: FSEventStreamCallback = { _, context, count, paths, 
 /// Historical replay only. The stream is stopped before returning and never
 /// observes the app's open lifetime.
 public enum FileEventsReplay {
+  private static let queue = DispatchQueue(label: "com.tavsn.lighten.native-replay", qos: .userInitiated)
+
   public static func replay(root: String, since eventID: UInt64) async -> FileEventReplay {
-    await Task.detached(priority: .userInitiated) {
-      let latest = FSEventsGetCurrentEventId()
-      guard latest >= eventID else { return FileEventReplay(events: [], latestID: latest, complete: false) }
-      if latest == eventID { return FileEventReplay(events: [], latestID: latest) }
-      let observation = ReplayObservation()
-      let retained = Unmanaged.passRetained(observation)
-      defer { retained.release() }
-      var context = FSEventStreamContext(
-        version: 0, info: retained.toOpaque(), retain: nil, release: nil, copyDescription: nil)
-      let options = FSEventStreamCreateFlags(
-        kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes
-          | kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagWatchRoot)
-      let physical = root == "/" ? "/System/Volumes/Data" : root
-      guard
-        let stream = FSEventStreamCreate(
-          nil, replayCallback, &context, [physical] as CFArray, eventID, 0.01, options)
-      else { return FileEventReplay(events: [], latestID: latest, complete: false) }
-      let queue = DispatchQueue(label: "app.lighten.events.replay")
-      FSEventStreamSetDispatchQueue(stream, queue)
-      defer {
-        FSEventStreamStop(stream)
-        FSEventStreamInvalidate(stream)
-        queue.sync {}
-        FSEventStreamRelease(stream)
+    let cancellation = ReplayCancellation()
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        queue.async {
+          continuation.resume(returning: read(root: root, since: eventID, cancellation: cancellation))
+        }
       }
-      guard FSEventStreamStart(stream) else {
-        return FileEventReplay(events: [], latestID: latest, complete: false)
-      }
-      observation.waitForHistory()
-      FSEventStreamFlushSync(stream)
-      queue.sync {}
-      return observation.state.withLock {
-        $0.replay(latestID: latest)
-      }
-    }.value
+    } onCancel: {
+      cancellation.cancel()
+    }
   }
+
+  private static func read(root: String, since eventID: UInt64, cancellation: ReplayCancellation) -> FileEventReplay {
+    guard !cancellation.cancelled else {
+      return FileEventReplay(events: [], latestID: eventID, complete: false)
+    }
+    let latest = FSEventsGetCurrentEventId()
+    guard latest >= eventID else { return FileEventReplay(events: [], latestID: latest, complete: false) }
+    if latest == eventID {
+      return FileEventReplay(events: [], latestID: latest, complete: !cancellation.cancelled)
+    }
+    let observation = ReplayObservation()
+    cancellation.observe(observation)
+    defer { cancellation.stopObserving() }
+    let retained = Unmanaged.passRetained(observation)
+    defer { retained.release() }
+    var context = FSEventStreamContext(
+      version: 0, info: retained.toOpaque(), retain: nil, release: nil, copyDescription: nil)
+    let options = FSEventStreamCreateFlags(
+      kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes
+        | kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagWatchRoot)
+    let physical = root == "/" ? "/System/Volumes/Data" : root
+    guard !cancellation.cancelled,
+      let stream = FSEventStreamCreate(
+        nil, replayCallback, &context, [physical] as CFArray, eventID, 0.01, options)
+    else { return FileEventReplay(events: [], latestID: latest, complete: false) }
+    let callbacks = DispatchQueue(label: "com.tavsn.lighten.replay-callbacks")
+    FSEventStreamSetDispatchQueue(stream, callbacks)
+    defer {
+      FSEventStreamStop(stream)
+      FSEventStreamInvalidate(stream)
+      callbacks.sync {}
+      FSEventStreamRelease(stream)
+    }
+    guard !cancellation.cancelled, FSEventStreamStart(stream) else {
+      return FileEventReplay(events: [], latestID: latest, complete: false)
+    }
+    observation.waitForHistory()
+    if !cancellation.cancelled { FSEventStreamFlushSync(stream) }
+    callbacks.sync {}
+    let result = observation.state.withLock { $0.replay(latestID: latest) }
+    return FileEventReplay(
+      events: result.events, latestID: result.latestID, complete: result.complete && !cancellation.cancelled)
+  }
+}
+
+/// Cancelling wakes the native wait; stream cleanup stays with the owning queue.
+private final class ReplayCancellation: Sendable {
+  private struct State: Sendable {
+    var cancelled = false
+    var observation: ReplayObservation?
+  }
+  private let state = Mutex(State())
+  var cancelled: Bool { state.withLock { $0.cancelled } }
+
+  func cancel() {
+    let observation = state.withLock {
+      $0.cancelled = true
+      return $0.observation
+    }
+    observation?.finished.signal()
+  }
+
+  func observe(_ observation: ReplayObservation) {
+    let cancelled = state.withLock {
+      $0.observation = observation
+      return $0.cancelled
+    }
+    if cancelled { observation.finished.signal() }
+  }
+
+  func stopObserving() { state.withLock { $0.observation = nil } }
 }

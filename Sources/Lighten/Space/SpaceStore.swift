@@ -1,8 +1,10 @@
 import AppKit
 import Foundation
 import LightenKit
+import OSLog
 import Observation
 import SwiftUI
+import Synchronization
 
 enum ScanPhase: Equatable {
   case idle, scanning, cancelled, partial, complete
@@ -11,10 +13,25 @@ enum ScanPhase: Equatable {
 
 @MainActor @Observable
 final class SpaceStore {
+  typealias ReplayReader = @Sendable (String, UInt64) async -> FileEventReplay
+  typealias ReplayReconciler =
+    @Sendable (ScanEngine, ScanTree, FileEventReplay, ScanReplayBaseline, ScanReplayBaseline?) -> ScanReplayResult
   @ObservationIgnored private let engine: ScanEngine
   @ObservationIgnored private let cache: ScanCache?
   @ObservationIgnored private let pictures: ResultPictureStore?
   @ObservationIgnored private let beforeFullRefresh: (@MainActor () async -> Void)?
+  @ObservationIgnored private let readReplay: ReplayReader
+  @ObservationIgnored private let reconcileReplay: ReplayReconciler
+  @ObservationIgnored private let captureReplayBaseline: @Sendable (String) -> ScanReplayBaseline?
+  @ObservationIgnored private let replayDeadline: @Sendable () async -> Void
+  @ObservationIgnored private let elapsedReplay: @Sendable (ContinuousClock.Instant) -> Duration
+  @ObservationIgnored private let displayVerificationDelay: @Sendable () async -> Void
+  @ObservationIgnored private let replayLane = SpaceReplayLane()
+  @ObservationIgnored private let cacheWriteGeneration = SpaceCacheWriteGeneration()
+  @ObservationIgnored private var openingTask: Task<Void, Never>?
+  @ObservationIgnored private var replayDeadlineTask: Task<Void, Never>?
+  @ObservationIgnored private var replayAttempt: UUID?
+  @ObservationIgnored private let replayLogger = Logger(subsystem: "com.tavsn.lighten", category: "space-replay")
   @ObservationIgnored private var generation = UUID()
   @ObservationIgnored private var openingGeneration: UUID?
   @ObservationIgnored private var picture: ResultPicture<SpacePicture>?
@@ -86,11 +103,29 @@ final class SpaceStore {
 
   init(
     engine: ScanEngine = ScanEngine(), cache: ScanCache? = ScanCache(),
-    pictures: ResultPictureStore? = nil, beforeFullRefresh: (@MainActor () async -> Void)? = nil
+    pictures: ResultPictureStore? = nil, beforeFullRefresh: (@MainActor () async -> Void)? = nil,
+    readReplay: @escaping ReplayReader = { await FileEventsReplay.replay(root: $0, since: $1) },
+    reconcileReplay: @escaping ReplayReconciler = {
+      $0.reconcile(tree: $1, replay: $2, baseline: $3, currentBaseline: $4)
+    },
+    captureReplayBaseline: @escaping @Sendable (String) -> ScanReplayBaseline? = {
+      ScanReplayBaseline.capture(root: $0)
+    },
+    waitForReplayDeadline: @escaping @Sendable () async -> Void = { try? await Task.sleep(for: .seconds(2)) },
+    elapsedReplay: @escaping @Sendable (ContinuousClock.Instant) -> Duration = { $0.duration(to: .now) },
+    waitForDisplayVerification: @escaping @Sendable () async -> Void = {
+      try? await Task.sleep(for: .milliseconds(300))
+    }
   ) {
     self.engine = engine
     self.cache = cache
     self.beforeFullRefresh = beforeFullRefresh
+    self.readReplay = readReplay
+    self.reconcileReplay = reconcileReplay
+    self.captureReplayBaseline = captureReplayBaseline
+    self.replayDeadline = waitForReplayDeadline
+    self.elapsedReplay = elapsedReplay
+    self.displayVerificationDelay = waitForDisplayVerification
     self.pictures =
       pictures
       ?? cache.map {
@@ -98,6 +133,7 @@ final class SpaceStore {
           directory: $0.directory == ScanCache.defaultDirectory
             ? ResultPictureStore.defaultDirectory : $0.directory + "-pictures")
       }
+    cacheWriteGeneration.replace(with: generation)
   }
 
   var selectedRoot = URL(fileURLWithPath: NSHomeDirectory())
@@ -202,16 +238,17 @@ final class SpaceStore {
     let pictures = self.pictures
     let engine = self.engine
     phase = .scanning
-    Task {
+    openingTask = Task {
       if let loaded = await Task.detached(operation: { pictures?.loadSpace(root: root) }).value {
-        guard generation == token, selectedRoot.path == root else { return }
+        guard !Task.isCancelled, generation == token, selectedRoot.path == root else { return }
         picture = loaded
         cachedAt = loaded.observedAt
         rootSummary = loaded.content.root.item
         refreshView(forceLayout: true)
       }
+      // This newly decoded tree remains private until one replay outcome is accepted.
       let loaded = await Task.detached { cache.loadEntry(root: root) }.value
-      guard generation == token, selectedRoot.path == root else { return }
+      guard !Task.isCancelled, generation == token, selectedRoot.path == root else { return }
       guard let loaded else {
         startScan(keepingCache: cachedAt != nil)
         return
@@ -221,13 +258,30 @@ final class SpaceStore {
         await showCachedTreeAndRefresh(loaded.tree, token: token, root: root)
         return
       }
-      let replay = await FileEventsReplay.replay(root: root, since: baseline.eventID)
-      let current = await Task.detached { ScanReplayBaseline.capture(root: root) }.value
-      guard generation == token, selectedRoot.path == root else { return }
-      let outcome = await Task.detached {
-        engine.reconcile(tree: loaded.tree, replay: replay, baseline: baseline, currentBaseline: current)
-      }.value
-      guard generation == token, selectedRoot.path == root else { return }
+      let attempt = UUID()
+      replayAttempt = attempt
+      let started = ContinuousClock.now
+      let deadline = replayDeadline
+      replayDeadlineTask = Task { @concurrent [weak self] in
+        await deadline()
+        guard !Task.isCancelled else { return }
+        await self?.replayExpired(attempt: attempt, token: token, root: root, started: started)
+      }
+      let replay = await readReplay(root, baseline.eventID)
+      guard !Task.isCancelled, acceptsReplay(attempt: attempt, token: token, root: root) else { return }
+      let capture = captureReplayBaseline
+      let current = await replayLane.perform { capture(root) }
+      guard !Task.isCancelled, acceptsReplay(attempt: attempt, token: token, root: root) else { return }
+      let reconcile = reconcileReplay
+      let outcome = await replayLane.perform {
+        reconcile(engine, loaded.tree, replay, baseline, current)
+      }
+      guard !Task.isCancelled else { return }
+      if elapsedReplay(started) >= .seconds(2) {
+        replayExpired(attempt: attempt, token: token, root: root, started: started)
+        return
+      }
+      guard finishReplay(attempt: attempt, token: token, root: root) else { return }
       if case .refreshed = outcome {
         picture = nil
         cachedAt = nil
@@ -236,15 +290,52 @@ final class SpaceStore {
         let nextBaseline = current.map {
           ScanReplayBaseline(eventID: replay.latestID, volumeUUID: $0.volumeUUID, storeUUID: $0.storeUUID)
         }
-        Task.detached(priority: .utility) {
-          try? cache.save(loaded.tree, baseline: nextBaseline)
-          try? pictures?.saveSpace(tree: loaded.tree)
-        }
+        saveAcceptedTree(loaded.tree, baseline: nextBaseline)
       } else {
         await showCachedTreeAndRefresh(loaded.tree, token: token, root: root)
       }
     }
   }
+
+  private func acceptsReplay(attempt: UUID, token: UUID, root: String) -> Bool {
+    replayAttempt == attempt && generation == token && selectedRoot.path == root
+  }
+
+  private func finishReplay(attempt: UUID, token: UUID, root: String) -> Bool {
+    guard acceptsReplay(attempt: attempt, token: token, root: root) else { return false }
+    replayAttempt = nil
+    replayDeadlineTask?.cancel()
+    replayDeadlineTask = nil
+    return true
+  }
+
+  private func replayExpired(attempt: UUID, token: UUID, root: String, started: ContinuousClock.Instant) {
+    guard finishReplay(attempt: attempt, token: token, root: root) else { return }
+    openingTask?.cancel()
+    let elapsed = elapsedReplay(started).components
+    let milliseconds = Double(elapsed.seconds) * 1000 + Double(elapsed.attoseconds) / 1e15
+    replayLogger.info("Space replay deadline milliseconds=\(milliseconds, privacy: .public)")
+    // Never install the private candidate: the cancelled loser may still be reconciling it.
+    startScan(keepingCache: picture != nil || tree != nil)
+  }
+
+  private func saveAcceptedTree(_ tree: ScanTree, baseline: ScanReplayBaseline?) {
+    guard let cache else { return }
+    let token = generation
+    let state = cacheWriteGeneration
+    let pictures = self.pictures
+    replayLane.enqueue {
+      guard state.accepts(token) else { return }
+      try? cache.save(tree, baseline: baseline)
+      guard state.accepts(token) else { return }
+      try? pictures?.saveSpace(tree: tree)
+    }
+  }
+
+  func waitForOpening() async { await openingTask?.value }
+  func waitForReplayDeadline() async { await replayDeadlineTask?.value }
+  func waitForCacheWrites() async { await replayLane.drain() }
+  func waitForScanCompletion() async { await progressTask?.value }
 
   private func showCachedTreeAndRefresh(_ loaded: ScanTree, token: UUID, root: String) async {
     // The small picture supplies the first frame; the full cached tree supplies
@@ -306,8 +397,9 @@ final class SpaceStore {
   private func verifyDisplayInBackground() {
     displayVerificationTask?.cancel()
     // Coalesce nearby results. Keep the projected map visible until the finished scan arrives.
+    let delay = displayVerificationDelay
     displayVerificationTask = Task { [weak self] in
-      try? await Task.sleep(for: .milliseconds(300))
+      await delay()
       guard let self, !Task.isCancelled else { return }
       self.cachedAt = self.cachedAt ?? Date()
       self.startScan(keepingCache: true)
@@ -344,8 +436,6 @@ final class SpaceStore {
       picture = nil
       install(tree: started.tree)
     }
-    let cache = self.cache
-    let pictures = self.pictures
     let baseline = scanBaseline
     progressTask = Task { [weak self] in
       for await update in started.progress {
@@ -353,13 +443,7 @@ final class SpaceStore {
         self.apply(update, from: started)
       }
       guard let self, self.run === started else { return }
-      if !started.tree.wasCancelled, let cache {
-        let tree = started.tree
-        Task.detached(priority: .utility) {
-          try? cache.save(tree, baseline: baseline)
-          try? pictures?.saveSpace(tree: tree)
-        }
-      }
+      if !started.tree.wasCancelled { self.saveAcceptedTree(started.tree, baseline: baseline) }
     }
   }
 
@@ -434,6 +518,11 @@ final class SpaceStore {
 
   private func cancelRun() {
     generation = UUID()
+    cacheWriteGeneration.replace(with: generation)
+    replayAttempt = nil
+    replayDeadlineTask?.cancel()
+    replayDeadlineTask = nil
+    openingTask?.cancel()
     run?.cancel()
     run = nil
     progressTask?.cancel()
@@ -574,4 +663,23 @@ final class SpaceStore {
       withAnimation(reduceMotion ? nil : .smooth(duration: 0.24)) { layout = result }
     }
   }
+}
+
+/// Synchronous reconciliation and cache encoding never occupy a cooperative executor thread.
+private nonisolated final class SpaceReplayLane: Sendable {
+  private let queue = DispatchQueue(label: "com.tavsn.lighten.space-replay", qos: .utility)
+
+  func perform<Result: Sendable>(_ operation: @escaping @Sendable () -> Result) async -> Result {
+    await withCheckedContinuation { continuation in
+      queue.async { continuation.resume(returning: operation()) }
+    }
+  }
+  func enqueue(_ operation: @escaping @Sendable () -> Void) { queue.async(execute: operation) }
+  func drain() async { await perform {} }
+}
+
+private nonisolated final class SpaceCacheWriteGeneration: Sendable {
+  private let value = Mutex(UUID())
+  func replace(with generation: UUID) { value.withLock { $0 = generation } }
+  func accepts(_ generation: UUID) -> Bool { value.withLock { $0 == generation } }
 }

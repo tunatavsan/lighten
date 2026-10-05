@@ -17,6 +17,15 @@ struct DuplicateView: View {
     }
   }
 
+  private var pictureGroups: [DuplicatePicture.Group] {
+    guard let picture = store.picture else { return [] }
+    let term = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !term.isEmpty else { return picture.content.groups }
+    return picture.content.groups.filter { group in
+      group.members.contains { $0.path.localizedStandardContains(term) }
+    }
+  }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .top) {
@@ -43,7 +52,17 @@ struct DuplicateView: View {
           .lineLimit(1).truncationMode(.middle).help(folder)
           .padding(.bottom, 8)
       }
-      if store.busy || store.report != nil || store.cancelled {
+      if let date = store.picture?.observedAt ?? store.scannedAt {
+        Text(String(localized: "Last scan") + ": " + date.formatted())
+          .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+          .padding(.bottom, 8)
+      }
+      if store.picture != nil {
+        Text(String(localized: "Previous result. Scan again before selecting copies."))
+          .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+          .padding(.bottom, 8)
+      }
+      if store.busy || store.report != nil || store.cancelled || store.picture != nil {
         HStack {
           Text(
             store.busy
@@ -61,7 +80,7 @@ struct DuplicateView: View {
         .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
         .padding(.bottom, 9)
       }
-      if store.report != nil && !store.needsRescan {
+      if (store.report != nil || store.picture != nil) && !store.needsRescan {
         HStack {
           TextField(String(localized: "Search by name or path"), text: $searchText)
             .textFieldStyle(.roundedBorder)
@@ -70,16 +89,19 @@ struct DuplicateView: View {
           Button(String(localized: "Clear search")) { searchText = "" }
             .disabled(searchText.isEmpty)
           Spacer()
-          Text("\(groups.count) / \(store.report?.groups.count ?? 0) \(String(localized: "groups"))")
-            .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
+          Text(
+            "\(store.picture == nil ? groups.count : pictureGroups.count) / \(store.picture?.content.groups.count ?? store.report?.groups.count ?? 0) \(String(localized: "groups"))"
+          )
+          .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
         }
         .padding(.bottom, 10)
       }
-      if let report = store.report, report.partial, !store.needsRescan {
+      if store.picture?.content.partial == true || store.report?.partial == true, !store.needsRescan {
+        let skipped = store.picture?.content.skippedCount ?? store.report?.skippedCount ?? 0
         Label {
           Text(
-            report.skippedCount > 0
-              ? "\(report.skippedCount) \(String(localized: "known files skipped")) · \(String(localized: "Some files or areas could not be verified; results are partial."))"
+            skipped > 0
+              ? "\(skipped) \(String(localized: "known files skipped")) · \(String(localized: "Some files or areas could not be verified; results are partial."))"
               : String(localized: "Some files or areas could not be verified; results are partial.")
           )
         } icon: {
@@ -95,6 +117,25 @@ struct DuplicateView: View {
           description: Text(String(localized: "Scan again to refresh duplicate groups before another action."))
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else if store.picture != nil {
+        if pictureGroups.isEmpty {
+          ContentUnavailableView(
+            searchText.isEmpty ? String(localized: "No exact copies found") : String(localized: "No matching groups"),
+            systemImage: "checkmark.circle"
+          )
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .background(DuplicatePictureDrawProbe(didDraw: store.pictureDidDraw).allowsHitTesting(false))
+        } else {
+          ScrollView {
+            LazyVStack(alignment: .leading, spacing: 12) {
+              ForEach(pictureGroups) { group in
+                pictureGroupCard(group)
+                  .background(DuplicatePictureDrawProbe(didDraw: store.pictureDidDraw).allowsHitTesting(false))
+              }
+            }
+            .padding(.vertical, 12)
+          }
+        }
       } else if store.report == nil && !store.busy {
         ContentUnavailableView(
           String(localized: "Choose a folder to compare"), systemImage: "doc.on.doc",
@@ -129,7 +170,9 @@ struct DuplicateView: View {
           Task { await store.prepare(actions: actions) }
         }
         .buttonStyle(.borderedProminent)
-        .disabled(store.targets.isEmpty || store.busy || store.preparing || actions.busy || store.needsRescan)
+        .disabled(
+          store.picture != nil || store.report == nil || !store.tool.allowsPreparation || store.targets.isEmpty
+            || actions.busy || store.needsRescan)
       }
       .padding(.top, 12)
       if let message = store.message ?? actions.message {
@@ -149,9 +192,36 @@ struct DuplicateView: View {
     .animation(reduceMotion ? nil : .smooth(duration: 0.24), value: store.displayRevision)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.report?.groups.count)
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.needsRescan)
+    .task { store.open() }
     .onAppear { store.observeResult(actions: actions) }
     .onChange(of: actions.result?.planID) { _, _ in store.observeResult(actions: actions) }
     .onDisappear { store.deactivate(actions: actions) }
+  }
+
+  private func pictureGroupCard(_ group: DuplicatePicture.Group) -> some View {
+    VStack(alignment: .leading, spacing: 9) {
+      HStack {
+        Text("\(group.members.count) \(String(localized: "data-identical files"))")
+          .font(.system(size: 15, weight: .semibold))
+        Spacer()
+        Text(format(group.logicalBytes)).font(.system(size: 13, weight: .medium)).monospacedDigit()
+      }
+      Divider()
+      ForEach(group.members) { member in
+        HStack(spacing: 10) {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(URL(fileURLWithPath: member.path).lastPathComponent)
+              .font(.system(size: 12, weight: .medium)).lineLimit(1)
+            Text(member.path).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
+              .lineLimit(1).truncationMode(.middle).help(member.path)
+          }
+          Spacer(minLength: 8)
+          Text(label(member.eligibility)).font(.system(size: 10)).foregroundStyle(LightenStyle.muted)
+        }
+      }
+    }
+    .padding(13)
+    .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 10))
   }
 
   private func groupCard(_ group: DuplicateGroup) -> some View {
@@ -193,7 +263,7 @@ struct DuplicateView: View {
           .frame(width: 20)
       }
       .buttonStyle(.plain)
-      .disabled(actions.busy)
+      .disabled(actions.busy || store.tool.phase != .ready)
       .accessibilityLabel(isKeeper ? String(localized: "Keep this copy") : String(localized: "Choose as keeper"))
       Button {
         store.toggleTarget(member.id, in: group, actions: actions)
@@ -202,7 +272,7 @@ struct DuplicateView: View {
           .frame(width: 20)
       }
       .buttonStyle(.plain)
-      .disabled(!canTarget || isKeeper || actions.busy)
+      .disabled(!canTarget || isKeeper || actions.busy || store.tool.phase != .ready)
       .accessibilityLabel(String(localized: "Select copy for Trash"))
       VStack(alignment: .leading, spacing: 2) {
         Text(URL(fileURLWithPath: member.entry.path).lastPathComponent)
@@ -243,6 +313,30 @@ struct DuplicateView: View {
     panel.prompt = String(localized: "Scan folder")
     if panel.runModal() == .OK, let path = panel.url?.path {
       store.startScan(folder: path, actions: actions)
+    }
+  }
+}
+
+private struct DuplicatePictureDrawProbe: NSViewRepresentable {
+  let didDraw: @MainActor () -> Void
+  func makeNSView(context: Context) -> ProbeView { ProbeView(didDraw: didDraw) }
+  func updateNSView(_ view: ProbeView, context: Context) {
+    view.didDraw = didDraw
+    view.needsDisplay = true
+  }
+
+  final class ProbeView: NSView {
+    var didDraw: @MainActor () -> Void
+    init(didDraw: @escaping @MainActor () -> Void) {
+      self.didDraw = didDraw
+      super.init(frame: .zero)
+    }
+    required init?(coder: NSCoder) { return nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+      guard window != nil, !isHiddenOrHasHiddenAncestor else { return }
+      let callback = didDraw
+      DispatchQueue.main.async { callback() }
     }
   }
 }

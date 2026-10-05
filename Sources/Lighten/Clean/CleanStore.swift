@@ -151,12 +151,13 @@ final class CleanStore: ToolSummaryProviding {
     candidates.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.logicalBytes }
   }
 
-  func open() {
+  func open(refresh: Bool = true) {
     guard !opened else { return }
     opened = true
     guard tool.phase == .idle, scannedAt == nil else { return }
-    let generation = scanGeneration
     let requestedAt = ContinuousClock.now
+    if refresh { startScan() }
+    let generation = scanGeneration
     openingRequestedAt = requestedAt
     let queue = pictureQueue
     let load = loadPicture
@@ -345,8 +346,6 @@ final class CleanStore: ToolSummaryProviding {
               activity: candidateActivity.state, allowed: allowed, exactLogicalBytes: exactLogical,
               refusal: refusal, requiresFullDiskAccess: requiresFullDiskAccess,
               processNames: candidateActivity.processNames))
-          picture = nil
-          pictureBeforeDisplayChanges = nil
         }
         rowStatuses[row.id] =
           activityState == .active

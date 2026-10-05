@@ -583,3 +583,46 @@ extension ScanReplayTests {
         == .requiresFullScan)
   }
 }
+
+extension ScanReplayTests {
+  private actor CancelledReplayGate {
+    private var entered = false
+    private var entry: CheckedContinuation<Void, Never>?
+    private var releaseWait: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+      entered = true
+      entry?.resume()
+      entry = nil
+      await withCheckedContinuation { releaseWait = $0 }
+    }
+
+    func waitForEntry() async {
+      guard !entered else { return }
+      await withCheckedContinuation { entry = $0 }
+    }
+
+    func release() {
+      releaseWait?.resume()
+      releaseWait = nil
+    }
+  }
+
+  @Test("A replay cancelled before its native work starts remains incomplete")
+  func cancelledNativeReplayIsIncomplete() async throws {
+    let root = try fixture()
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    let gate = CancelledReplayGate()
+    let task = Task {
+      await gate.wait()
+      return await FileEventsReplay.replay(root: root, since: 50)
+    }
+    await gate.waitForEntry()
+    task.cancel()
+    await gate.release()
+    let replay = await task.value
+    #expect(!replay.complete)
+    #expect(replay.events.isEmpty)
+    #expect(replay.latestID == 50)
+  }
+}

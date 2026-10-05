@@ -1,39 +1,66 @@
 import Foundation
 import LightenKit
+import OSLog
 import Observation
+import Synchronization
 
 @MainActor @Observable
-final class DuplicateStore {
+final class DuplicateStore: ToolSummaryProviding {
+  typealias Events = @Sendable (String) -> AsyncThrowingStream<DuplicateEvent, Error>
   @ObservationIgnored private let userPlanner: PlanService
   @ObservationIgnored private let preferences: RemovalPreferences
   @ObservationIgnored private let usesInjectedPlanner: Bool
-  @ObservationIgnored private let service = DuplicateService()
+  @ObservationIgnored private let events: Events
   @ObservationIgnored private let planBuilder:
     @Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> ActionPlan
   @ObservationIgnored private var scanTask: Task<Void, Never>?
   @ObservationIgnored private var scanGeneration = UUID()
   @ObservationIgnored private var preparationTask: Task<ActionPlan, Error>?
-  @ObservationIgnored private var preparationGeneration = UUID()
+  @ObservationIgnored private let loadPicture: @Sendable () -> ResultPicture<DuplicatePicture>?
+  @ObservationIgnored private let savePicture: @Sendable (ResultPicture<DuplicatePicture>) throws -> Void
+  @ObservationIgnored private let pictureQueue = DispatchQueue(
+    label: "com.tavsn.lighten.duplicate-pictures", qos: .utility)
+  @ObservationIgnored private let pictureWriteGeneration = DuplicatePictureWriteGeneration()
+  @ObservationIgnored private var pictureTask: Task<Void, Never>?
+  @ObservationIgnored private var opened = false
+  @ObservationIgnored private var openingRequestedAt: ContinuousClock.Instant?
+  @ObservationIgnored private var pictureDrawn = false
+  @ObservationIgnored private let openingLogger = Logger(subsystem: "com.tavsn.lighten", category: "duplicates-opening")
+  @ObservationIgnored private var originalPicture: ResultPicture<DuplicatePicture>?
+  @ObservationIgnored private var hiddenPicturePaths: [UUID: Set<String>] = [:]
+  @ObservationIgnored private weak var lastActions: ActionStore?
+  let tool = ToolStore()
+  private(set) var picture: ResultPicture<DuplicatePicture>?
+  private(set) var scannedAt: Date?
   @ObservationIgnored private var displayGroups: [UUID: DuplicateGroup] = [:]
   @ObservationIgnored private var removedMembers: [UUID: Set<UUID>] = [:]
   private(set) var displayRevision = 0
 
   init(
     planBuilder: (@Sendable (DuplicateReport, [DuplicateGroupSelection]) async throws -> ActionPlan)? = nil,
-    userPlanner: PlanService = PlanService(), preferences: RemovalPreferences = .shared
+    userPlanner: PlanService = PlanService(), preferences: RemovalPreferences = .shared,
+    pictures: ResultPictureStore = ResultPictureStore(),
+    loadPicture: (@Sendable () -> ResultPicture<DuplicatePicture>?)? = nil,
+    savePicture: (@Sendable (ResultPicture<DuplicatePicture>) throws -> Void)? = nil,
+    events: @escaping Events = { DuplicateService().events(rootPath: $0) }
   ) {
     self.planBuilder = planBuilder ?? { try await DuplicateService().makePlan(report: $0, selections: $1) }
     self.userPlanner = userPlanner
     self.preferences = preferences
     self.usesInjectedPlanner = planBuilder != nil
+    self.events = events
+    self.loadPicture = loadPicture ?? { pictures.load(DuplicatePicture.self, named: "duplicates") }
+    self.savePicture = savePicture ?? { try pictures.save($0, named: "duplicates") }
+    pictureWriteGeneration.replace(with: scanGeneration)
   }
 
   var folderPath: String?
   var report: DuplicateReport?
   var scanned = 0
   var compared = 0
-  var busy = false
-  var preparing = false
+  var busy: Bool { tool.phase == .scanning }
+  var preparing: Bool { tool.preparation.preparing }
+  var phase: ToolPhase { preparing ? .preparing : tool.phase }
   var cancelled = false
   var message: String?
   var keepers: [UUID: UUID] = [:]
@@ -51,11 +78,103 @@ final class DuplicateStore {
     }
   }
 
-  func startScan(folder: String, actions: ActionStore) {
-    invalidatePreparation(actions: actions)
+  var toolSummary: ToolSummary {
+    let content = picture?.content ?? report.map(DuplicatePicture.init)
+    let bytes =
+      content?.groups.reduce(Int64(0)) { total, group in
+        let (amount, overflow) = group.logicalBytes.multipliedReportingOverflow(by: Int64(group.members.count))
+        let (sum, sumOverflow) = total.addingReportingOverflow(amount)
+        return overflow || sumOverflow ? Int64.max : sum
+      } ?? 0
+    return ToolSummary(
+      count: content?.groups.count ?? 0, logicalBytes: bytes,
+      observedAt: picture?.observedAt ?? scannedAt, partial: content?.partial == true || phase == .partial)
+  }
+
+  func refresh() {
+    if let folderPath { startScan(folder: folderPath, actions: lastActions) }
+  }
+
+  func open() {
+    guard !opened else { return }
+    opened = true
+    guard report == nil, tool.phase == .idle else { return }
+    let generation = scanGeneration
+    let requestedAt = ContinuousClock.now
+    openingRequestedAt = requestedAt
+    let queue = pictureQueue
+    let load = loadPicture
+    pictureTask = Task(priority: .utility) { @concurrent [weak self] in
+      let cached: ResultPicture<DuplicatePicture>? = await withCheckedContinuation { continuation in
+        queue.async { continuation.resume(returning: load()) }
+      }
+      guard !Task.isCancelled else { return }
+      await self?.publishPicture(cached, generation: generation, requestedAt: requestedAt)
+    }
+  }
+
+  private func publishPicture(
+    _ cached: ResultPicture<DuplicatePicture>?, generation: UUID, requestedAt: ContinuousClock.Instant
+  ) {
+    guard scanGeneration == generation, report == nil, tool.phase == .idle else { return }
+    picture = cached
+    guard let cached else { return }
+    folderPath = cached.content.rootPath
+    scanned = cached.content.scannedCount
+    compared = cached.content.comparisonCount
+    let elapsed = Self.milliseconds(requestedAt.duration(to: .now))
+    let count = cached.content.groups.count
+    openingLogger.info(
+      "Duplicate picture published milliseconds=\(elapsed, privacy: .public) groups=\(count, privacy: .public)")
+  }
+
+  func pictureDidDraw() {
+    guard picture != nil, !pictureDrawn, let requestedAt = openingRequestedAt else { return }
+    pictureDrawn = true
+    let elapsed = Self.milliseconds(requestedAt.duration(to: .now))
+    openingLogger.info("Duplicate picture drawn milliseconds=\(elapsed, privacy: .public)")
+  }
+
+  private static func milliseconds(_ duration: Duration) -> Double {
+    let value = duration.components
+    return Double(value.seconds) * 1000 + Double(value.attoseconds) / 1_000_000_000_000_000
+  }
+
+  func waitForPicture() async { await pictureTask?.value }
+  func waitForScan() async { await scanTask?.value }
+  func waitForPictureSaves() async {
+    let queue = pictureQueue
+    await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
+  }
+
+  private func persistPicture() {
+    let value: ResultPicture<DuplicatePicture>
+    if let picture {
+      value = picture
+    } else {
+      guard tool.phase == .ready, let report, let scannedAt else { return }
+      value = ResultPicture(observedAt: scannedAt, content: DuplicatePicture(report))
+    }
+    let generation = scanGeneration
+    let state = pictureWriteGeneration
+    let save = savePicture
+    pictureQueue.async {
+      guard state.accepts(generation) else { return }
+      try? save(value)
+    }
+  }
+
+  func startScan(folder: String, actions: ActionStore? = nil) {
+    lastActions = actions ?? lastActions
+    clearPreparation(actions: actions)
     cancelScan()
     let generation = UUID()
     scanGeneration = generation
+    pictureWriteGeneration.replace(with: generation)
+    picture = nil
+    originalPicture = nil
+    hiddenPicturePaths = [:]
+    scannedAt = nil
     folderPath = folder
     report = nil
     displayGroups = [:]
@@ -67,26 +186,41 @@ final class DuplicateStore {
     compared = 0
     message = nil
     cancelled = false
-    busy = true
+    tool.phase = .scanning
     scanTask = Task {
       do {
-        for try await event in service.events(rootPath: folder) {
+        for try await event in events(folder) {
           guard scanGeneration == generation else { return }
           switch event {
           case .progress(let scannedCount, let comparedCount):
             scanned = scannedCount
             compared = comparedCount
           case .completed(let value):
+            guard !Task.isCancelled else { return }
             report = value
             scanned = value.snapshot.entries.count
+            compared = value.comparisonCount
           }
         }
       } catch is CancellationError {
-        if scanGeneration == generation { cancelled = true }
+        if scanGeneration == generation {
+          cancelled = true
+          tool.phase = .partial
+        }
       } catch {
-        if scanGeneration == generation { message = FailureText.describe(error) }
+        if scanGeneration == generation {
+          message = FailureText.describe(error)
+          tool.phase = .failed
+        }
       }
-      if scanGeneration == generation { busy = false }
+      guard scanGeneration == generation, !Task.isCancelled else { return }
+      if tool.phase == .scanning {
+        tool.phase = report == nil ? .failed : .ready
+        if report != nil {
+          scannedAt = Date()
+          persistPicture()
+        }
+      }
     }
   }
 
@@ -94,18 +228,29 @@ final class DuplicateStore {
     scanTask?.cancel()
     scanTask = nil
     scanGeneration = UUID()
-    if busy { cancelled = true }
-    busy = false
+    pictureWriteGeneration.replace(with: scanGeneration)
+    if busy {
+      cancelled = true
+      tool.phase = .partial
+      keepers = [:]
+      targets = []
+      clearPreparation(actions: lastActions)
+    }
   }
 
   func deactivate(actions: ActionStore) {
     // Leaving the screen keeps a running scan going; only prepared plans expire.
     observeResult(actions: actions)
     let awaitingResult = actions.busy && actions.pending?.id != presentedPlanID
-    invalidatePreparation(actions: actions, keepPresentedPlanID: awaitingResult || needsRescan)
+    clearPreparation(actions: actions, keepPresentedPlanID: awaitingResult || needsRescan)
   }
 
   func applyDisplayChange(_ change: ActionDisplayChange) {
+    clearPreparation(actions: lastActions, keepPresentedPlanID: true)
+    if picture != nil {
+      applyPictureDisplayChange(change)
+      return
+    }
     guard let report else { return }
     if displayGroups.isEmpty { displayGroups = Dictionary(uniqueKeysWithValues: report.groups.map { ($0.id, $0) }) }
     for item in change.items {
@@ -131,26 +276,54 @@ final class DuplicateStore {
     targets.subtract(hidden)
     displayRevision += 1
     if change.kind == .applied, !hidden.isEmpty { needsRescan = false }
+    persistPicture()
+  }
+
+  private func applyPictureDisplayChange(_ change: ActionDisplayChange) {
+    if originalPicture == nil { originalPicture = picture }
+    guard let originalPicture else { return }
+    for item in change.items {
+      switch change.kind {
+      case .applied:
+        hiddenPicturePaths[item.itemID] = Set(
+          originalPicture.content.groups.flatMap(\.members).filter {
+            $0.path == item.path
+          }.map(\.path))
+      case .restored: hiddenPicturePaths.removeValue(forKey: item.itemID)
+      }
+    }
+    let hidden = hiddenPicturePaths.values.reduce(into: Set<String>()) { $0.formUnion($1) }
+    let content = originalPicture.content
+    picture = ResultPicture(
+      observedAt: originalPicture.observedAt,
+      content: DuplicatePicture(
+        rootPath: content.rootPath,
+        groups: content.groups.compactMap { group in
+          let members = group.members.filter { !hidden.contains($0.path) }
+          return members.count > 1 ? DuplicatePicture.Group(logicalBytes: group.logicalBytes, members: members) : nil
+        }, scannedCount: content.scannedCount, comparisonCount: content.comparisonCount,
+        skippedCount: content.skippedCount, partial: content.partial))
+    displayRevision += 1
+    persistPicture()
   }
 
   func observeResult(actions: ActionStore) {
     guard let presentedPlanID, actions.result?.planID == presentedPlanID,
       !needsRescan
     else { return }
-    invalidatePreparation(actions: actions, keepPresentedPlanID: true)
+    clearPreparation(actions: actions, keepPresentedPlanID: true)
     let applied = Set(actions.result?.items.filter { $0.outcome == .applied }.map(\.itemID) ?? [])
     targets.subtract(applied)
     keepers = [:]
     needsRescan = false
   }
 
-  private func invalidatePreparation(
+  private func clearPreparation(
     actions: ActionStore? = nil, keepPresentedPlanID: Bool = false
   ) {
-    preparationGeneration = UUID()
+    tool.preparation.invalidatePreparation()
     preparationTask?.cancel()
     preparationTask = nil
-    preparing = false
     message = nil
     let pendingMatches = actions?.pending?.id == presentedPlanID && presentedPlanID != nil
     if pendingMatches {
@@ -160,30 +333,33 @@ final class DuplicateStore {
   }
 
   func chooseKeeper(_ id: UUID, for group: DuplicateGroup, actions: ActionStore) {
-    guard !needsRescan, !actions.busy,
+    guard picture == nil, tool.phase == .ready, !needsRescan, !actions.busy,
+      let group = report?.groups.first(where: { $0.id == group.id }),
       group.members.contains(where: { $0.id == id })
     else { return }
-    invalidatePreparation(actions: actions)
+    lastActions = actions
+    clearPreparation(actions: actions)
     keepers[group.id] = id
     targets.subtract(group.members.map(\.id))
   }
 
   func toggleTarget(_ id: UUID, in group: DuplicateGroup, actions: ActionStore) {
-    guard !needsRescan, !actions.busy,
+    guard picture == nil, tool.phase == .ready, !needsRescan, !actions.busy,
+      let group = report?.groups.first(where: { $0.id == group.id }),
       let keeperID = keepers[group.id], keeperID != id, group.members.contains(where: { $0.id == id })
     else { return }
-    invalidatePreparation(actions: actions)
+    lastActions = actions
+    clearPreparation(actions: actions)
     if targets.contains(id) { targets.remove(id) } else { targets.insert(id) }
   }
 
   func prepare(actions: ActionStore) async {
-    guard let report, !busy, !preparing, !actions.busy, !needsRescan, !targets.isEmpty
+    lastActions = actions
+    guard picture == nil, let report, tool.allowsPreparation, !actions.busy, !needsRescan, !targets.isEmpty
     else { return }
     if !usesInjectedPlanner {
-      let generation = UUID()
-      preparationGeneration = generation
-      preparing = true
-      defer { if preparationGeneration == generation { preparing = false } }
+      guard let generation = tool.preparation.begin() else { return }
+      defer { tool.preparation.finish(generation) }
       let chosen = report.groups.flatMap(\.members).filter { targets.contains($0.id) }
       let selected = targets
       let outcome = await userPlanner.makeAvailableUserSelectionPlan(
@@ -198,13 +374,17 @@ final class DuplicateStore {
             applicationPackagePaths: ActionStore.observedApplicationPackagePaths(
               in: report.snapshot.entries.map(\.path), under: member.entry.path))
         }, kind: preferences.deletionDefault.kind, runID: report.snapshot.runID)
-      guard preparationGeneration == generation, targets == selected else { return }
+      guard tool.preparation.accepts(generation), targets == selected,
+        self.report?.snapshot.runID == report.snapshot.runID
+      else { return }
       guard let plan = outcome.plan else {
         message = outcome.rejections.map(SpaceText.rejection).joined(separator: "\n")
         return
       }
       let running = await actions.containsRunningApplications(plan)
-      guard preparationGeneration == generation, targets == selected else { return }
+      guard tool.preparation.accepts(generation), targets == selected,
+        self.report?.snapshot.runID == report.snapshot.runID
+      else { return }
       actions.present(
         plan: plan,
         items: plan.items.map { item in
@@ -216,14 +396,10 @@ final class DuplicateStore {
       presentedPlanID = plan.id
       return
     }
-    let generation = UUID()
-    preparationGeneration = generation
-    preparing = true
+    guard let generation = tool.preparation.begin() else { return }
     defer {
-      if preparationGeneration == generation {
-        preparing = false
-        preparationTask = nil
-      }
+      if tool.preparation.accepts(generation) { preparationTask = nil }
+      tool.preparation.finish(generation)
     }
     do {
       let selections = report.groups.compactMap { group -> DuplicateGroupSelection? in
@@ -238,7 +414,7 @@ final class DuplicateStore {
       }
       preparationTask = task
       let plan = try await task.value
-      guard preparationGeneration == generation,
+      guard tool.preparation.accepts(generation),
         self.report?.snapshot.runID == report.snapshot.runID,
         !task.isCancelled
       else { return }
@@ -254,9 +430,16 @@ final class DuplicateStore {
       presentedPlanID = plan.id
       message = nil
     } catch {
-      if preparationGeneration == generation {
+      if tool.preparation.accepts(generation) {
         message = String(localized: "Files changed or could not be verified. Scan again.")
       }
     }
   }
+}
+
+/// Shared only with the serial disk queue; UI generation remains main-actor owned.
+private nonisolated final class DuplicatePictureWriteGeneration: Sendable {
+  private let value = Mutex(UUID())
+  func replace(with generation: UUID) { value.withLock { $0 = generation } }
+  func accepts(_ generation: UUID) -> Bool { value.withLock { $0 == generation } }
 }

@@ -3748,6 +3748,22 @@
         }
       }
     },
+    "Previous result. Scan again before selecting copies.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous result. Scan again before selecting copies."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki sonuç. Kopyaları seçmeden önce yeniden tarayın."
+          }
+        }
+      }
+    },
     "Previous scan pictures help Space open quickly. Clearing them does not remove your files.": {
       "localizations": {
         "en": {
