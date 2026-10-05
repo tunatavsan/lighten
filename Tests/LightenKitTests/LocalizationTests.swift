@@ -76,6 +76,7 @@ struct LocalizationTests {
     let expression = try NSRegularExpression(pattern: pattern)
     var keys = Set<String>()
     let bilingualCopyPaths = Set([
+      root.appending(path: "Lighten/Apps/AppsView.swift").path,
       root.appending(path: "Lighten/Services/FailureText.swift").path,
       root.appending(path: "Lighten/Space/SpaceText.swift").path,
     ])

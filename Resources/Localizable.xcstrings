@@ -8633,6 +8633,22 @@
         }
       }
     },
+    "This file contains app data. Review it before removal.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file contains app data. Review it before removal."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu dosya uygulama verisi içeriyor. Kaldırmadan önce inceleyin."
+          }
+        }
+      }
+    },
     "This folder changed during the scan. Scan again.": {
       "localizations": {
         "en": {
@@ -8677,6 +8693,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu klasörde bir uygulama var. Uygulamanın kendisini seçin."
+          }
+        }
+      }
+    },
+    "This folder contains app data. Review it before removal.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This folder contains app data. Review it before removal."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu klasör uygulama verisi içeriyor. Kaldırmadan önce inceleyin."
           }
         }
       }
@@ -8741,6 +8773,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu öğe başka bir hesaba ait. Sahibini ve izinlerini Finder’da kontrol edin."
+          }
+        }
+      }
+    },
+    "This item contains app data. Review it before removal.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This item contains app data. Review it before removal."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu öğe uygulama verisi içeriyor. Kaldırmadan önce inceleyin."
           }
         }
       }
