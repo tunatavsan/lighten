@@ -1126,6 +1126,23 @@
         }
       }
     },
+    "Appearance": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Appearance"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Görünüm"
+          }
+        }
+      }
+    },
     "Apple system cache. Inspect it in Finder.": {
       "localizations": {
         "en": {
@@ -3239,6 +3256,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tam Disk Erişimi: verilmedi"
+          }
+        }
+      }
+    },
+    "General": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "General"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Genel"
           }
         }
       }
@@ -6275,6 +6309,23 @@
         }
       }
     },
+    "Removal": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removal"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaldırma"
+          }
+        }
+      }
+    },
     "Removal could not be verified. Check the item in History and Finder.": {
       "localizations": {
         "en": {
@@ -7432,22 +7483,6 @@
         }
       }
     },
-    "Settings": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Settings"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ayarlar"
-          }
-        }
-      }
-    },
     "Shared APFS storage cannot be measured here. Moving copies to Trash does not free space yet.": {
       "localizations": {
         "en": {
@@ -7541,6 +7576,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Çöp’te göster"
+          }
+        }
+      }
+    },
+    "Show in menu bar": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show in menu bar"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Menü çubuğunda göster"
           }
         }
       }
@@ -8111,6 +8163,23 @@
         }
       }
     },
+    "Stored previous scans": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stored previous scans"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saklanan önceki taramalar"
+          }
+        }
+      }
+    },
     "Swap used": {
       "localizations": {
         "en": {
@@ -8590,6 +8659,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "macOS sistem diski salt okunur. Veri diskinizdeki bir öğeyi seçin."
+          }
+        }
+      }
+    },
+    "The menu bar item shows free space and memory pressure, and opens each tool.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The menu bar item shows free space and memory pressure, and opens each tool."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Menü çubuğu öğesi boş alanı ve bellek baskısını gösterir, her aracı açar."
           }
         }
       }

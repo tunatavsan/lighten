@@ -1,10 +1,13 @@
 import AppKit
 import SwiftUI
 
+/// Settings in the macOS shape: a few tabs, each one grouped form. No menu opens another menu.
 struct LightenSettingsView: View {
   @State private var cacheStore = SpaceStore()
   @State private var removal = RemovalPreferences.shared
   @State private var duplicates = DuplicatePreferences.shared
+  @AppStorage(AppearancePreference.key) private var appearance = AppearancePreference.system
+  @AppStorage(MenuBarPreference.key) private var showsMenuBarExtra = false
   var access = FullDiskAccessMonitor()
   var space: SpaceStore?
   var retrySpace: (() -> Void)?
@@ -13,98 +16,13 @@ struct LightenSettingsView: View {
   var retryApps: (() -> Void)?
 
   var body: some View {
-    LegacyToolScreen(String(localized: "Settings")) {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-          Group {
-            Picker(String(localized: "Default removal method"), selection: $removal.deletionDefault) {
-              ForEach(RemovalPreferences.DefaultMethod.allCases) { method in
-                Text(method.title).tag(method)
-              }
-            }
-            Toggle(
-              String(localized: "Automatically select discovered app data"),
-              isOn: $removal.automaticallySelectRelatedData
-            )
-            Text(
-              String(
-                localized:
-                  "Only data supported by independent evidence is selected automatically. You can select other rows yourself."
-              )
-            )
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-            Text(String(localized: "Permanent deletion always needs a separate confirmation and cannot be undone."))
-              .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-            Divider()
-          }
-          duplicateSettings
-          Label(String(localized: "File access"), systemImage: "hand.raised")
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(LightenStyle.accent)
-          Text(
-            String(
-              localized:
-                "Lighten scans only locations your account and macOS allow. Full Disk Access is optional. Without it, protected locations may stay unreadable and scans can be partial."
-            )
-          )
-          .font(.system(size: 13))
-          .fixedSize(horizontal: false, vertical: true)
-          Text(
-            String(
-              localized:
-                "macOS controls this permission. Opening Settings does not grant access. Return to Lighten and retry a scan after changing access."
-            )
-          )
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          .fixedSize(horizontal: false, vertical: true)
-          FileAccessStatus(access: access)
-          let space = space ?? cacheStore
-          Group {
-            Divider()
-            Text(String(localized: "Scan cache")).font(.system(size: 16, weight: .semibold))
-            HStack {
-              Text(format(space.cacheUsageBytes)).monospacedDigit()
-              Spacer()
-              Button(String(localized: "Clear scan cache")) { Task { await space.clearScanCache() } }
-            }
-            Text(
-              String(
-                localized: "Previous scan pictures help Space open quickly. Clearing them does not remove your files.")
-            )
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-            .fixedSize(horizontal: false, vertical: true)
-            if let message = space.cacheMessage {
-              Text(message).font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-            }
-          }
-          if retrySpace != nil || retryClean != nil || retryDuplicates != nil || retryApps != nil {
-            Divider()
-            Text(String(localized: "Retry a scan"))
-              .font(.system(size: 16, weight: .semibold))
-            Text(
-              String(
-                localized:
-                  "Choose an area to check access again. Previous results are not proof of newly granted access."
-              )
-            )
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-            ViewThatFits(in: .horizontal) {
-              HStack(spacing: 8) { retryButtons }
-                .fixedSize(horizontal: true, vertical: false)
-              LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading) {
-                retryButtons
-              }
-            }
-          }
-        }
-        .padding(.vertical, 24)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-      }
-    } toolbar: {
-      Button(String(localized: "Open Full Disk Access settings"), action: access.openSettings)
-      Button(String(localized: "Check again")) { Task { await access.checkPermissionWindow() } }
+    TabView {
+      Tab(String(localized: "General"), systemImage: "gearshape") { general }
+      Tab(String(localized: "Removal"), systemImage: "trash") { removalSettings }
+      Tab(String(localized: "File access"), systemImage: "hand.raised") { fileAccess }
     }
-    .frame(minWidth: 560, minHeight: 500)
+    .frame(width: Theme.Layout.settingsWidth)
+    .frame(minHeight: Theme.Layout.settingsMinimumHeight)
     .task {
       await access.refresh()
       (space ?? cacheStore).loadCacheUsage()
@@ -114,33 +32,130 @@ struct LightenSettingsView: View {
     }
   }
 
-  private var duplicateSettings: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text(String(localized: "Duplicates")).font(.system(size: 16, weight: .semibold))
-      HStack {
-        Text(String(localized: "Minimum duplicate file size (MB)"))
-        Spacer()
-        TextField(
-          String(localized: "Minimum duplicate file size (MB)"), value: $duplicates.minimumMegabytes,
-          format: .number.precision(.fractionLength(0...6))
-        )
-        .textFieldStyle(.roundedBorder)
-        .frame(width: 110)
+  // MARK: General
+
+  private var general: some View {
+    let space = space ?? cacheStore
+    return Form {
+      Section {
+        Picker(String(localized: "Appearance"), selection: $appearance) {
+          ForEach(AppearancePreference.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        Toggle(String(localized: "Show in menu bar"), isOn: $showsMenuBarExtra)
+      } footer: {
+        footnote(String(localized: "The menu bar item shows free space and memory pressure, and opens each tool."))
       }
-      Text(
-        String(localized: "Enter a size greater than zero. Changes apply to the next duplicate scan.")
-      )
-      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-      Text(
-        String(
-          localized:
-            "Hidden folders, developer folders, caches, and package contents are skipped. Home scans also skip Library."
+      Section {
+        LabeledContent(String(localized: "Stored previous scans")) {
+          HStack(spacing: Theme.Space.m) {
+            Text(ByteCountFormatter.string(fromByteCount: space.cacheUsageBytes, countStyle: .file))
+              .font(Theme.Font.mono).foregroundStyle(Theme.Palette.inkSecondary)
+            Button(String(localized: "Clear scan cache")) { Task { await space.clearScanCache() } }
+          }
+        }
+        if let message = space.cacheMessage {
+          Text(message).font(Theme.Font.caption).foregroundStyle(Theme.Palette.warning)
+        }
+      } header: {
+        Text(String(localized: "Scan cache"))
+      } footer: {
+        footnote(
+          String(localized: "Previous scan pictures help Space open quickly. Clearing them does not remove your files.")
         )
-      )
-      .font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-      .fixedSize(horizontal: false, vertical: true)
-      Divider()
+      }
     }
+    .formStyle(.grouped)
+  }
+
+  // MARK: Removal
+
+  private var removalSettings: some View {
+    Form {
+      Section {
+        Picker(String(localized: "Default removal method"), selection: $removal.deletionDefault) {
+          ForEach(RemovalPreferences.DefaultMethod.allCases) { method in
+            Text(method.title).tag(method)
+          }
+        }
+        Toggle(
+          String(localized: "Automatically select discovered app data"),
+          isOn: $removal.automaticallySelectRelatedData)
+      } footer: {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+          footnote(
+            String(
+              localized:
+                "Only data supported by independent evidence is selected automatically. You can select other rows yourself."
+            ))
+          Text(String(localized: "Permanent deletion always needs a separate confirmation and cannot be undone."))
+            .font(Theme.Font.caption).foregroundStyle(Theme.Palette.warning)
+        }
+      }
+      Section {
+        LabeledContent(String(localized: "Minimum duplicate file size (MB)")) {
+          TextField(
+            String(localized: "Minimum duplicate file size (MB)"), value: $duplicates.minimumMegabytes,
+            format: .number.precision(.fractionLength(0...6))
+          )
+          .labelsHidden()
+          .multilineTextAlignment(.trailing)
+          .frame(width: Theme.Layout.numberField)
+        }
+      } header: {
+        Text(String(localized: "Duplicates"))
+      } footer: {
+        footnote(
+          String(localized: "Enter a size greater than zero. Changes apply to the next duplicate scan.") + " "
+            + String(
+              localized:
+                "Hidden folders, developer folders, caches, and package contents are skipped. Home scans also skip Library."
+            ))
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  // MARK: File access
+
+  private var fileAccess: some View {
+    Form {
+      Section {
+        FileAccessStatus(access: access)
+        HStack {
+          Button(String(localized: "Open Full Disk Access settings"), action: access.openSettings)
+          Button(String(localized: "Check again")) { Task { await access.checkPermissionWindow() } }
+        }
+      } footer: {
+        footnote(
+          String(
+            localized:
+              "Lighten scans only locations your account and macOS allow. Full Disk Access is optional. Without it, protected locations may stay unreadable and scans can be partial."
+          ) + " "
+            + String(
+              localized:
+                "macOS controls this permission. Opening Settings does not grant access. Return to Lighten and retry a scan after changing access."
+            ))
+      }
+      if retrySpace != nil || retryClean != nil || retryDuplicates != nil || retryApps != nil {
+        Section {
+          HStack { retryButtons }
+        } header: {
+          Text(String(localized: "Retry a scan"))
+        } footer: {
+          footnote(
+            String(
+              localized:
+                "Choose an area to check access again. Previous results are not proof of newly granted access."))
+        }
+      }
+    }
+    .formStyle(.grouped)
+  }
+
+  private func footnote(_ text: String) -> some View {
+    Text(text).font(Theme.Font.caption).foregroundStyle(Theme.Palette.inkSecondary)
+      .fixedSize(horizontal: false, vertical: true)
   }
 
   @ViewBuilder private var retryButtons: some View {
@@ -151,4 +166,9 @@ struct LightenSettingsView: View {
     }
     if let retryApps { Button(String(localized: "Retry Apps"), action: retryApps) }
   }
+}
+
+/// Whether Lighten also lives in the menu bar. Off until the user turns it on.
+enum MenuBarPreference {
+  static let key = "LightenShowsMenuBarExtra"
 }

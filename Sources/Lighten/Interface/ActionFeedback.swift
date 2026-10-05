@@ -35,32 +35,37 @@ struct ActionFeedback: Identifiable {
   }
 }
 
+/// The result of an action as a glass capsule over the bottom of the window, with Undo while it applies.
 struct ActionFeedbackToast: View {
-  @Environment(\.colorSchemeContrast) private var contrast
   let feedback: ActionFeedback
   let actions: ActionStore
   let dismiss: () -> Void
 
   var body: some View {
-    HStack(spacing: 16) {
-      Label(feedback.message, systemImage: feedback.offersUndo ? "checkmark.circle" : "exclamationmark.circle")
-        .font(.callout).fixedSize(horizontal: false, vertical: true)
-      if feedback.offersUndo {
-        Button(String(localized: "Undo")) { Task { await actions.undoLatest() } }
-          .disabled(actions.busy || !actions.canUndoLatest || actions.result?.planID != feedback.planID)
-      }
-      Button(action: dismiss) { Image(systemName: "xmark") }
+    GlassEffectContainer(spacing: Theme.Space.s) {
+      HStack(spacing: Theme.Space.m) {
+        Image(systemName: feedback.offersUndo ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+          .font(Theme.Font.icon)
+          .foregroundStyle(feedback.offersUndo ? Theme.Palette.positive : Theme.Palette.warning)
+          .accessibilityHidden(true)
+        Text(feedback.message).font(Theme.Font.calloutMedium).lineLimit(2)
+          .fixedSize(horizontal: false, vertical: true)
+        if feedback.offersUndo {
+          Button(String(localized: "Undo")) { Task { await actions.undoLatest() } }
+            .buttonStyle(.glass)
+            .disabled(actions.busy || !actions.canUndoLatest || actions.result?.planID != feedback.planID)
+        }
+        Button(action: dismiss) {
+          Image(systemName: "xmark").font(Theme.Font.iconSmall).foregroundStyle(Theme.Palette.inkSecondary)
+        }
         .buttonStyle(.plain).accessibilityLabel(String(localized: "Dismiss"))
+      }
+      .padding(.leading, Theme.Space.l).padding(.trailing, Theme.Space.m)
+      .padding(.vertical, Theme.Space.s + 2)
+      .lightenGlass(.chrome, in: Capsule())
     }
-    .padding(16)
-    .background(LightenStyle.surface, in: RoundedRectangle(cornerRadius: 14))
-    .overlay {
-      RoundedRectangle(cornerRadius: 14)
-        .stroke(
-          contrast == .increased ? Color.primary : LightenStyle.separator,
-          lineWidth: contrast == .increased ? 1.5 : 0.5)
-    }
-    .frame(maxWidth: 720)
-    .padding(24)
+    .frame(maxWidth: Theme.Layout.floatingBarMaximum)
+    .padding(Theme.Space.xl)
+    .accessibilityElement(children: .contain)
   }
 }

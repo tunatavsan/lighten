@@ -660,7 +660,7 @@ final class SpaceStore {
         Treemap.layout(values: layoutValues, width: size.width, height: size.height)
       }.value
       guard !Task.isCancelled, layoutKey == key else { return }
-      withAnimation(reduceMotion ? nil : .smooth(duration: 0.24)) { layout = result }
+      withAnimation(reduceMotion ? nil : Theme.Motion.standard) { layout = result }
     }
   }
 }

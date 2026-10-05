@@ -25,7 +25,7 @@ struct LightenApp: App {
     .defaultSize(Theme.Layout.windowDefault)
     .windowResizability(.contentMinSize)
     .windowToolbarStyle(.unified)
-    Settings { LightenSettingsView(access: model.access) }
+    Settings { LightenSettingsView(access: model.access).appliesAppearancePreference() }
   }
 }
 

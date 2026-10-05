@@ -32,71 +32,96 @@ struct ConfirmationView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      VStack(alignment: .leading, spacing: 5) {
-        Text(String(localized: "Review removal"))
-          .font(.system(size: 21, weight: .semibold))
-        Text("\(presentation.items.count) \(String(localized: "items")) · \(logicalSummary)")
-          .font(.system(size: 16, weight: .medium)).monospacedDigit()
-        Text(
-          presentation.plan.kind == .trash
-            ? String(
-              localized: "These items move to macOS Trash. Space is not freed until Trash is emptied outside Lighten.")
-            : String(localized: "Permanent deletion cannot be undone.")
-        )
-        .font(.system(size: 12)).foregroundStyle(LightenStyle.muted)
-        .fixedSize(horizontal: false, vertical: true)
-      }
-      .padding(20)
-      Divider()
-      List {
-        if !presentation.reviewNotes.isEmpty {
-          Section {
-            Text(presentation.reviewNotes.joined(separator: "\n"))
-              .font(.callout).foregroundStyle(LightenStyle.muted)
-              .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-              .accessibilityIdentifier("removal.review-notes")
-          } header: {
-            Text(String(localized: "Review notes"))
-          }
+      HStack(alignment: .top, spacing: Theme.Space.m) {
+        Image(systemName: presentation.plan.kind == .trash ? "trash.circle.fill" : "exclamationmark.octagon.fill")
+          .font(Theme.Font.iconLarge)
+          .foregroundStyle(presentation.plan.kind == .trash ? Theme.Palette.accent : Theme.Palette.critical)
+          .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+          Text(String(localized: "Review removal")).font(Theme.Font.title)
+          Text("\(presentation.items.count) \(String(localized: "items")) · \(logicalSummary)")
+            .font(Theme.Font.metricSmall).monospacedDigit().foregroundStyle(Theme.Palette.heroText)
+          Text(
+            presentation.plan.kind == .trash
+              ? String(
+                localized: "These items move to macOS Trash. Space is not freed until Trash is emptied outside Lighten."
+              )
+              : String(localized: "Permanent deletion cannot be undone.")
+          )
+          .font(Theme.Font.callout)
+          .foregroundStyle(presentation.plan.kind == .trash ? Theme.Palette.inkSecondary : Theme.Palette.critical)
+          .fixedSize(horizontal: false, vertical: true)
         }
-        ForEach(ConfirmationItemGroup.make(presentation.items)) { group in
-          Section {
-            ForEach(group.items, id: \.id) { item in
-              confirmationItem(item)
+      }
+      .padding(Theme.Space.xl)
+      RowDivider()
+      ScrollView {
+        VStack(alignment: .leading, spacing: Theme.Space.l) {
+          if !presentation.reviewNotes.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+              Text(String(localized: "Review notes")).font(Theme.Font.headline)
+              Text(presentation.reviewNotes.joined(separator: "\n"))
+                .font(Theme.Font.callout).foregroundStyle(Theme.Palette.inkSecondary)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                .accessibilityIdentifier("removal.review-notes")
             }
-          } header: {
-            if let app = group.application {
-              HStack(spacing: 10) {
-                ApplicationIconView(path: app.path)
-                Text(app.name).font(.headline)
-                Spacer()
-                Text(PlanItemSize.text(group.size.logical)).monospacedDigit()
+            .padding(Theme.Space.m)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.Palette.neutralTint, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
+          }
+          let groups = ConfirmationItemGroup.make(presentation.items)
+          ForEach(groups) { group in
+            VStack(alignment: .leading, spacing: 0) {
+              if let app = group.application {
+                HStack(spacing: Theme.Space.m) {
+                  ApplicationIconView(path: app.path)
+                  Text(app.name).font(Theme.Font.headline)
+                  Spacer()
+                  Text(PlanItemSize.text(group.size.logical)).font(Theme.Font.mono)
+                }
+                .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("removal.app-group.\(app.path)")
+                RowDivider()
+              } else if groups.contains(where: { $0.application != nil }) {
+                Text(String(localized: "Other selected items")).font(Theme.Font.headline)
+                  .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
+                RowDivider()
               }
-              .accessibilityElement(children: .combine)
-              .accessibilityIdentifier("removal.app-group.\(app.path)")
-            } else if ConfirmationItemGroup.make(presentation.items).contains(where: { $0.application != nil }) {
-              Text(String(localized: "Other selected items"))
+              ForEach(Array(group.items.enumerated()), id: \.element.id) { index, item in
+                if index > 0 { RowDivider(leading: Theme.Layout.rowTextInset) }
+                confirmationItem(item)
+              }
+            }
+            .moduleSurface()
+          }
+          if !presentation.rejectedItems.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+              Text(String(localized: "Skipped items — will stay in place")).font(Theme.Font.headline)
+              VStack(alignment: .leading, spacing: Theme.Space.m) {
+                ForEach(Array(presentation.rejectedItems.enumerated()), id: \.offset) { _, rejection in
+                  FailureReasonView(presentation: FailureText.presentation(rejection), path: rejection.path)
+                }
+              }
+              .padding(Theme.Space.m)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .background(Theme.Palette.warningTint, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
             }
           }
         }
-        if !presentation.rejectedItems.isEmpty {
-          Section(String(localized: "Skipped items — will stay in place")) {
-            ForEach(Array(presentation.rejectedItems.enumerated()), id: \.offset) { _, rejection in
-              FailureReasonView(presentation: FailureText.presentation(rejection), path: rejection.path)
-            }
-          }
-        }
+        .padding(Theme.Space.xl)
       }
-      Divider()
+      .frame(minHeight: 0, maxHeight: .infinity)
+      RowDivider()
       HStack {
         Button(
           presentation.hasRunningApplications
             ? String(localized: "Close and permanently delete") : String(localized: "Permanently delete"),
           action: requestPermanentRemoval
         )
-        .buttonStyle(.bordered)
+        .foregroundStyle(Theme.Palette.critical)
         .disabled(actions.busy || actions.preparingAlternate)
-        Spacer(minLength: 24)
+        Spacer(minLength: Theme.Space.xl)
         Button(String(localized: "Cancel")) {
           actions.pending = nil
           dismiss()
@@ -107,10 +132,12 @@ struct ConfirmationView: View {
           .keyboardShortcut(.defaultAction)
           .disabled(actions.busy || actions.preparingAlternate)
       }
-      .padding(16)
+      .controlSize(.large)
+      .padding(Theme.Space.l)
     }
-    .tint(LightenStyle.accent)
-    .frame(width: 560, height: 420)
+    .background(Theme.Palette.canvas)
+    .tint(Theme.Palette.accent)
+    .frame(width: Theme.Layout.sheetWidth, height: Theme.Layout.sheetHeight)
     .confirmationDialog(
       String(localized: "Permanently delete these items?"), isPresented: $confirmingPermanent,
       titleVisibility: .visible
@@ -134,38 +161,42 @@ struct ConfirmationView: View {
   }
 
   private func confirmationItem(_ item: ActionItemSummary) -> some View {
-    HStack(alignment: .top, spacing: 12) {
-      if item.path == item.applicationGroup?.path {
-        ApplicationIconView(path: item.path)
-      } else {
-        Image(systemName: "doc").foregroundStyle(LightenStyle.muted)
+    HStack(alignment: .top, spacing: Theme.Space.m) {
+      Group {
+        if item.path == item.applicationGroup?.path {
+          ApplicationIconView(path: item.path, size: Theme.Layout.rowIcon)
+        } else {
+          Image(nsImage: NSWorkspace.shared.icon(forFile: item.path)).resizable()
+            .frame(width: Theme.Layout.rowIcon, height: Theme.Layout.rowIcon)
+        }
       }
-      VStack(alignment: .leading, spacing: 3) {
-        Text(item.label).font(.system(size: 13, weight: .medium)).lineLimit(1)
+      .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+        Text(item.label).font(Theme.Font.bodyMedium).lineLimit(1)
         if let warning = item.warning {
-          Text(SpaceText.warning(warning, paths: Array(item.warningPaths.prefix(1))))
-            .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
-            .fixedSize(horizontal: false, vertical: true)
+          Label(
+            SpaceText.warning(warning, paths: Array(item.warningPaths.prefix(1))),
+            systemImage: "exclamationmark.triangle.fill"
+          )
+          .font(Theme.Font.caption).foregroundStyle(Theme.Palette.warning)
+          .fixedSize(horizontal: false, vertical: true)
         } else if let example = presentation.plan.items.first(where: { $0.id == item.id })?
           .userSelectionWarnings?.first?.examplePath
         {
-          Text(
+          Label(
             String(localized: "This selection may contain personal or sensitive data. Check it before removal.")
-              + " — " + example
+              + " — " + example,
+            systemImage: "exclamationmark.triangle.fill"
           )
-          .font(.system(size: 11)).foregroundStyle(LightenStyle.warning)
+          .font(Theme.Font.caption).foregroundStyle(Theme.Palette.warning)
           .fixedSize(horizontal: false, vertical: true)
         }
-        Text(item.path).font(.system(size: 11)).foregroundStyle(LightenStyle.muted)
-          .lineLimit(1).truncationMode(.middle).help(item.path)
+        PathLabel(path: item.path)
       }
-      Spacer(minLength: 8)
-      VStack(alignment: .trailing, spacing: 2) {
-        Text(PlanItemSize.text(item.observedSize.logical)).font(.system(size: 13, weight: .medium))
-      }
-      .monospacedDigit()
+      Spacer(minLength: Theme.Space.s)
+      Text(PlanItemSize.text(item.observedSize.logical)).font(Theme.Font.mono).foregroundStyle(Theme.Palette.ink)
     }
-    .padding(.vertical, 3)
+    .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.s)
   }
 
   private var primaryButtonTitle: String {

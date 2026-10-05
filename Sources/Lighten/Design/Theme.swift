@@ -268,9 +268,12 @@ extension Theme {
     static let floatingBarMaximum: CGFloat = 760
     static let floatingBarClearance: CGFloat = 84
     static let sheetWidth: CGFloat = 600
-    static let sheetHeight: CGFloat = 520
-    static let welcomeWidth: CGFloat = 560
+    static let sheetHeight: CGFloat = 560
+    static let welcomeWidth: CGFloat = 520
+    static let welcomeIcon: CGFloat = 72
     static let settingsWidth: CGFloat = 520
+    static let settingsMinimumHeight: CGFloat = 380
+    static let numberField: CGFloat = 96
     static let menuBarWidth: CGFloat = 300
     static let memoryCardWidth: CGFloat = 272
     static let toolCardMinimum: CGFloat = 112

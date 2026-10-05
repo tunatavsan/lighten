@@ -13,16 +13,8 @@ struct DesignTokenLiteralTests {
     "Sources/Lighten/Design/Theme.swift",
     "Sources/Lighten/Design/Glass.swift",
   ]
-  /// Screens still being moved to tokens.
-  static let pending: Set<String> = [
-    "Sources/Lighten/Actions/ActionViews.swift",
-    "Sources/Lighten/Interface/ActionFeedback.swift",
-    "Sources/Lighten/Interface/FileAccessViews.swift",
-    "Sources/Lighten/Interface/LegacyToolScreen.swift",
-    "Sources/Lighten/Overview/LightenSettingsView.swift",
-    "Sources/Lighten/Space/SpaceStore.swift",
-    "Sources/Lighten/Actions/ActionStore.swift",
-  ]
+  /// Files allowed to keep literals while they move to tokens. Empty: every file reads from `Theme`.
+  static let pending: Set<String> = []
 
   /// (what, pattern). A hit on a code line, with comments and string contents removed, fails.
   static let rules: [(String, String)] = [
@@ -60,7 +52,6 @@ struct DesignTokenLiteralTests {
       .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
     return urls.map { (String($0.path.dropFirst(root.path.count + 1)), $0) }
       .filter { !definitions.contains($0.path) && !pending.contains($0.path) }
-      .filter { !$0.path.hasSuffix("Interface/LightenStyle.swift") }
   }
 
   /// `line` without a trailing comment and with string literal contents blanked.

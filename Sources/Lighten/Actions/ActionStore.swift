@@ -113,7 +113,7 @@ final class ActionStore {
   private(set) var resultRejections: [PlanRejection] = []
   private(set) var restoredItemIDs: Set<UUID> = []
   var reduceMotion = false
-  var displayAnimation: Animation? { reduceMotion ? nil : .smooth(duration: 0.24) }
+  var displayAnimation: Animation? { reduceMotion ? nil : Theme.Motion.standard }
 
   init(
     journal: JSONLActionJournal = JSONLActionJournal(),
