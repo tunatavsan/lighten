@@ -5,7 +5,11 @@ import Observation
 /// The stores one window and the menu bar panel share, and which screen is showing.
 @MainActor @Observable
 final class LightenModel {
-  var section: LightenSection? = .overview
+  /// The screen showing. Remembered between launches; `-LightenSection <name>` on the command line opens a
+  /// given screen through the defaults argument domain.
+  var section: LightenSection? = LightenModel.restoredSection() {
+    didSet { UserDefaults.standard.set(section?.rawValue, forKey: Self.sectionKey) }
+  }
   let access = FullDiskAccessMonitor()
   let onboarding = OnboardingPreferences()
   let overview = OverviewStore()
@@ -46,6 +50,12 @@ final class LightenModel {
   }
 
   func show(_ section: LightenSection) { self.section = section }
+
+  static let sectionKey = "LightenSection"
+
+  private static func restoredSection() -> LightenSection {
+    UserDefaults.standard.string(forKey: sectionKey).flatMap(LightenSection.init(rawValue:)) ?? .overview
+  }
 
   func showActionFeedback() {
     guard let result = actions.result, let kind = actions.resultKind,
