@@ -4,11 +4,13 @@ import SwiftUI
 
 enum LightenSection: String, CaseIterable, Identifiable {
   case overview, space, clean, duplicates, apps, history
+  case largeOldFiles, downloads, trash, projectArtifacts, memory, loginItems, appUpdater, smartCare, similarImages
+  case advisor
   var id: Self { self }
 }
 
 enum ToolGroup: String, CaseIterable, Identifiable {
-  case general, storage, applications, activity
+  case general, storage, applications, activity, comingSoon
   var id: Self { self }
   /// Overview stands alone at the top of the sidebar, without a heading.
   var title: String? {
@@ -17,6 +19,7 @@ enum ToolGroup: String, CaseIterable, Identifiable {
     case .storage: String(localized: "Storage")
     case .applications: String(localized: "Applications")
     case .activity: String(localized: "Activity")
+    case .comingSoon: String(localized: "Coming soon")
     }
   }
 }
@@ -28,6 +31,9 @@ struct ToolCatalogEntry: Identifiable {
   let symbol: String
   let description: String
   let tint: Color
+
+  /// A tool that has its place in Lighten but is not built yet.
+  var isComingSoon: Bool { group == .comingSoon }
 }
 
 enum ToolCatalog {
@@ -58,11 +64,61 @@ enum ToolCatalog {
         id: .history, group: .activity, title: String(localized: "History"),
         symbol: "clock.arrow.circlepath", description: String(localized: "Review actions and restore items from Trash"),
         tint: Theme.Palette.toolHistory),
-    ]
+    ] + comingSoon
   }
 
-  /// The tools Overview offers as cards.
-  static var toolEntries: [ToolCatalogEntry] { entries.filter { $0.id != .overview } }
+  private static var comingSoon: [ToolCatalogEntry] {
+    let tools: [(LightenSection, String, String, String)] = [
+      (
+        .largeOldFiles, String(localized: "Large & Old Files"), "doc.badge.clock",
+        String(localized: "Find big files you have not opened in a long time.")
+      ),
+      (
+        .downloads, String(localized: "Downloads"), "arrow.down.circle",
+        String(localized: "Review installers and archives that pile up in Downloads.")
+      ),
+      (
+        .trash, String(localized: "Trash"), "trash",
+        String(localized: "See what is in Trash and how much space emptying it would free.")
+      ),
+      (
+        .projectArtifacts, String(localized: "Project Artifacts"), "hammer",
+        String(localized: "Find build folders and dependencies left by old projects.")
+      ),
+      (
+        .memory, String(localized: "Memory"), "memorychip",
+        String(localized: "See which apps use memory and how pressure changes over time.")
+      ),
+      (
+        .loginItems, String(localized: "Login Items"), "power",
+        String(localized: "Review what starts with your Mac and keeps running in the background.")
+      ),
+      (
+        .appUpdater, String(localized: "App Updater"), "arrow.triangle.2.circlepath",
+        String(localized: "Check installed apps for available updates.")
+      ),
+      (
+        .smartCare, String(localized: "Smart Care"), "wand.and.stars",
+        String(localized: "Run the routine checks in one pass and review what they find.")
+      ),
+      (
+        .similarImages, String(localized: "Similar Images"), "photo.on.rectangle",
+        String(localized: "Find near-identical photos and keep the best one.")
+      ),
+      (
+        .advisor, String(localized: "Advisor"), "lightbulb",
+        String(localized: "Get plain suggestions based on how your Mac is used.")
+      ),
+    ]
+    return tools.map { id, title, symbol, description in
+      ToolCatalogEntry(
+        id: id, group: .comingSoon, title: title, symbol: symbol, description: description,
+        tint: Theme.Palette.toolComingSoon)
+    }
+  }
+
+  /// The tools Overview offers as cards: the ones that exist today.
+  static var toolEntries: [ToolCatalogEntry] { entries.filter { $0.id != .overview && !$0.isComingSoon } }
 
   static func entry(_ section: LightenSection) -> ToolCatalogEntry? { entries.first { $0.id == section } }
 

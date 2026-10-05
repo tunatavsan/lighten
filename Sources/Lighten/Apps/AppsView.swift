@@ -62,7 +62,6 @@ struct AppsView: View {
     } action: { busy in
       if !busy { store.scanDidLayout() }
     }
-    .animation(Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion), value: store.displayRevision)
     .sheet(item: $actions.pending) { presentation in
       ConfirmationView(presentation: presentation, actions: actions)
     }
@@ -327,7 +326,6 @@ struct AppsView: View {
           row.bounds = anchor
           values[app.path] = row
         }
-        .transition(Theme.Motion.transition(Theme.Motion.pop, reduceMotion: reduceMotion))
     }
   }
 

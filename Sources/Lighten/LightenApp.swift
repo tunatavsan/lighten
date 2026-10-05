@@ -46,14 +46,8 @@ struct LightenRootView: View {
     NavigationSplitView {
       LightenSidebar(selection: $model.section, presentations: model.presentations)
     } detail: {
-      ZStack {
-        detail
-          .id(model.section)
-          .transition(Theme.Motion.transition(Theme.Motion.screen, reduceMotion: reduceMotion))
-      }
-      .animation(Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion), value: model.section)
-      .contentPane()
-      .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+      detail.contentPane()
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
     }
     .windowTray()
     .appliesAppearancePreference()
@@ -99,6 +93,8 @@ struct LightenRootView: View {
       AppsView(store: model.apps, actions: model.actions)
     case .history:
       HistoryView(actions: model.actions, reload: model.reloadHistory)
+    default:
+      if let entry = ToolCatalog.entry(model.section ?? .overview) { ComingSoonView(entry: entry) }
     }
   }
 }
@@ -107,12 +103,15 @@ struct LightenRootView: View {
 struct LightenSidebar: View {
   @Binding var selection: LightenSection?
   let presentations: [LightenSection: ToolPresentation]
+  @AppStorage("LightenShowsComingSoon") private var showsComingSoon = true
 
   var body: some View {
     List(selection: $selection) {
       ForEach(ToolGroup.allCases) { group in
         let entries = ToolCatalog.entries.filter { $0.group == group }
-        if let title = group.title {
+        if group == .comingSoon, let title = group.title {
+          Section(title, isExpanded: $showsComingSoon) { rows(entries) }
+        } else if let title = group.title {
           Section(title) { rows(entries) }
         } else {
           Section { rows(entries) }
@@ -138,6 +137,7 @@ private struct SidebarRow: View {
   var body: some View {
     HStack(spacing: Theme.Space.s) {
       Label(entry.title, systemImage: entry.symbol).lineLimit(1)
+        .foregroundStyle(entry.isComingSoon ? Theme.Palette.inkSecondary : Theme.Palette.ink)
       Spacer(minLength: Theme.Space.xs)
       if presentation?.isWorking == true {
         ProgressView().controlSize(.mini)
@@ -148,6 +148,7 @@ private struct SidebarRow: View {
     }
     .help(help)
     .accessibilityElement(children: .combine)
+    .accessibilityValue(entry.isComingSoon ? String(localized: "Coming soon") : "")
   }
 
   private var help: String {

@@ -134,6 +134,8 @@ extension Theme {
     // Glass tints (system Liquid Glass, never a blur plus a fill).
     static let glassTintChrome = ThemeColor(light: 0xFFFFFF, dark: 0x2A2933, alpha: 0.18).color
     static let glassTintAccent = ThemeColor(light: 0x6B58CA, dark: 0x8F80EE, alpha: 0.22).color
+    /// Over the content pane's glass: dense in light, faint in dark.
+    static let paneWash = ThemeColor(light: 0xF6F6FA, dark: 0x1C1C21, alpha: 0.8, darkAlpha: 0.3).color
     /// What Reduce Transparency shows instead of glass.
     static let glassSolid = ThemeColor(light: 0xF9F9FC, dark: 0x2B2B33).color
 
@@ -252,6 +254,7 @@ extension Theme {
     static let toolTile: CGFloat = 28
     static let sidebarGlyph: CGFloat = 20
     static let toolTileLarge: CGFloat = 40
+    static let comingSoonGlyph: CGFloat = 72
     static let appIcon: CGFloat = 32
     /// A file's Finder icon in a list row.
     static let rowIcon: CGFloat = 24
@@ -310,8 +313,5 @@ extension Theme {
 
     static let rise = AnyTransition.opacity.combined(with: .offset(y: 8))
     static let pop = AnyTransition.opacity.combined(with: .scale(scale: 0.96))
-    /// Moving between screens: the new one rises into place while the old one fades.
-    static let screen = AnyTransition.asymmetric(
-      insertion: .opacity.combined(with: .offset(y: 10)), removal: .opacity)
   }
 }

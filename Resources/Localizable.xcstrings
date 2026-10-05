@@ -709,6 +709,23 @@
         }
       }
     },
+    "Advisor": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Advisor"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Danışman"
+          }
+        }
+      }
+    },
     "All apps": {
       "localizations": {
         "en": {
@@ -945,6 +962,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu klasörün içinde başka bir disk bağlı. Aynı diskteki öğeleri seçin."
+          }
+        }
+      }
+    },
+    "App Updater": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App Updater"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulama Güncelleyici"
           }
         }
       }
@@ -1681,6 +1715,23 @@
         }
       }
     },
+    "Check installed apps for available updates.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check installed apps for available updates."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yüklü uygulamalarda güncelleme olup olmadığını denetler."
+          }
+        }
+      }
+    },
     "Checking app data": {
       "localizations": {
         "en": {
@@ -2162,6 +2213,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Daraltıldı"
+          }
+        }
+      }
+    },
+    "Coming soon": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Coming soon"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yakında"
           }
         }
       }
@@ -3114,6 +3182,40 @@
         }
       }
     },
+    "Find big files you have not opened in a long time.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find big files you have not opened in a long time."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uzun süredir açmadığınız büyük dosyaları bulur."
+          }
+        }
+      }
+    },
+    "Find build folders and dependencies left by old projects.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find build folders and dependencies left by old projects."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eski projelerden kalan derleme klasörlerini ve bağımlılıkları bulur."
+          }
+        }
+      }
+    },
     "Find caches and leftovers": {
       "extractionState": "manual",
       "localizations": {
@@ -3143,6 +3245,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Dosyalarınızın fazladan kopyalarını bulun"
+          }
+        }
+      }
+    },
+    "Find near-identical photos and keep the best one.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find near-identical photos and keep the best one."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neredeyse aynı fotoğrafları bulur, en iyisini saklamanıza yardım eder."
           }
         }
       }
@@ -3273,6 +3392,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Genel"
+          }
+        }
+      }
+    },
+    "Get plain suggestions based on how your Mac is used.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get plain suggestions based on how your Mac is used."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac’inizin kullanımına göre sade öneriler sunar."
           }
         }
       }
@@ -3811,6 +3947,23 @@
         }
       }
     },
+    "Large & Old Files": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Large & Old Files"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Büyük ve Eski Dosyalar"
+          }
+        }
+      }
+    },
     "Largest items": {
       "localizations": {
         "en": {
@@ -4240,6 +4393,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Geçmiş ayrıntıları yükleniyor…"
+          }
+        }
+      }
+    },
+    "Login Items": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Login Items"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Açılış Öğeleri"
           }
         }
       }
@@ -6100,6 +6270,23 @@
         }
       }
     },
+    "Project Artifacts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Project Artifacts"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proje Artıkları"
+          }
+        }
+      }
+    },
     "Protected": {
       "extractionState": "manual",
       "localizations": {
@@ -6632,6 +6819,23 @@
         }
       }
     },
+    "Review installers and archives that pile up in Downloads.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review installers and archives that pile up in Downloads."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İndirilenler’de biriken yükleyicileri ve arşivleri gözden geçirir."
+          }
+        }
+      }
+    },
     "Review notes": {
       "localizations": {
         "en": {
@@ -6788,6 +6992,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu kurulumu Apps’te incele"
+          }
+        }
+      }
+    },
+    "Review what starts with your Mac and keeps running in the background.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review what starts with your Mac and keeps running in the background."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac’inizle başlayan ve arka planda çalışmaya devam edenleri gösterir."
+          }
+        }
+      }
+    },
+    "Run the routine checks in one pass and review what they find.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run the routine checks in one pass and review what they find."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rutin denetimleri tek seferde çalıştırır, bulduklarını gözden geçirmenizi sağlar."
           }
         }
       }
@@ -7178,6 +7416,23 @@
         }
       }
     },
+    "See what is in Trash and how much space emptying it would free.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "See what is in Trash and how much space emptying it would free."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çöp’te ne olduğunu ve boşaltmanın ne kadar yer açacağını gösterir."
+          }
+        }
+      }
+    },
     "See what takes up disk space": {
       "localizations": {
         "en": {
@@ -7190,6 +7445,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Disk alanını nelerin kullandığını görün"
+          }
+        }
+      }
+    },
+    "See which apps use memory and how pressure changes over time.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "See which apps use memory and how pressure changes over time."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hangi uygulamaların bellek kullandığını ve baskının zamanla nasıl değiştiğini gösterir."
           }
         }
       }
@@ -7664,6 +7936,23 @@
         }
       }
     },
+    "Similar Images": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Similar Images"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Benzer Görseller"
+          }
+        }
+      }
+    },
     "Size": {
       "localizations": {
         "en": {
@@ -7820,6 +8109,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Akıllı"
+          }
+        }
+      }
+    },
+    "Smart Care": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Smart Care"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akıllı Bakım"
           }
         }
       }

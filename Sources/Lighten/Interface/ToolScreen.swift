@@ -1,12 +1,15 @@
 import SwiftUI
 
-/// Every tool shares one frame: the title and a short status in the window toolbar, actions in
-/// the toolbar, content on the glass pane below.
+/// Every tool shares one frame: its title and a short status at the top of the pane, actions in the
+/// window toolbar, content below. The title sits in the pane rather than the toolbar, so toolbar items
+/// never squeeze it. A new screen's content rises into place; the toolbar does not move.
 struct ToolScreen<Content: View, Toolbar: ToolbarContent>: View {
   let title: String
   var subtitle: String?
   private let content: Content
   private let toolbar: Toolbar
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @State private var shown = false
 
   init(
     _ title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content,
@@ -19,11 +22,33 @@ struct ToolScreen<Content: View, Toolbar: ToolbarContent>: View {
   }
 
   var body: some View {
-    content
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-      .navigationTitle(title)
-      .navigationSubtitle(subtitle ?? "")
-      .toolbar { toolbar }
+    VStack(alignment: .leading, spacing: 0) {
+      HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
+        Text(title).font(Theme.Font.title).foregroundStyle(Theme.Palette.ink)
+          .accessibilityAddTraits(.isHeader)
+        if let subtitle, !subtitle.isEmpty {
+          Text(subtitle).font(Theme.Font.callout).foregroundStyle(Theme.Palette.inkSecondary).lineLimit(1)
+        }
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, Theme.Layout.gutter)
+      .padding(.top, Theme.Space.xs)
+      content
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .opacity(shown || reduceMotion ? 1 : 0)
+        .offset(y: shown || reduceMotion ? 0 : Theme.Space.s)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .navigationTitle(title)
+    .toolbar(removing: .title)
+    .toolbar {
+      // Without a title, a flexible gap keeps actions at the trailing edge beside search.
+      ToolbarSpacer(.flexible)
+      toolbar
+    }
+    .onAppear {
+      withAnimation(Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion)) { shown = true }
+    }
   }
 }
 

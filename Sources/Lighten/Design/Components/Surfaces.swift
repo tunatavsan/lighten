@@ -117,7 +117,10 @@ struct ToolGlyph: View {
 
   var body: some View {
     Image(systemName: symbol)
-      .font(size > Theme.Layout.toolTile ? Theme.Font.title2 : Theme.Font.iconSmall)
+      .font(
+        size >= Theme.Layout.comingSoonGlyph
+          ? Theme.Font.iconLarge : size > Theme.Layout.toolTile ? Theme.Font.title2 : Theme.Font.iconSmall
+      )
       .foregroundStyle(Theme.Palette.ink)
       .frame(width: size, height: size)
       .background(Theme.Palette.well, in: RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))

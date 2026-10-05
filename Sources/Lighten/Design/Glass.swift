@@ -181,7 +181,8 @@ private struct ContentPaneModifier: ViewModifier {
         if reduceTransparency {
           shape.fill(Theme.Palette.glassSolid)
         } else {
-          PaneGlass()
+          // The wash keeps the light pane light over a dark desktop, where glass alone turns grey.
+          PaneGlass().overlay { shape.fill(Theme.Palette.paneWash) }
         }
       }
       .overlay {
