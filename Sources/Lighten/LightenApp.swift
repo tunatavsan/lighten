@@ -47,6 +47,7 @@ struct LightenRootView: View {
       LightenSidebar(selection: $model.section, presentations: model.presentations)
     } detail: {
       detail.contentPane()
+        .toolbar(removing: .title)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
     }
     .windowTray()

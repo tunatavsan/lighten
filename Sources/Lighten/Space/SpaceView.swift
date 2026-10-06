@@ -57,7 +57,10 @@ struct SpaceView: View {
   }
 
   var body: some View {
-    ToolScreen(String(localized: "Space"), subtitle: subtitle) {
+    ToolScreen(
+      String(localized: "Space"), subtitle: subtitle, search: $searchText,
+      searchPrompt: String(localized: "Search items in this folder")
+    ) {
       VStack(alignment: .leading, spacing: 0) {
         header
         if store.current != nil {
@@ -90,42 +93,36 @@ struct SpaceView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
       .clipped()
       .floatingBar(isPresented: !actions.basket.isEmpty) { basketBar }
-    } toolbar: {
-      ToolbarItem(placement: .navigation) {
-        Menu {
-          Button(String(localized: "Choose folder")) { store.chooseFolder() }
-          Divider()
-          ForEach(store.volumes, id: \.path) { volume in
-            Button(volume.lastPathComponent.isEmpty ? "/" : volume.lastPathComponent) { store.selectRoot(volume) }
-          }
-        } label: {
-          Label(rootName, systemImage: "folder")
+    } actions: {
+      Menu {
+        Button(String(localized: "Choose folder")) { store.chooseFolder() }
+        Divider()
+        ForEach(store.volumes, id: \.path) { volume in
+          Button(volume.lastPathComponent.isEmpty ? "/" : volume.lastPathComponent) { store.selectRoot(volume) }
         }
-        .help(String(localized: "Choose folder"))
+      } label: {
+        Label(MenuLabel.short(rootName), systemImage: "folder")
       }
-      ToolbarItem(placement: .primaryAction) {
-        Button(
-          store.phase == .scanning ? String(localized: "Cancel scan") : String(localized: "Scan"),
-          systemImage: store.phase == .scanning ? "stop.fill" : "arrow.clockwise"
-        ) {
-          if store.phase == .scanning { store.cancel() } else { store.startScan() }
-        }
-        .labelStyle(.titleAndIcon)
-        .accessibilityIdentifier("space.scan-control")
+      .fixedSize()
+      .help(rootName)
+      Button(
+        store.phase == .scanning ? String(localized: "Cancel scan") : String(localized: "Scan"),
+        systemImage: store.phase == .scanning ? "stop.fill" : "arrow.clockwise"
+      ) {
+        if store.phase == .scanning { store.cancel() } else { store.startScan() }
       }
-      ToolbarItem(placement: .primaryAction) {
-        Button(String(localized: "Details"), systemImage: "sidebar.trailing") {
-          withAnimation(navigationAnimation) { showingInspector.toggle() }
-        }
-        .help(String(localized: "Details"))
+      .accessibilityIdentifier("space.scan-control")
+      Button(String(localized: "Details"), systemImage: "sidebar.trailing") {
+        withAnimation(navigationAnimation) { showingInspector.toggle() }
       }
+      .labelStyle(.iconOnly)
+      .help(String(localized: "Details"))
     }
     .inspector(isPresented: $showingInspector) {
       inspector
         .inspectorColumnWidth(
           min: Theme.Layout.inspectorMinimum, ideal: Theme.Layout.inspectorIdeal, max: Theme.Layout.inspectorMaximum)
     }
-    .searchable(text: $searchText, prompt: String(localized: "Search items in this folder"))
     .onChange(of: searchText) { _, text in
       if !text.isEmpty { compactSurface = .list }
     }

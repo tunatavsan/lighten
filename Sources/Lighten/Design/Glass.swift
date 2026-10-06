@@ -189,8 +189,8 @@ private struct ContentPaneModifier: ViewModifier {
         if contrast == .increased { shape.strokeBorder(Theme.Palette.hairlineStrong, lineWidth: Theme.Stroke.hairline) }
       }
       .padding(Theme.Layout.paneInset)
-      // The pane starts below the toolbar, so toolbar controls float on the tray with room around them.
-      .ignoresSafeArea(edges: .bottom)
+      // The pane reaches the top of the window; each screen's controls sit inside it.
+      .ignoresSafeArea(edges: [.top, .bottom])
       .allowsHitTesting(false)
       .accessibilityHidden(true)
     }

@@ -24,7 +24,10 @@ struct CleanView: View {
   }
 
   var body: some View {
-    ToolScreen(String(localized: "Clean"), subtitle: subtitle) {
+    ToolScreen(
+      String(localized: "Clean"), subtitle: subtitle, search: $searchText,
+      searchPrompt: String(localized: "Search by name or path")
+    ) {
       ScrollView {
         VStack(alignment: .leading, spacing: Theme.Space.xl) {
           header
@@ -60,24 +63,19 @@ struct CleanView: View {
         .padding(.bottom, Theme.Space.xl)
       }
       .floatingBar(isPresented: !store.selected.isEmpty && store.picture == nil) { selectionBar }
-    } toolbar: {
-      ToolbarItem(placement: .primaryAction) {
-        Button(
-          store.phase == .scanning ? String(localized: "Cancel scan") : String(localized: "Scan"),
-          systemImage: store.phase == .scanning ? "stop.fill" : "arrow.clockwise"
-        ) {
-          if store.phase == .scanning { store.cancelScan(actions: actions) } else { store.startScan(actions: actions) }
-        }
-        .labelStyle(.titleAndIcon)
-        .disabled(actions.busy || store.tool.preparation.preparing)
+    } actions: {
+      Button(String(localized: "Select all"), systemImage: "checklist") { store.selectAll(actions: actions) }
+        .labelStyle(.iconOnly)
+        .disabled(store.picture != nil || store.phase != .ready || actions.busy)
+        .help(String(localized: "Select all"))
+      Button(
+        store.phase == .scanning ? String(localized: "Cancel scan") : String(localized: "Scan"),
+        systemImage: store.phase == .scanning ? "stop.fill" : "arrow.clockwise"
+      ) {
+        if store.phase == .scanning { store.cancelScan(actions: actions) } else { store.startScan(actions: actions) }
       }
-      ToolbarItem(placement: .primaryAction) {
-        Button(String(localized: "Select all"), systemImage: "checklist") { store.selectAll(actions: actions) }
-          .disabled(store.picture != nil || store.phase != .ready || actions.busy)
-          .help(String(localized: "Select all"))
-      }
+      .disabled(actions.busy || store.tool.preparation.preparing)
     }
-    .searchable(text: $searchText, prompt: String(localized: "Search by name or path"))
     .sheet(item: $actions.pending) { ConfirmationView(presentation: $0, actions: actions) }
     .task { store.open() }
     .onChange(of: actions.result?.planID) { store.observeResult(actions: actions) }

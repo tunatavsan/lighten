@@ -31,7 +31,10 @@ struct DuplicateView: View {
   }
 
   var body: some View {
-    ToolScreen(String(localized: "Duplicates"), subtitle: subtitle) {
+    ToolScreen(
+      String(localized: "Duplicates"), subtitle: subtitle, search: $searchText,
+      searchPrompt: String(localized: "Search by name or path")
+    ) {
       ScrollView {
         VStack(alignment: .leading, spacing: Theme.Space.l) {
           header
@@ -79,40 +82,37 @@ struct DuplicateView: View {
         .padding(.bottom, Theme.Space.xl)
       }
       .floatingBar(isPresented: !store.targets.isEmpty) { selectionBar }
-    } toolbar: {
-      ToolbarItem(placement: .navigation) {
-        Menu {
-          Button(String(localized: "Choose folder")) { chooseFolder() }
-          if let path = store.folderPath {
-            Button(String(localized: "Scan again")) { scanLocation(path) }
-          }
-          Divider()
-          Button(String(localized: "Home")) { scanLocation(store.homeDirectory) }
-          Button(String(localized: "Desktop")) { scanLocation(store.homeDirectory + "/Desktop") }
-          Button(String(localized: "Documents")) { scanLocation(store.homeDirectory + "/Documents") }
-          Button(String(localized: "Downloads")) { scanLocation(store.homeDirectory + "/Downloads") }
-          Button(String(localized: "Pictures")) { scanLocation(store.homeDirectory + "/Pictures") }
-        } label: {
-          Label(folderName, systemImage: "folder")
+    } actions: {
+      Menu {
+        Button(String(localized: "Choose folder")) { chooseFolder() }
+        if let path = store.folderPath {
+          Button(String(localized: "Scan again")) { scanLocation(path) }
         }
-        .help(String(localized: "Scan location"))
-        .disabled(actions.busy || store.busy)
+        Divider()
+        Button(String(localized: "Home")) { scanLocation(store.homeDirectory) }
+        Button(String(localized: "Desktop")) { scanLocation(store.homeDirectory + "/Desktop") }
+        Button(String(localized: "Documents")) { scanLocation(store.homeDirectory + "/Documents") }
+        Button(String(localized: "Downloads")) { scanLocation(store.homeDirectory + "/Downloads") }
+        Button(String(localized: "Pictures")) { scanLocation(store.homeDirectory + "/Pictures") }
+      } label: {
+        Label(MenuLabel.short(folderName), systemImage: "folder")
       }
-      ToolbarItem(placement: .primaryAction) { keeperMenu }
-      ToolbarItem(placement: .primaryAction) {
-        Button(String(localized: "Reduce all to one"), systemImage: "square.stack.3d.down.right") {
-          store.reduceToOne(rule: keeperRule, actions: actions)
-        }
-        .labelStyle(.titleAndIcon)
-        .disabled(!canApplySelection).accessibilityIdentifier("duplicates.reduce-all")
+      .fixedSize()
+      .help(folderName)
+      .disabled(actions.busy || store.busy)
+      keeperMenu.fixedSize()
+      Button(String(localized: "Reduce all to one"), systemImage: "square.stack.3d.down.right") {
+        store.reduceToOne(rule: keeperRule, actions: actions)
       }
+      .labelStyle(.iconOnly)
+      .help(String(localized: "Reduce all to one"))
+      .disabled(!canApplySelection).accessibilityIdentifier("duplicates.reduce-all")
       if store.busy {
-        ToolbarItem(placement: .primaryAction) {
-          Button(String(localized: "Cancel scan"), systemImage: "stop.fill") { store.cancelScan() }
-        }
+        Button(String(localized: "Cancel scan"), systemImage: "stop.fill") { store.cancelScan() }
+          .labelStyle(.iconOnly)
+          .help(String(localized: "Cancel scan"))
       }
     }
-    .searchable(text: $searchText, prompt: String(localized: "Search by name or path"))
     .sheet(item: $preview) { request in DuplicatePreviewSheet(request: request) }
     .sheet(item: $actions.pending) { presentation in
       ConfirmationView(presentation: presentation, actions: actions)

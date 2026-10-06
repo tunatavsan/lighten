@@ -242,6 +242,10 @@ extension Theme {
     /// Horizontal inset of screen content from the window edge.
     static let gutter: CGFloat = 28
     static let readableWidth: CGFloat = 1080
+    /// The row at the top of every screen: title, actions and search.
+    static let topBarHeight: CGFloat = 36
+    static let controlHeight: CGFloat = 32
+    static let searchFieldWidth: CGFloat = 220
     static let inspectorMinimum: CGFloat = 260
     static let inspectorIdeal: CGFloat = 300
     static let inspectorMaximum: CGFloat = 380

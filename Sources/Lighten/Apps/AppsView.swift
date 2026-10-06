@@ -29,7 +29,10 @@ struct AppsView: View {
 
   var body: some View {
     let scanBusy = store.busy
-    ToolScreen(String(localized: "Apps"), subtitle: subtitle) {
+    ToolScreen(
+      String(localized: "Apps"), subtitle: subtitle, search: $searchText,
+      searchPrompt: String(localized: "Search by name or path")
+    ) {
       VStack(alignment: .leading, spacing: 0) {
         header
         GeometryReader { geometry in
@@ -44,19 +47,15 @@ struct AppsView: View {
       .floatingBar(isPresented: !store.selectedAppPaths.isEmpty || !store.selectedOrphanPaths.isEmpty) {
         AppsBasketView(store: store, actions: actions)
       }
-    } toolbar: {
-      ToolbarItem(placement: .primaryAction) {
-        Button(
-          store.busy ? String(localized: "Cancel scan") : String(localized: "Scan"),
-          systemImage: store.busy ? "stop.fill" : "arrow.clockwise"
-        ) {
-          if store.busy { store.cancelScan() } else { store.startScan(actions: actions) }
-        }
-        .labelStyle(.titleAndIcon)
-        .accessibilityIdentifier("apps.scan-control")
+    } actions: {
+      Button(
+        store.busy ? String(localized: "Cancel scan") : String(localized: "Scan"),
+        systemImage: store.busy ? "stop.fill" : "arrow.clockwise"
+      ) {
+        if store.busy { store.cancelScan() } else { store.startScan(actions: actions) }
       }
+      .accessibilityIdentifier("apps.scan-control")
     }
-    .searchable(text: $searchText, prompt: String(localized: "Search by name or path"))
     .onGeometryChange(for: Bool.self) { _ in
       scanBusy
     } action: { busy in

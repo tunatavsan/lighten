@@ -353,14 +353,14 @@ struct HistoryView: View {
           .padding(.bottom, Theme.Space.xl)
         }
       }
-    } toolbar: {
-      ToolbarItem(placement: .primaryAction) {
-        Button(String(localized: "Refresh"), systemImage: "arrow.clockwise") {
-          Task { await reloadHistory() }
-        }
-        .disabled(actions.busy)
-        .accessibilityIdentifier("history.refresh")
+    } actions: {
+      Button(String(localized: "Refresh"), systemImage: "arrow.clockwise") {
+        Task { await reloadHistory() }
       }
+      .labelStyle(.iconOnly)
+      .help(String(localized: "Refresh"))
+      .disabled(actions.busy)
+      .accessibilityIdentifier("history.refresh")
     }
     .animation(Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion), value: actions.displayRevision)
     .task { await reloadHistory() }

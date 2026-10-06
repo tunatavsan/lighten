@@ -2136,6 +2136,23 @@
         }
       }
     },
+    "Clear search": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear search"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aramayı temizle"
+          }
+        }
+      }
+    },
     "Clear selection": {
       "localizations": {
         "en": {
@@ -7284,22 +7301,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu işlemden sonra tarama güncelliğini yitirdi"
-          }
-        }
-      }
-    },
-    "Scan location": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scan location"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tarama konumu"
           }
         }
       }
