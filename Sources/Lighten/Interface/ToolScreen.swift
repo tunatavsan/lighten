@@ -32,7 +32,7 @@ struct ToolScreen<Content: View, Toolbar: ToolbarContent>: View {
         Spacer(minLength: 0)
       }
       .padding(.horizontal, Theme.Layout.gutter)
-      .padding(.top, Theme.Space.xs)
+      .padding(.top, Theme.Space.l)
       content
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .opacity(shown || reduceMotion ? 1 : 0)

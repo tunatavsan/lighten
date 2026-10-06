@@ -189,8 +189,8 @@ private struct ContentPaneModifier: ViewModifier {
         if contrast == .increased { shape.strokeBorder(Theme.Palette.hairlineStrong, lineWidth: Theme.Stroke.hairline) }
       }
       .padding(Theme.Layout.paneInset)
-      // Keeps the split view's horizontal reservation while reaching under the toolbar.
-      .ignoresSafeArea(edges: [.top, .bottom])
+      // The pane starts below the toolbar, so toolbar controls float on the tray with room around them.
+      .ignoresSafeArea(edges: .bottom)
       .allowsHitTesting(false)
       .accessibilityHidden(true)
     }
