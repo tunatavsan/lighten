@@ -47,15 +47,17 @@ struct ToolScreen<Content: View, Actions: View>: View {
           .controlSize(.large)
         }
       }
-      .frame(minHeight: Theme.Layout.topBarHeight)
+      .frame(height: Theme.Layout.topBarHeight)
       .padding(.horizontal, Theme.Layout.gutter)
-      .padding(.top, Theme.Space.xs)
+      // The row shares the window's title bar height, level with the window controls.
+      .padding(.top, Theme.Layout.topBarInset)
       content
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .opacity(shown || reduceMotion ? 1 : 0)
         .offset(y: shown || reduceMotion ? 0 : Theme.Space.s)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    .ignoresSafeArea(.container, edges: .top)
     .navigationTitle(title)
     .onAppear {
       withAnimation(Theme.Motion.resolve(Theme.Motion.standard, reduceMotion: reduceMotion)) { shown = true }
@@ -98,6 +100,8 @@ struct SearchField: View {
     .padding(.horizontal, Theme.Space.m)
     .frame(width: Theme.Layout.searchFieldWidth, height: Theme.Layout.controlHeight)
     .lightenGlass(.interactive, in: Capsule())
+    // macOS would otherwise give the window's first text field the focus at launch.
+    .onAppear { focused = false }
     .background {
       Button("") { focused = true }.keyboardShortcut("f", modifiers: .command).hidden()
     }

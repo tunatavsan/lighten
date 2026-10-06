@@ -244,6 +244,8 @@ extension Theme {
     static let readableWidth: CGFloat = 1080
     /// The row at the top of every screen: title, actions and search.
     static let topBarHeight: CGFloat = 36
+    /// From the window's top edge to the screen's top row: the pane's inset plus its own margin.
+    static let topBarInset: CGFloat = 20
     static let controlHeight: CGFloat = 32
     static let searchFieldWidth: CGFloat = 220
     static let inspectorMinimum: CGFloat = 260
