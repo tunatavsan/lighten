@@ -10,7 +10,7 @@ struct ComingSoonView: View {
       VStack(spacing: Theme.Space.l) {
         ToolGlyph(symbol: entry.symbol, size: Theme.Layout.comingSoonGlyph)
         Text(entry.description).font(Theme.Font.title2).foregroundStyle(Theme.Palette.ink)
-          .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+          .multilineTextAlignment(.center)
         Chip(title: String(localized: "Coming soon"), symbol: "clock", tone: .accent)
       }
       .frame(maxWidth: Theme.Layout.emptyStateWidth)

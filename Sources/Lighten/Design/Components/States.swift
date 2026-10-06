@@ -31,7 +31,7 @@ struct EmptyState<Actions: View>: View {
         .multilineTextAlignment(.center)
       if let message {
         Text(message).font(Theme.Font.body).foregroundStyle(Theme.Palette.inkSecondary)
-          .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+          .multilineTextAlignment(.center)
       }
       actions.padding(.top, Theme.Space.xs)
     }
@@ -93,7 +93,6 @@ struct NoticeBar<Trailing: View>: View {
       Image(systemName: symbol).font(Theme.Font.iconSmall).foregroundStyle(tone.foreground)
         .accessibilityHidden(true)
       Text(title).font(Theme.Font.callout).foregroundStyle(Theme.Palette.ink)
-        .fixedSize(horizontal: false, vertical: true)
       Spacer(minLength: Theme.Space.s)
       trailing.controlSize(.small)
     }
